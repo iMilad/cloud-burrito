@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud Burrito — Documentation</title>
+<link rel="icon" type="image/svg+xml" href="../frontend/assets/cloud-burrito-logo.svg">
+<style>
+  :root {
+    --bg: #fcfcfb;
+    --bg-soft: #f4f4f1;
+    --bg-card: #ffffff;
+    --text: #1b1b18;
+    --text-soft: #55554e;
+    --text-faint: #84847b;
+    --line: #e3e3dd;
+    --line-soft: #ededea;
+    --accent: #2f6f4f;
+    --accent-soft: #e6f0ea;
+    --accent-line: #bcd8c7;
+    --code-bg: #f4f4f1;
+    --warn-bg: #fbf4e6;
+    --warn-line: #e6d4a8;
+    --warn-text: #9a6b00;
+    --sidebar-w: 270px;
+    --content-w: 1080px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* skip link (a11y) */
+  .skip {
+    position: absolute; left: -9999px; top: 0; z-index: 100;
+    background: var(--accent); color: #fff; padding: 8px 14px; border-radius: 0 0 8px 0;
+    font-size: 14px; text-decoration: none;
+  }
+  .skip:focus { left: 0; }
+
+  /* ---------- Layout ---------- */
+  .layout {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    align-items: start;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--line);
+    background: var(--bg-soft);
+    padding: 28px 22px 40px;
+  }
+
+  .brand {
+    display: block;
+    margin-bottom: 26px;
+    text-decoration: none;
+    color: var(--text);
+  }
+  .brand .mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+  .brand .mark svg { flex: none; }
+  .brand .sub {
+    display: block;
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--text-faint);
+    font-weight: 400;
+    line-height: 1.45;
+  }
+
+  .toc-label {
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    font-weight: 600;
+    margin: 0 0 10px 4px;
+  }
+
+  .toc { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin: 0; }
+  .toc a {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    text-decoration: none;
+    color: var(--text-soft);
+    font-size: 14px;
+    line-height: 1.35;
+    padding: 6px 10px;
+    border-radius: 7px;
+    border-left: 2px solid transparent;
+  }
+  .toc a .num {
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+    font-size: 12.5px;
+    min-width: 13px;
+  }
+  .toc a:hover { background: var(--accent-soft); color: var(--text); }
+  .toc a.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+    border-left-color: var(--accent);
+  }
+  .toc a.active .num { color: var(--accent); }
+
+  /* ---------- Top bar (mobile) ---------- */
+  .topbar { display: none; }
+
+  /* ---------- Main ---------- */
+  .main { min-width: 0; }
+  .content {
+    max-width: var(--content-w);
+    margin: 0;
+    padding: 52px 60px 120px 64px;
+  }
+
+  .lede {
+    font-size: 15px;
+    color: var(--text-faint);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 38px;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin: 0 0 18px;
+    font-weight: 700;
+  }
+  .intro {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--text-soft);
+    margin: 0 0 18px;
+    max-width: 72ch;
+  }
+
+  /* header fact chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; padding: 0; list-style: none; }
+  .chips .chip {
+    font-size: 12.5px; color: var(--text-soft);
+    background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 11px; white-space: nowrap;
+  }
+  .chips .chip.key { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); font-weight: 600; }
+
+  section { scroll-margin-top: 24px; padding-top: 40px; }
+  section + section { border-top: 1px solid var(--line-soft); }
+
+  h2 {
+    font-size: 25px;
+    letter-spacing: -0.015em;
+    margin: 0 0 6px;
+    font-weight: 700;
+    display: flex;
+    align-items: baseline;
+    gap: 11px;
+  }
+  h2 .h-num {
+    font-size: 14px;
+    color: var(--accent);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    border-radius: 6px;
+    padding: 1px 8px;
+    line-height: 1.5;
+    position: relative;
+    top: -3px;
+  }
+  .h2-sub {
+    color: var(--text-faint);
+    font-size: 15px;
+    margin: 0 0 20px;
+  }
+  h3 {
+    font-size: 17.5px;
+    margin: 30px 0 8px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  p { margin: 0 0 16px; max-width: 78ch; }
+  .main a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-line); }
+  .main a:hover { border-bottom-color: var(--accent); }
+
+  ul, ol { max-width: 78ch; padding-left: 22px; margin: 0 0 16px; }
+  li { margin: 0 0 7px; }
+  li::marker { color: var(--text-faint); }
+
+  strong { font-weight: 650; color: var(--text); }
+  em { font-style: italic; color: var(--text); }
+
+  code {
+    font-family: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.875em;
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 5px;
+    color: #2a2a25;
+    white-space: nowrap;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 15px 17px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    white-space: pre;
+    font-size: inherit;
+    color: var(--text);
+  }
+  .tok-c { color: var(--text-faint); }
+  .tok-cmd { color: var(--accent); font-weight: 600; }
+
+  /* auth status pills */
+  .authpill {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid;
+    white-space: nowrap;
+    line-height: 1.5;
+  }
+  .pill-ok   { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+  .pill-warn { background: var(--warn-bg);     border-color: var(--warn-line);   color: var(--warn-text); }
+
+  /* ---------- Callouts ---------- */
+  .note, .warn {
+    border-radius: 9px;
+    padding: 14px 17px;
+    margin: 0 0 18px;
+    font-size: 14.5px;
+    line-height: 1.55;
+    max-width: 78ch;
+  }
+  .note {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+  }
+  .warn {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+  }
+  .note p, .warn p { margin: 0; max-width: none; }
+  .note .tag, .warn .tag {
+    display: block;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .note .tag { color: var(--accent); }
+  .warn .tag { color: var(--warn-text); }
+
+  /* ---------- File map ---------- */
+  .files {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 18px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    overflow: hidden;
+  }
+  .files li {
+    margin: 0;
+    padding: 11px 16px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 14.5px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    align-items: baseline;
+  }
+  .files li:first-child { border-top: none; }
+  .files code { flex: none; }
+  .files .who { color: var(--text-faint); font-size: 13px; margin-left: auto; }
+
+  /* ---------- Tables ---------- */
+  .wtable {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 4px 0 18px;
+    font-size: 14.5px;
+  }
+  .wtable th, .wtable td {
+    text-align: left;
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--line-soft);
+    vertical-align: top;
+  }
+  .wtable th {
+    font-size: 11.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    font-weight: 600;
+    border-bottom: 1px solid var(--line);
+  }
+  .wtable td:first-child { font-weight: 600; }
+  .wtable.nowrap1 td:first-child { white-space: nowrap; }
+  .wtable .svc {
+    display: inline-block;
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    border-radius: 5px;
+    padding: 1px 7px;
+    white-space: nowrap;
+  }
+  .wtable td p { margin: 0 0 8px; max-width: none; }
+  .wtable td p:last-child { margin: 0; }
+
+  /* ---------- Figures / SVG ---------- */
+  figure {
+    margin: 22px 0 22px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--bg-card);
+    padding: 20px 18px 8px;
+    overflow-x: auto;
+  }
+  figure svg { display: block; width: 100%; height: auto; min-width: 0; }
+  figcaption {
+    font-size: 13px;
+    color: var(--text-faint);
+    padding: 10px 4px 6px;
+    line-height: 1.5;
+  }
+  figcaption b { color: var(--text-soft); font-weight: 650; }
+
+  .svg-bg { fill: var(--bg-soft); }
+  .svg-card { fill: #ffffff; stroke: var(--line); stroke-width: 1.5; }
+  .svg-accent { fill: var(--accent-soft); stroke: var(--accent-line); stroke-width: 1.5; }
+  .svg-warn { fill: var(--warn-bg); stroke: var(--warn-line); stroke-width: 1.5; }
+  .svg-t { fill: var(--text); font-family: -apple-system, system-ui, sans-serif; }
+  .svg-tsoft { fill: var(--text-soft); font-family: -apple-system, system-ui, sans-serif; }
+  .svg-tfaint { fill: var(--text-faint); font-family: -apple-system, system-ui, sans-serif; }
+  .svg-acc { fill: var(--accent); font-family: -apple-system, system-ui, sans-serif; }
+  .svg-mono { font-family: ui-monospace, Menlo, monospace; }
+  .svg-line { stroke: #9a9a90; stroke-width: 1.6; fill: none; }
+  .svg-accline { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+  .svg-numfill { fill: var(--accent); }
+  .svg-numtext { fill: #ffffff; font-family: -apple-system, system-ui, sans-serif; }
+
+  /* ---------- Footer ---------- */
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 56px;
+    padding-top: 22px;
+    color: var(--text-faint);
+    font-size: 13.5px;
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar {
+      position: static;
+      height: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+      padding: 16px 18px 18px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(252,252,251,0.95);
+      backdrop-filter: blur(6px);
+      border-bottom: 1px solid var(--line);
+      padding: 11px 18px;
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .sidebar .brand { display: none; }
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .toc a { padding: 5px 11px; border-left: none; border: 1px solid var(--line); border-radius: 999px; }
+    .toc a.active { border-color: var(--accent); }
+    .content { padding: 30px 22px 90px; }
+    h1 { font-size: 30px; }
+  }
+
+  @media (max-width: 520px) {
+    body { font-size: 16px; }
+    h1 { font-size: 26px; }
+    .content { padding: 24px 17px 70px; }
+  }
+
+  /* ---------- Print ---------- */
+  @media print {
+    .sidebar, .topbar, .skip { display: none; }
+    .layout { display: block; }
+    .content { max-width: none; padding: 0; }
+    body { font-size: 11pt; }
+    section { page-break-inside: avoid; }
+    figure { page-break-inside: avoid; }
+    figure svg { min-width: 0; }
+    .main a { color: var(--text); border: none; }
+  }
+</style>
+</head>
+<body>
+
+<a class="skip" href="#top">Skip to content</a>
+<div class="topbar">Cloud Burrito</div>
+
+<div class="layout">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <a class="brand" href="#top">
+      <span class="mark">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+          <rect x="1.2" y="1.2" width="19.6" height="19.6" rx="4" fill="#e6f0ea" stroke="#2f6f4f" stroke-width="1.4"/>
+          <rect x="4.4" y="4.4" width="5.4" height="5.4" rx="1.2" fill="#2f6f4f"/>
+          <rect x="12.2" y="4.4" width="5.4" height="5.4" rx="1.2" fill="#bcd8c7"/>
+          <rect x="4.4" y="12.2" width="5.4" height="5.4" rx="1.2" fill="#bcd8c7"/>
+          <rect x="12.2" y="12.2" width="5.4" height="5.4" rx="1.2" fill="#2f6f4f"/>
+        </svg>
+        Cloud Burrito
+      </span>
+      <span class="sub">Read-only, multi-account AWS browser for macOS</span>
+    </a>
+
+    <p class="toc-label">On this page</p>
+    <nav>
+      <ul class="toc">
+        <li><a href="#overview"><span class="num">1</span><span>Overview</span></a></li>
+        <li><a href="#architecture"><span class="num">2</span><span>Architecture</span></a></li>
+        <li><a href="#using"><span class="num">3</span><span>Using the app</span></a></li>
+        <li><a href="#widgets"><span class="num">4</span><span>Widgets</span></a></li>
+        <li><a href="#run"><span class="num">5</span><span>Run &amp; build</span></a></li>
+        <li><a href="#layout"><span class="num">6</span><span>Project layout</span></a></li>
+        <li><a href="#troubleshooting"><span class="num">7</span><span>Troubleshooting</span></a></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <div class="content" id="top">
+
+      <p class="lede">Documentation</p>
+      <h1>Cloud Burrito</h1>
+      <p class="intro">
+        A read-only macOS desktop app for browsing AWS across many accounts —
+        without clicking through the console. One window, a grid of small panels.
+        It shows things; it never creates, updates, or deletes.
+      </p>
+      <ul class="chips">
+        <li class="chip">macOS</li>
+        <li class="chip">Tauri 2 · pure Rust</li>
+        <li class="chip">aws-sdk-rust</li>
+        <li class="chip key">registered read operations only</li>
+        <li class="chip">one .app / .dmg</li>
+        <li class="chip">no second process</li>
+      </ul>
+
+      <!-- 1. OVERVIEW -->
+      <section id="overview">
+        <h2><span class="h-num">01</span> Overview</h2>
+        <p class="h2-sub">What this is and why it exists.</p>
+
+        <p>
+          The AWS console is organised by <em>service</em>: CloudFormation here,
+          CodePipeline there, CloudWatch somewhere else. But real work is organised
+          by <em>task</em> — "is that pipeline green?", "why did this stack fail?",
+          "where do these log errors come from?". Answering one question means
+          opening several services in several tabs, often across several accounts.
+        </p>
+        <p>
+          Cloud Burrito gives you one window of <strong>task-shaped widgets</strong>
+          instead. Pick an account at the top and the widgets fill in. Each widget
+          answers one question and lays out its answer as a small table, chart, or
+          log. No tab-hopping, no console navigation.
+        </p>
+        <p>
+          It is <strong>read-only by construction</strong>. The app can only look —
+          it has no ability to change anything in your AWS accounts. That is a
+          property of how it is built, not a setting you can flip. See
+          <a href="#architecture">Architecture</a> for exactly how that works.
+        </p>
+
+        <div class="note">
+          <span class="tag">In one sentence</span>
+          <p>Pick an account, get a dashboard of small read-only panels that answer
+          the questions you actually have — across every account you already have AWS
+          access to.</p>
+        </div>
+      </section>
+
+      <!-- 2. ARCHITECTURE -->
+      <section id="architecture">
+        <h2><span class="h-num">02</span> Architecture</h2>
+        <p class="h2-sub">One program, three layers, no second process.</p>
+
+        <p>
+          Cloud Burrito is a single <strong>Rust / Tauri 2</strong> program.
+          It is pure Rust and talks to AWS directly through the
+          <strong>AWS SDK for Rust</strong>. Earlier versions ran a separate Python
+          sidecar process to reach AWS — that is <strong>gone</strong>. There is no
+          Python anywhere, and no second process to manage.
+        </p>
+
+        <h3>The three layers</h3>
+        <ul>
+          <li><strong>(a) The window</strong> — an HTML / CSS / JS frontend. This is
+          just the UI: it draws the grid, the tiles, and the tables.</li>
+          <li><strong>(b) The Rust app</strong> — Tauri command handlers.
+          It resolves your SSO login, runs the dashboard and drill-down widgets,
+          and writes the audit log. Crucially, <strong>every AWS service call is
+          policy-gated and read-only</strong>.</li>
+          <li><strong>(c) AWS</strong> — reached via <code>aws-sdk-rust</code> using
+          your profile's credentials. Nothing sits between the Rust app and AWS.</li>
+        </ul>
+        <p>
+          The window talks to the Rust app by calling commands with Tauri's
+          <code>invoke()</code>. The Rust app talks to AWS with the SDK. That's the
+          whole picture.
+        </p>
+
+        <!-- DIAGRAM A: ARCHITECTURE -->
+        <figure>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 430" role="img" aria-labelledby="archtitle">
+            <title id="archtitle">Architecture: window, Rust app, and AWS, with local files alongside</title>
+            <rect x="0" y="0" width="760" height="430" rx="10" class="svg-bg"/>
+
+            <!-- Layer A: Window -->
+            <rect x="34" y="30" width="300" height="92" rx="9" class="svg-card"/>
+            <text x="50" y="54" class="svg-acc" font-size="13" font-weight="700">(a) THE WINDOW</text>
+            <text x="50" y="76" class="svg-t" font-size="14" font-weight="600">HTML / CSS / JS frontend</text>
+            <text x="50" y="98" class="svg-tfaint" font-size="12.5">Grid of tiles · tables · charts · logs</text>
+            <text x="50" y="113" class="svg-tfaint" font-size="11.5">(draws the UI only)</text>
+
+            <!-- Layer B: Rust app -->
+            <rect x="34" y="166" width="300" height="142" rx="9" class="svg-card"/>
+            <text x="50" y="190" class="svg-acc" font-size="13" font-weight="700">(b) THE RUST APP — Tauri 2</text>
+            <text x="50" y="212" class="svg-t" font-size="13.5" font-weight="600">Tauri command handlers</text>
+            <text x="50" y="232" class="svg-tsoft" font-size="12.5">Resolves SSO login · runs widgets</text>
+            <text x="50" y="250" class="svg-tsoft" font-size="12.5">Writes the audit log</text>
+            <rect x="50" y="262" width="268" height="32" rx="6" class="svg-accent"/>
+            <text x="62" y="282" class="svg-acc" font-size="12" font-weight="700">policy-gated registered read operations</text>
+
+            <!-- Layer C: AWS -->
+            <rect x="34" y="352" width="300" height="56" rx="9" class="svg-card"/>
+            <text x="50" y="376" class="svg-acc" font-size="13" font-weight="700">(c) AWS</text>
+            <text x="50" y="396" class="svg-tsoft" font-size="12.5">Your accounts &amp; regions</text>
+
+            <!-- arrows A->B -->
+            <line x1="184" y1="122" x2="184" y2="166" class="svg-accline" marker-end="url(#arr)"/>
+            <rect x="196" y="132" width="84" height="22" rx="11" class="svg-accent"/>
+            <text x="238" y="147" class="svg-acc svg-mono" font-size="11.5" text-anchor="middle" font-weight="700">invoke()</text>
+
+            <!-- arrows B->C -->
+            <line x1="184" y1="308" x2="184" y2="352" class="svg-accline" marker-end="url(#arr)"/>
+            <rect x="120" y="318" width="248" height="22" rx="11" class="svg-accent"/>
+            <text x="244" y="333" class="svg-acc svg-mono" font-size="11" text-anchor="middle" font-weight="700">aws-sdk-rust (SSO / profile creds)</text>
+
+            <!-- in-memory creds chip -->
+            <rect x="440" y="316" width="286" height="26" rx="13" class="svg-accent"/>
+            <text x="583" y="333" class="svg-acc" font-size="11" text-anchor="middle" font-weight="700">role creds: in memory only — never on disk</text>
+
+            <!-- Local files column -->
+            <text x="476" y="48" class="svg-tfaint" font-size="11.5" font-weight="700" letter-spacing="0.5">LOCAL FILES ON YOUR MAC</text>
+
+            <!-- your SSO -->
+            <rect x="476" y="62" width="250" height="92" rx="9" class="svg-card"/>
+            <text x="490" y="84" class="svg-t" font-size="12.5" font-weight="700">Your SSO (by the AWS CLI)</text>
+            <text x="490" y="106" class="svg-tsoft svg-mono" font-size="11.5">~/.aws/config</text>
+            <text x="490" y="121" class="svg-tfaint" font-size="11">profiles</text>
+            <text x="490" y="139" class="svg-tsoft svg-mono" font-size="11.5">~/.aws/sso/cache</text>
+            <text x="490" y="151" class="svg-tfaint" font-size="11">cached SSO token (reused, not stored by app)</text>
+
+            <!-- app data -->
+            <rect x="476" y="172" width="250" height="118" rx="9" class="svg-card"/>
+            <text x="490" y="194" class="svg-t" font-size="12.5" font-weight="700">App data (by this app)</text>
+            <text x="490" y="216" class="svg-tsoft svg-mono" font-size="11.5">~/.cloud_burrito/</text>
+            <text x="504" y="234" class="svg-tsoft svg-mono" font-size="11">settings.json</text>
+            <text x="504" y="251" class="svg-tsoft svg-mono" font-size="11">dashboard.json</text>
+            <text x="504" y="268" class="svg-tsoft svg-mono" font-size="11">audit.log</text>
+            <text x="490" y="284" class="svg-tfaint" font-size="11">every AWS call is recorded here</text>
+
+            <!-- dashed link app reads SSO -->
+            <line x1="334" y1="208" x2="476" y2="108" stroke="#9a9a90" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrgrey)"/>
+            <text x="362" y="150" class="svg-tfaint" font-size="10.5">reads</text>
+
+            <!-- dashed link app writes audit -->
+            <line x1="334" y1="262" x2="476" y2="240" stroke="#9a9a90" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrgrey)"/>
+            <text x="370" y="246" class="svg-tfaint" font-size="10.5">writes</text>
+
+            <defs>
+              <marker id="arr" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto">
+                <path d="M1,1 L7,4 L1,7 Z" fill="#2f6f4f"/>
+              </marker>
+              <marker id="arrgrey" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto">
+                <path d="M1,1 L7,4 L1,7 Z" fill="#9a9a90"/>
+              </marker>
+            </defs>
+          </svg>
+          <figcaption>
+            <b>Diagram A — Architecture.</b> The window calls the Rust app with
+            <code>invoke()</code>; the Rust app calls AWS with <code>aws-sdk-rust</code>.
+            Only registered read-style operations are compiled into the Rust app,
+            and every AWS service call is checked before it runs.
+            Your SSO files are managed by the AWS CLI; the app writes only its own
+            settings, dashboard, and audit log.
+          </figcaption>
+        </figure>
+
+        <h3>Authorization &amp; login</h3>
+        <p>
+          The app <strong>reuses the AWS CLI's SSO login</strong>. It never stores a
+          password, access key, or token of its own. Here is exactly what happens:
+        </p>
+        <ol>
+          <li>Profiles come from <code>~/.aws/config</code> — the same file the AWS
+          CLI uses.</li>
+          <li>You pick a profile. The app resolves credentials the same way the CLI
+          does: it reads the <strong>cached SSO token</strong> from
+          <code>~/.aws/sso/cache</code>.</li>
+          <li>It exchanges that token for <strong>short-lived role credentials</strong>
+          and auto-refreshes them as they expire.</li>
+          <li>Those credentials live in <strong>memory only, for this session only</strong>.
+          Nothing is written to disk.</li>
+        </ol>
+        <p>
+          If the cached SSO token has expired, the app tells you to run
+          <code>aws sso login</code> — it cannot log you in itself. It uses whatever
+          role the profile grants; it does <strong>not</strong> assume any special or
+          elevated role.
+        </p>
+
+        <h3>Why read-only — two reasons</h3>
+        <ul>
+          <li><strong>Structural.</strong> Only read operations are built into the
+          binary. There are no write calls to make. The app <em>physically cannot</em>
+          write, even if you point it at credentials with full admin rights.</li>
+          <li><strong>Auditable.</strong> Every AWS call is logged to
+          <code>~/.cloud_burrito/audit.log</code>, and a live Audit panel inside
+          the app shows the same feed in real time. You can always see exactly what
+          it did.</li>
+          <li><strong>User-narrowable.</strong> On top of the structural floor, a
+          user-editable <code>~/.cloud_burrito/policy.yaml</code> (an IAM-style
+          allowlist, editable from the Settings panel) can further restrict which read
+          operations the app may call — it can only narrow the allowed set, never
+          re-enable writes.</li>
+        </ul>
+
+        <h3>Where data lives</h3>
+        <ul class="files">
+          <li><code>~/.aws/config</code> Profiles <span class="who">by the AWS CLI</span></li>
+          <li><code>~/.aws/sso/cache</code> Cached SSO token <span class="who">by the AWS CLI</span></li>
+          <li><code>~/.cloud_burrito/settings.json</code> App settings <span class="who">by the app</span></li>
+          <li><code>~/.cloud_burrito/dashboard.json</code> Tile layout <span class="who">by the app</span></li>
+          <li><code>~/.cloud_burrito/audit.log</code> Every AWS call <span class="who">by the app</span></li>
+          <li><code>~/.cloud_burrito/policy.yaml</code> IAM-style read-op allowlist (editable in Settings) <span class="who">by the user</span></li>
+        </ul>
+
+        <h3>How a widget runs, end to end</h3>
+        <p>
+          Putting login and read-only together, here is the whole path from clicking
+          a tile to seeing data — five steps, read-only the whole way through:
+        </p>
+
+        <!-- DIAGRAM B: WORKFLOW -->
+        <figure>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 548" role="img" aria-labelledby="flowtitle">
+            <title id="flowtitle">Workflow: pick account, resolve credentials, fetch a widget, run read-only calls with audit, draw the result</title>
+            <rect x="0" y="0" width="720" height="548" rx="10" class="svg-bg"/>
+
+            <!-- Step 1 -->
+            <rect x="40" y="22" width="300" height="60" rx="9" class="svg-card"/>
+            <circle cx="66" cy="52" r="13" class="svg-numfill"/>
+            <text x="66" y="56" text-anchor="middle" class="svg-numtext" font-size="12" font-weight="700">1</text>
+            <text x="92" y="46" class="svg-tfaint" font-size="11" font-weight="700">YOU</text>
+            <text x="92" y="66" class="svg-t" font-size="13.5" font-weight="600">Pick an account</text>
+
+            <line x1="120" y1="82" x2="120" y2="110" class="svg-accline" marker-end="url(#fa)"/>
+
+            <!-- Step 2 -->
+            <rect x="40" y="110" width="300" height="80" rx="9" class="svg-card"/>
+            <circle cx="66" cy="140" r="13" class="svg-numfill"/>
+            <text x="66" y="144" text-anchor="middle" class="svg-numtext" font-size="12" font-weight="700">2</text>
+            <text x="92" y="134" class="svg-tfaint" font-size="11" font-weight="700">APP</text>
+            <text x="92" y="154" class="svg-t" font-size="13.5" font-weight="600">Resolve SSO credentials</text>
+            <text x="92" y="174" class="svg-tsoft svg-mono" font-size="10.5">from ~/.aws/sso/cache · in memory only</text>
+
+            <!-- expired branch (straight) -->
+            <line x1="340" y1="150" x2="396" y2="150" class="svg-line" stroke-dasharray="5 4" marker-end="url(#fa-grey)"/>
+            <rect x="398" y="118" width="288" height="64" rx="9" class="svg-warn"/>
+            <text x="414" y="140" font-size="11" font-weight="700" fill="#9a6b00">IF EXPIRED</text>
+            <text x="414" y="160" class="svg-t" font-size="12.5">run <tspan class="svg-mono" font-weight="700">aws sso login</tspan>,</text>
+            <text x="414" y="176" class="svg-t" font-size="12.5">then re-pick the account</text>
+
+            <line x1="120" y1="190" x2="120" y2="218" class="svg-accline" marker-end="url(#fa)"/>
+
+            <!-- Step 3 -->
+            <rect x="40" y="218" width="300" height="74" rx="9" class="svg-card"/>
+            <circle cx="66" cy="248" r="13" class="svg-numfill"/>
+            <text x="66" y="252" text-anchor="middle" class="svg-numtext" font-size="12" font-weight="700">3</text>
+            <text x="92" y="242" class="svg-tfaint" font-size="11" font-weight="700">YOU</text>
+            <text x="92" y="262" class="svg-t" font-size="13.5" font-weight="600">Open or refresh a widget</text>
+            <text x="92" y="282" class="svg-tsoft svg-mono" font-size="10.5">calls the widget_fetch command</text>
+
+            <line x1="120" y1="292" x2="120" y2="320" class="svg-accline" marker-end="url(#fa)"/>
+
+            <!-- Step 4 (read-only, accent) -->
+            <rect x="40" y="320" width="300" height="92" rx="9" class="svg-accent"/>
+            <circle cx="66" cy="350" r="13" class="svg-numfill"/>
+            <text x="66" y="354" text-anchor="middle" class="svg-numtext" font-size="12" font-weight="700">4</text>
+            <text x="92" y="344" class="svg-acc" font-size="11" font-weight="700">RUST APP · READ-ONLY</text>
+            <text x="92" y="364" class="svg-t" font-size="13" font-weight="600">Run AWS calls</text>
+            <text x="92" y="382" class="svg-tsoft" font-size="11">registered read operations only</text>
+            <text x="92" y="401" class="svg-acc" font-size="11.5" font-weight="600">↳ logs every call</text>
+
+            <!-- audit node (distinct) -->
+            <line x1="340" y1="366" x2="396" y2="366" class="svg-accline" marker-end="url(#fa)"/>
+            <rect x="398" y="334" width="288" height="64" rx="9" class="svg-card"/>
+            <text x="414" y="356" class="svg-tfaint" font-size="11" font-weight="700">AUDIT LOG</text>
+            <text x="414" y="376" class="svg-tsoft svg-mono" font-size="10.5">~/.cloud_burrito/audit.log</text>
+            <text x="414" y="392" class="svg-tfaint" font-size="11">every call recorded · live panel in-app</text>
+
+            <!-- spine 4->5 with label -->
+            <line x1="120" y1="412" x2="120" y2="452" class="svg-accline" marker-end="url(#fa)"/>
+            <rect x="132" y="420" width="184" height="22" rx="11" class="svg-accent"/>
+            <text x="224" y="435" text-anchor="middle" class="svg-acc svg-mono" font-size="10.5" font-weight="700">returns fixed-shape data</text>
+
+            <!-- Step 5 -->
+            <rect x="40" y="452" width="300" height="66" rx="9" class="svg-card"/>
+            <circle cx="66" cy="485" r="13" class="svg-numfill"/>
+            <text x="66" y="489" text-anchor="middle" class="svg-numtext" font-size="12" font-weight="700">5</text>
+            <text x="92" y="479" class="svg-tfaint" font-size="11" font-weight="700">THE WINDOW</text>
+            <text x="92" y="499" class="svg-t" font-size="13.5" font-weight="600">Draws a table / chart / log</text>
+
+            <defs>
+              <marker id="fa" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto">
+                <path d="M1,1 L7,4 L1,7 Z" fill="#2f6f4f"/>
+              </marker>
+              <marker id="fa-grey" markerWidth="9" markerHeight="9" refX="6.5" refY="4" orient="auto">
+                <path d="M1,1 L7,4 L1,7 Z" fill="#9a9a90"/>
+              </marker>
+            </defs>
+          </svg>
+          <figcaption>
+            <b>Diagram B — Workflow.</b> Pick an account → the app resolves SSO
+            credentials from <code>~/.aws/sso/cache</code> (if the token is expired it
+            asks you to run <code>aws sso login</code>) → open or refresh a widget
+            (<code>widget_fetch</code>) → the Rust app runs read-only AWS calls and
+            logs every one to the audit log → it returns fixed-shape data → the window
+            draws a table, chart, or log. Because the data shape is fixed, the window
+            never needs to know which AWS service produced it.
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- 3. USING THE APP -->
+      <section id="using">
+        <h2><span class="h-num">03</span> Using the app</h2>
+        <p class="h2-sub">Pick an account, arrange your widgets, watch the audit feed.</p>
+
+        <h3>Pick account &amp; region</h3>
+        <p>
+          At the top of the window, choose an <strong>account</strong> (a dropdown
+          built from the profiles in <code>~/.aws/config</code>) and a
+          <strong>region</strong> (for example <code>eu-west-1</code> or
+          <code>us-east-1</code>). Every widget reads from that account and region
+          until you change it.
+        </p>
+
+        <h3>The auth pill</h3>
+        <p>
+          Next to the selectors, an <strong>auth pill</strong> shows your login
+          status. When you're signed in it reads
+          <span class="authpill pill-ok">auth: ok · &lt;account&gt; · 9h left</span>;
+          when the SSO token has lapsed it turns amber:
+          <span class="authpill pill-warn">expired — run aws sso login</span>.
+          Click the pill to open the <strong>Identity panel</strong> and see exactly
+          who you are signed in as.
+        </p>
+
+        <h3>Working with widgets</h3>
+        <p>
+          Some widgets need an input — a pipeline name, a log group, a search term.
+          Type it into the tile. Refresh any tile with its <strong>↻</strong> button.
+        </p>
+        <p>
+          Each tile has a <strong>gear (⚙)</strong> for per-tile settings. From there
+          you can:
+        </p>
+        <ul>
+          <li><strong>Override account / region</strong> for that one tile — handy
+          for watching prod and staging side by side.</li>
+          <li>Set a <strong>header colour</strong> to group or flag tiles visually.</li>
+          <li><strong>View the widget's source</strong> to see exactly which AWS
+          calls it makes.</li>
+        </ul>
+        <p>
+          You can <strong>drag and resize</strong> tiles freely. The layout
+          <strong>auto-saves and restores</strong> — close the app and your dashboard
+          comes back exactly as you left it (stored in
+          <code>~/.cloud_burrito/dashboard.json</code>).
+        </p>
+
+        <h3>Settings &amp; audit</h3>
+        <p>
+          <strong>Settings</strong> shows your config path, the active SSO session,
+          and your defaults. The <strong>Audit panel</strong> is a live feed of every
+          AWS call the app makes — the same content that streams to
+          <code>audit.log</code>.
+        </p>
+      </section>
+
+      <!-- 4. WIDGETS -->
+      <section id="widgets">
+        <h2><span class="h-num">04</span> Widgets</h2>
+        <p class="h2-sub">Six task-shaped panels. Each answers one question.</p>
+
+        <table class="wtable nowrap1">
+          <thead>
+            <tr><th>Widget</th><th>What it shows</th><th>Service</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>CloudFormation Stacks</td>
+              <td>Your stacks with their status and resource count.</td>
+              <td><span class="svc">CloudFormation</span></td>
+            </tr>
+            <tr>
+              <td>Pipeline Runs</td>
+              <td>Recent executions of one CodePipeline, colour-coded by result.</td>
+              <td><span class="svc">CodePipeline</span></td>
+            </tr>
+            <tr>
+              <td>Log Tail</td>
+              <td>Recent events from a CloudWatch Logs group, with an optional filter.</td>
+              <td><span class="svc">CloudWatch Logs</span></td>
+            </tr>
+            <tr>
+              <td>Errors by Stack</td>
+              <td>Count of <code>ERROR</code> lines per log group over a time window.</td>
+              <td><span class="svc">CloudWatch Logs Insights</span></td>
+            </tr>
+            <tr>
+              <td>Resource Reverse Lookup</td>
+              <td>Find resources by an ARN substring, and the stack that owns them.</td>
+              <td><span class="svc">Tagging API + CloudFormation</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Widgets ship inside the binary. To see exactly what one does, open its
+          gear (⚙) and choose <strong>view source</strong>.
+        </p>
+      </section>
+
+      <!-- 5. RUN & BUILD -->
+      <section id="run">
+        <h2><span class="h-num">05</span> Run &amp; build</h2>
+        <p class="h2-sub">What you need, how to run it in dev, how to ship a build.</p>
+
+        <h3>Prerequisites</h3>
+        <ul>
+          <li><strong>Rust</strong> and the <strong>Tauri CLI</strong>.</li>
+          <li><strong>AWS SSO already configured</strong> (you can run
+          <code>aws sso login</code> and use the CLI).</li>
+          <li>No Python — the old sidecar is gone.</li>
+        </ul>
+
+        <h3>Develop</h3>
+        <pre><code><span class="tok-cmd">./scripts/dev.sh</span>   <span class="tok-c"># = cargo tauri dev</span></code></pre>
+
+        <h3>Build a release</h3>
+        <pre><code><span class="tok-cmd">cd</span> src-tauri
+<span class="tok-cmd">cargo tauri build</span></code></pre>
+        <p>
+          This produces a <code>.app</code> and a <code>.dmg</code> under
+          <code>src-tauri/target/release/bundle/</code> — one self-contained app,
+          with no Python runtime bundled in.
+        </p>
+
+        <div class="warn">
+          <span class="tag">Sharing the app</span>
+          <p>An unsigned <code>.app</code> is blocked by Gatekeeper on other Macs.
+          To share it, you need <strong>code signing + notarization</strong>.</p>
+        </div>
+      </section>
+
+      <!-- 6. PROJECT LAYOUT -->
+      <section id="layout">
+        <h2><span class="h-num">06</span> Project layout</h2>
+        <p class="h2-sub">Where things live in the repo.</p>
+
+        <ul class="files">
+          <li><code>frontend/</code> The UI <span class="who">window</span></li>
+          <li><code>frontend/vendor/</code> gridstack, kept locally so it works offline <span class="who">window</span></li>
+          <li><code>src-tauri/src/commands.rs</code> Tauri command handlers <span class="who">backend</span></li>
+          <li><code>src-tauri/src/aws/</code> Credentials, <code>~/.aws/config</code> parsing, read-only guard <span class="who">backend</span></li>
+          <li><code>src-tauri/src/widgets/</code> Dashboard and drill-down widgets <span class="who">backend</span></li>
+          <li><code>src-tauri/src/audit.rs</code> Audit log <span class="who">backend</span></li>
+          <li><code>src-tauri/src/settings.rs</code> Settings <span class="who">backend</span></li>
+          <li><code>src-tauri/src/dashboard.rs</code> Tile layout <span class="who">backend</span></li>
+          <li><code>src-tauri/src/state.rs</code> Shared state <span class="who">backend</span></li>
+          <li><code>info/</code> This documentation page <span class="who">docs</span></li>
+        </ul>
+        <div class="note">
+          <span class="tag">Why this split matters</span>
+          <p>The window calls the command handlers <em>by name</em>. That clean boundary
+          means the Rust backend can be rewritten without touching the UI — and the
+          UI can be reworked without touching the backend. (That is exactly how the
+          Python sidecar was swapped out for pure Rust with no change to the window.)</p>
+        </div>
+      </section>
+
+      <!-- 7. TROUBLESHOOTING -->
+      <section id="troubleshooting">
+        <h2><span class="h-num">07</span> Troubleshooting</h2>
+        <p class="h2-sub">Common snags and the fix for each.</p>
+
+        <table class="wtable">
+          <thead>
+            <tr><th style="width:34%">Symptom</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="authpill pill-warn">expired</span></td>
+              <td>
+                <p>Your SSO token has lapsed. Log in again, then re-pick the account in the app:</p>
+                <pre><code><span class="tok-cmd">aws sso login</span> --sso-session &lt;name&gt;   <span class="tok-c"># or: --profile &lt;name&gt;</span></code></pre>
+              </td>
+            </tr>
+            <tr>
+              <td>Empty account dropdown</td>
+              <td><p>The app found no usable profiles. Check that <code>~/.aws/config</code>
+              contains <code>[profile …]</code> entries with an <code>sso_account_id</code>.</p></td>
+            </tr>
+            <tr>
+              <td>A widget says <code>AccessDenied</code></td>
+              <td><p>The profile's role does not have permission for that read. Pick another
+              profile whose role does. The app only ever asks for read access — it cannot escalate.</p></td>
+            </tr>
+            <tr>
+              <td>The window won't open in dev</td>
+              <td>
+                <p>Run the dev command directly from <code>src-tauri/</code> and read the
+                terminal output — the error is almost always printed there.</p>
+                <pre><code><span class="tok-cmd">cd</span> src-tauri
+<span class="tok-cmd">cargo tauri dev</span></code></pre>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <footer>
+        Cloud Burrito — read-only, multi-account AWS browser for macOS.
+        Built with Tauri 2 and pure Rust (<code>aws-sdk-rust</code>). No Python, no second process.
+      </footer>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  // Highlight the current section in the sidebar as you scroll.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    var sections = Array.prototype.slice.call(document.querySelectorAll('main section[id]'));
+
+    function setActive(id) {
+      links.forEach(function (a) { a.classList.remove('active'); });
+      if (byId[id]) byId[id].classList.add('active');
+    }
+
+    if ('IntersectionObserver' in window) {
+      var visible = {};
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          visible[e.target.id] = e.isIntersecting ? e.intersectionRatio : 0;
+        });
+        var best = null, bestTop = Infinity;
+        sections.forEach(function (s) {
+          if (visible[s.id]) {
+            var top = s.getBoundingClientRect().top;
+            if (top < bestTop) { bestTop = top; best = s.id; }
+          }
+        });
+        if (best) setActive(best);
+      }, { rootMargin: '-15% 0px -70% 0px', threshold: [0, 0.25, 0.5, 1] });
+      sections.forEach(function (s) { io.observe(s); });
+    }
+
+    // Make sure the last section highlights once you reach the bottom (a short
+    // final section may never satisfy the observer's rootMargin otherwise).
+    window.addEventListener('scroll', function () {
+      var atBottom = (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 4);
+      if (atBottom && sections.length) setActive(sections[sections.length - 1].id);
+    }, { passive: true });
+
+    setActive('overview');
+  })();
+</script>
+
+</body>
+</html>

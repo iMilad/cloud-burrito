@@ -1,0 +1,52 @@
+# Build artifacts
+target/
+src-tauri/target/
+src-tauri/binaries/
+sidecar/.venv/
+sidecar/dist/
+sidecar/build/
+sidecar/*.egg-info/
+__pycache__/
+*.pyc
+
+# uv (not part of our pip install -e flow)
+sidecar/uv.lock
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.kdbx
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.bak
+*.backup
+*.har
+*.pcap
+*.zip
+*.tar
+*.tgz
+*.7z
+.vscode/
+.idea/
+*.dc.html
+.cloud-burrito-local/

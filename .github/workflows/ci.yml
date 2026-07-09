@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assert no AWS credentials are present
+        shell: bash
+        run: |
+          test -z "${AWS_ACCESS_KEY_ID:-}"
+          test -z "${AWS_SECRET_ACCESS_KEY:-}"
+          test -z "${AWS_SESSION_TOKEN:-}"
+          test -z "${AWS_PROFILE:-}"
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check release metadata
+        run: python3 scripts/check-release-version.py
+
+      - name: Run privacy scan
+        run: python3 scripts/check-release-privacy.py
+
+      - name: Check frontend syntax
+        shell: bash
+        run: |
+          node --check frontend/app.js
+          node --check frontend/mock-data.js
+
+      - name: Test Rust backend
+        working-directory: src-tauri
+        run: cargo test -p cloud-burrito
+
+      - name: Lint Rust backend
+        working-directory: src-tauri
+        run: cargo clippy -p cloud-burrito -- -D warnings
+
+      - name: Check whitespace
+        run: git diff --check

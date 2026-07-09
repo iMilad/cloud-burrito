@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cloud Burrito</title>
+  <link rel="icon" type="image/svg+xml" href="assets/cloud-burrito-icon.svg" />
+  <link rel="stylesheet" href="vendor/gridstack.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand">
+        <img class="brand-mark" src="assets/cloud-burrito-icon.svg" alt="" aria-hidden="true" />
+        <span class="brand-name">Cloud Burrito</span>
+      </div>
+      <label class="picker" for="account-select">
+        <span class="picker-label">Default account</span>
+        <select class="picker-select" id="account-select" aria-label="Account">
+          <option value="">(loading…)</option>
+        </select>
+      </label>
+      <label class="picker" for="region-select">
+        <span class="picker-label">Default region</span>
+        <select class="picker-select" id="region-select" aria-label="Region">
+          <option value="eu-west-1">eu-west-1</option>
+          <option value="us-east-1">us-east-1</option>
+        </select>
+      </label>
+      <span class="ro-badge" title="This app assumes a read-only AWS role. It cannot create, modify, or delete resources.">
+        <span class="ro-dot"></span>READ-ONLY
+      </span>
+      <span class="core-status" id="core-status" data-state="unknown" title="Backend core status">
+        <span class="core-dot"></span>
+        <span class="core-label">checking…</span>
+      </span>
+      <span class="core-status" id="auth-status" data-state="unknown" title="AWS SSO login status — click to refresh" hidden>
+        <span class="core-dot"></span>
+        <span class="core-label">auth: —</span>
+      </span>
+    </div>
+    <div class="topbar-center">
+      <div class="search">
+        <span class="search-icon">⌕</span>
+        <input id="global-search" type="text" placeholder="Search any resource, ARN, stack, or log group…" />
+        <span class="search-hint">⌘K</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout">↺</button>
+      <button class="btn btn-ghost" id="theme-toggle" title="Toggle theme">◐</button>
+      <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden>⏱</button>
+      <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden>⚙</button>
+      <button class="btn btn-primary" id="add-widget-btn">+ Widget</button>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <div class="grid-stack" id="grid-stack">
+
+      <!-- Pipeline Runs -->
+      <div class="grid-stack-item" gs-id="pipeline-runs" gs-x="0" gs-y="0" gs-w="4" gs-h="3" gs-min-w="3" gs-min-h="2">
+        <div class="grid-stack-item-content">
+          <article class="widget" data-widget="pipeline-runs">
+            <header class="widget-header">
+              <h2 class="widget-title">Pipeline Runs</h2>
+              <span class="widget-sub">Recent CodePipeline executions</span>
+              <div class="widget-actions">
+                <button class="icon-btn" title="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+              </div>
+            </header>
+            <div class="widget-body pipeline-runs-body" data-tab="live">
+              <div class="pipeline-toolbar">
+                <div class="pipeline-tabs" role="tablist">
+                  <button type="button" class="pipeline-tab active" data-tab="live" role="tab" aria-selected="true">Live</button>
+                  <button type="button" class="pipeline-tab" data-tab="pinned" role="tab" aria-selected="false">Pinned<span class="pipeline-pin-count" hidden></span></button>
+                </div>
+                <div class="pipeline-config-actions">
+                  <button type="button" class="btn btn-primary pipeline-load-btn">Load runs</button>
+                  <button type="button" class="btn btn-ghost pipeline-pin-btn">Pin</button>
+                </div>
+              </div>
+              <div class="pipeline-tab-pane pipeline-pane-live">
+                <form class="widget-config pipeline-config" data-mode="setup">
+                  <label>
+                    <span>Pipeline name</span>
+                    <div class="combo">
+                      <input class="pipeline-name-search" type="text" role="combobox"
+                        aria-autocomplete="list" aria-expanded="false" autocomplete="off"
+                        autocorrect="off" spellcheck="false"
+                        placeholder="(pick an account to list pipelines)" disabled />
+                    </div>
+                    <select class="pipeline-name-select" hidden aria-hidden="true"></select>
+                    <span class="muted small pipeline-name-hint"></span>
+                  </label>
+                  <p class="muted small pipeline-error"></p>
+                  <p class="muted small">Profile, account, and region come from this widget's context.</p>
+                </form>
+                <div class="widget-data pipeline-runs-rows" hidden></div>
+              </div>
+              <div class="pipeline-tab-pane pipeline-pane-pinned" hidden>
+                <div class="pipeline-pin-panel">
+                  <div class="pipeline-pin-list"></div>
+                  <p class="muted small pipeline-pin-empty">No pinned pipelines yet. Pick one on the Live tab and hit Pin.</p>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <!-- Lambda Logs -->
+      <div class="grid-stack-item" gs-id="log-tail" gs-x="4" gs-y="0" gs-w="8" gs-h="6" gs-min-w="3" gs-min-h="2">
+        <div class="grid-stack-item-content">
+          <article class="widget" data-widget="log-tail">
+            <header class="widget-header">
+              <h2 class="widget-title">Lambda Logs</h2>
+              <span class="widget-sub">Lambda functions and CloudWatch logs</span>
+              <div class="widget-actions">
+                <span class="dot dot-live"></span>
+                <button class="icon-btn" title="Pause">‖</button>
+                <button class="icon-btn" title="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+              </div>
+            </header>
+            <div class="widget-body lambda-log-browser log-tail-body"></div>
+          </article>
+        </div>
+      </div>
+
+      <!-- CFN Stacks -->
+      <div class="grid-stack-item" gs-id="cfn-stacks" gs-x="0" gs-y="3" gs-w="4" gs-h="3" gs-min-w="3" gs-min-h="2">
+        <div class="grid-stack-item-content">
+          <article class="widget" data-widget="cfn-stacks">
+            <header class="widget-header">
+              <h2 class="widget-title">CloudFormation Stacks</h2>
+              <span class="widget-sub">Stacks in this widget's region</span>
+              <div class="widget-actions">
+                <button class="icon-btn" title="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+              </div>
+            </header>
+            <div class="widget-body cfn-stacks-body"></div>
+          </article>
+        </div>
+      </div>
+
+      <!-- Resource Reverse Lookup -->
+      <div class="grid-stack-item" gs-id="resource-lookup" gs-x="0" gs-y="6" gs-w="4" gs-h="3" gs-min-w="3" gs-min-h="2">
+        <div class="grid-stack-item-content">
+          <article class="widget" data-widget="resource-lookup">
+            <header class="widget-header">
+              <h2 class="widget-title">Resource Reverse Lookup</h2>
+              <span class="widget-sub">Find the stack that owns a resource</span>
+              <div class="widget-actions">
+                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+              </div>
+            </header>
+            <div class="widget-body">
+              <input class="lookup-input" type="text" placeholder="Resource name, ARN, or partial id…" />
+              <div class="lookup-results"></div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <!-- Errors by Stack -->
+      <div class="grid-stack-item" gs-id="errors-by-stack" gs-x="4" gs-y="6" gs-w="8" gs-h="3" gs-min-w="3" gs-min-h="2">
+        <div class="grid-stack-item-content">
+          <article class="widget" data-widget="errors-by-stack">
+            <header class="widget-header">
+              <h2 class="widget-title">Errors by Stack</h2>
+              <span class="widget-sub">CloudWatch errors in the last 24 hours</span>
+              <div class="widget-actions">
+                <button class="icon-btn" title="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+              </div>
+            </header>
+            <div class="widget-body errors-body"></div>
+          </article>
+        </div>
+      </div>
+
+      <!-- CodeArtifact Packages -->
+      <div class="grid-stack-item" gs-id="codeartifact-packages" gs-x="0" gs-y="9" gs-w="6" gs-h="4" gs-min-w="4" gs-min-h="3">
+        <div class="grid-stack-item-content">
+          <article class="widget" data-widget="codeartifact-packages">
+            <header class="widget-header">
+              <h2 class="widget-title">CodeArtifact Packages</h2>
+              <span class="widget-sub">Latest package versions by prefix</span>
+              <div class="widget-actions">
+                <button class="icon-btn" title="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+              </div>
+            </header>
+            <div class="widget-body codeartifact-packages-body">
+              <form class="widget-config codeartifact-packages-config" data-mode="setup">
+                <label>
+                  <span>Domain</span>
+                  <input class="codeartifact-domain" type="text" value="example-domain" autocomplete="off" autocorrect="off" spellcheck="false" />
+                </label>
+                <label>
+                  <span>Repository</span>
+                  <input class="codeartifact-repository" type="text" value="example_pypi_repo" autocomplete="off" autocorrect="off" spellcheck="false" />
+                </label>
+                <label>
+                  <span>Package prefix</span>
+                  <input class="codeartifact-prefix" type="text" value="example" autocomplete="off" autocorrect="off" spellcheck="false" />
+                </label>
+                <label>
+                  <span>Max packages</span>
+                  <input class="codeartifact-max" type="number" min="1" max="1000" value="50" />
+                </label>
+                <button type="submit" class="btn btn-primary">Load packages</button>
+                <p class="muted small codeartifact-packages-error"></p>
+              </form>
+              <div class="widget-data codeartifact-packages-rows" hidden></div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Add-widget side panel -->
+  <aside class="side-panel" id="side-panel" aria-hidden="true">
+    <header class="side-panel-header">
+      <h2>Add a widget</h2>
+      <button class="icon-btn" id="side-panel-close" title="Close">✕</button>
+    </header>
+
+    <div class="side-panel-body">
+      <section class="panel-section">
+        <h3 class="panel-section-title">Prebuilt</h3>
+        <div class="prebuilt-list" id="prebuilt-list"></div>
+      </section>
+
+      <section class="panel-section">
+        <h3 class="panel-section-title">Describe with AI</h3>
+        <p class="muted">Describe what you want to see. AI will draft a widget you can review, edit, and save.</p>
+        <textarea id="ai-prompt" rows="4" placeholder="e.g. Show me lambdas that errored in the last hour, grouped by which CFN stack owns them, with a one-click tail of each."></textarea>
+        <div class="ai-actions">
+          <button class="btn btn-ghost" id="ai-cancel">Cancel</button>
+          <button class="btn btn-primary" id="ai-generate">Generate</button>
+        </div>
+        <pre class="ai-output" id="ai-output" hidden></pre>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Settings side panel -->
+  <aside class="side-panel" id="settings-panel" aria-hidden="true">
+    <header class="side-panel-header">
+      <h2>Settings</h2>
+      <button class="icon-btn" id="settings-panel-close" title="Close">✕</button>
+    </header>
+    <div class="side-panel-body">
+      <section class="panel-section">
+        <h3 class="panel-section-title">AWS</h3>
+        <form id="settings-form" class="settings-form">
+          <label>
+            <span>AWS config file</span>
+            <input id="settings-aws-config-path" type="text" placeholder="~/.aws/config" />
+          </label>
+          <label>
+            <span>SSO session name</span>
+            <input id="settings-sso-session" type="text" placeholder="(optional)" />
+          </label>
+          <label>
+            <span>Default profile</span>
+            <input id="settings-default-profile" type="text" placeholder="default" />
+          </label>
+          <label>
+            <span>Default region</span>
+            <input id="settings-default-region" type="text" placeholder="eu-west-1" />
+          </label>
+          <p class="muted small">
+            Read-only enforcement is unconditional: every AWS service call is
+            checked against the structural read-only guard and your policy below
+            before it runs, including identity checks and the pipeline picker.
+            Blocked calls show up in the Audit log panel.
+          </p>
+          <p class="muted small" id="settings-status"></p>
+          <div class="ai-actions">
+            <button type="button" class="btn btn-ghost" id="settings-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="settings-save">Save</button>
+          </div>
+        </form>
+      </section>
+      <section class="panel-section">
+        <h3 class="panel-section-title">Read-only policy</h3>
+        <p class="muted small">
+          IAM-style allowlist. Explicit Deny &gt; Allow &gt; default-deny; globs
+          <code>*</code> and <code>?</code> work. It can only narrow what the app
+          calls — it can never enable a write.
+        </p>
+        <p class="muted small" id="policy-path"></p>
+        <p class="small" id="policy-status"></p>
+        <div class="policy-editor-wrap">
+          <pre id="policy-highlight" class="policy-highlight" aria-hidden="true"></pre>
+          <textarea id="policy-editor" spellcheck="false" autocomplete="off"
+            autocorrect="off" autocapitalize="off" wrap="off"></textarea>
+        </div>
+        <div class="ai-actions">
+          <button type="button" class="btn btn-ghost" id="policy-reload">Reload &amp; validate</button>
+          <button type="button" class="btn btn-primary" id="policy-save">Save policy</button>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Audit log side panel -->
+  <aside class="side-panel audit-panel" id="audit-panel" aria-hidden="true">
+    <header class="side-panel-header">
+      <h2>Audit log</h2>
+      <button class="icon-btn" id="audit-panel-close" title="Close">✕</button>
+    </header>
+    <div class="side-panel-body">
+      <p class="muted small">
+        Last 300 entries, newest first. Auto-refreshes every 2 seconds while
+        open. Captures lifecycle events, set-account attempts, every AWS service
+        call the Rust core makes, and any call blocked by the read-only guard or
+        policy. Request params aren't recorded; AWS calls log only service +
+        operation + account + region.
+        On disk: <code>~/.cloud_burrito/audit.log</code>.
+      </p>
+      <div id="audit-table-wrap"></div>
+    </div>
+  </aside>
+
+  <!-- Identity panel -->
+  <aside class="side-panel" id="identity-panel" aria-hidden="true">
+    <header class="side-panel-header">
+      <h2>Identity</h2>
+      <button class="icon-btn" id="identity-panel-close" title="Close">✕</button>
+    </header>
+    <div class="side-panel-body">
+      <p class="muted small">
+        Live state of the active AWS context: which profile, which role you
+        asked for, which role SSO actually gave you, and whether the assumed
+        identity is still valid.
+      </p>
+      <div id="identity-body"></div>
+    </div>
+  </aside>
+
+  <!-- Per-widget config side panel -->
+  <aside class="side-panel" id="widget-config-panel" aria-hidden="true">
+    <header class="side-panel-header">
+      <h2 id="cfg-title">Configure widget</h2>
+      <button class="icon-btn" id="widget-config-panel-close" title="Close">✕</button>
+    </header>
+    <div class="side-panel-body">
+      <p class="muted small" id="cfg-subline"></p>
+
+      <section class="panel-section">
+        <h3 class="panel-section-title">Widget context</h3>
+        <label class="cfg-toggle">
+          <input type="checkbox" id="cfg-use-override" />
+          <span>Pin this widget to an account and region</span>
+        </label>
+        <p class="muted small" id="cfg-default-context"></p>
+        <div id="cfg-override-fields" hidden>
+          <label>
+            <span>Profile</span>
+            <select id="cfg-override-profile"></select>
+          </label>
+          <label>
+            <span>Account ID</span>
+            <input id="cfg-override-account" type="text" readonly />
+          </label>
+          <label>
+            <span>Region</span>
+            <select id="cfg-override-region"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h3 class="panel-section-title">Header color</h3>
+        <div class="color-swatches" id="cfg-color-swatches"></div>
+      </section>
+
+      <section class="panel-section">
+        <h3 class="panel-section-title">Widget source</h3>
+        <details id="cfg-source-details">
+          <summary>View source</summary>
+          <div id="cfg-source-body">
+            <p class="muted small">Loading…</p>
+          </div>
+        </details>
+      </section>
+
+      <div class="ai-actions">
+        <button type="button" class="btn btn-ghost" id="cfg-reset">Reset to defaults</button>
+        <button type="button" class="btn btn-ghost" id="cfg-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="cfg-save">Save</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="scrim" id="scrim" hidden></div>
+
+  <script src="vendor/gridstack-all.js"></script>
+  <script src="mock-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

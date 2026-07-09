@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 620" role="img" aria-labelledby="title desc">
+  <title id="title">Cloud Burrito dashboard preview</title>
+  <desc id="desc">A dark desktop dashboard with account controls, policy status, and read-only AWS widgets.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1318"/>
+      <stop offset="1" stop-color="#141a20"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity="0.32"/>
+    </filter>
+    <style>
+      .frame { fill: url(#bg); }
+      .top { fill: #161b22; stroke: #2a323c; }
+      .dot { fill: #303946; }
+      .accent { fill: #58a6ff; }
+      .green { fill: #3fb950; }
+      .amber { fill: #d29922; }
+      .red { fill: #f85149; }
+      .card { fill: #10151b; stroke: #2a323c; }
+      .panel { fill: #0d1117; stroke: #27313b; }
+      .text { fill: #d7dde6; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .muted { fill: #8b949e; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #c9d1d9; font-family: "SFMono-Regular", Consolas, monospace; }
+      .grid { stroke: #1b232c; stroke-width: 1; opacity: 0.62; }
+    </style>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M 36 0 L 0 0 0 36" class="grid" fill="none"/>
+      <circle cx="0" cy="0" r="1.4" fill="#27313b"/>
+    </pattern>
+  </defs>
+
+  <rect width="1180" height="620" rx="28" class="frame"/>
+  <rect x="0" y="0" width="1180" height="620" rx="28" fill="url(#grid)" opacity="0.65"/>
+
+  <rect x="34" y="34" width="1112" height="552" rx="20" class="panel" filter="url(#shadow)"/>
+  <rect x="34" y="34" width="1112" height="64" rx="20" class="top"/>
+  <rect x="34" y="78" width="1112" height="20" fill="#161b22"/>
+
+  <circle cx="68" cy="66" r="7" class="red"/>
+  <circle cx="92" cy="66" r="7" class="amber"/>
+  <circle cx="116" cy="66" r="7" class="green"/>
+  <g transform="translate(144 42) scale(0.32)">
+    <rect x="0" y="0" width="120" height="120" rx="27" fill="#0B1E3D"/>
+    <rect x="43" y="24" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="62" y="24" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="24" y="43" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="43" y="43" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="62" y="43" width="15" height="15" rx="3.5" fill="#19C2C2"/>
+    <rect x="81" y="43" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="5" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="24" y="62" width="15" height="15" rx="3.5" fill="#19C2C2"/>
+    <rect x="43" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="62" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="81" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="100" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="5" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="24" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="43" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="62" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+    <rect x="81" y="81" width="15" height="15" rx="3.5" fill="#19C2C2"/>
+    <rect x="100" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  </g>
+  <text x="190" y="73" class="text" font-size="24" font-weight="700">Cloud Burrito</text>
+  <rect x="388" y="49" width="170" height="32" rx="16" fill="#11261a" stroke="#2f6f4f"/>
+  <circle cx="410" cy="65" r="5" class="green"/>
+  <text x="426" y="70" class="text" font-size="13" font-weight="700">READ-ONLY</text>
+  <rect x="580" y="49" width="232" height="32" rx="16" fill="#111820" stroke="#2a323c"/>
+  <text x="604" y="70" class="muted" font-size="13">demo-profile / eu-west-1</text>
+  <rect x="836" y="49" width="278" height="32" rx="16" fill="#0d1117" stroke="#2a323c"/>
+  <text x="862" y="70" class="muted" font-size="13">Search resource, ARN, stack, or log group</text>
+
+  <g transform="translate(64 132)">
+    <rect width="330" height="160" rx="12" class="card"/>
+    <text x="22" y="36" class="text" font-size="18" font-weight="700">Pipeline Runs</text>
+    <text x="178" y="36" class="muted mono" font-size="12">last 10 executions</text>
+    <rect x="22" y="62" width="286" height="34" rx="8" fill="#0d1117" stroke="#2a323c"/>
+    <text x="38" y="84" class="muted mono" font-size="12">usecase-deploy-pipeline</text>
+    <circle cx="42" cy="122" r="6" class="green"/>
+    <text x="60" y="127" class="mono" font-size="12">Succeeded</text>
+    <circle cx="154" cy="122" r="6" class="amber"/>
+    <text x="172" y="127" class="mono" font-size="12">InProgress</text>
+  </g>
+
+  <g transform="translate(424 132)">
+    <rect width="330" height="160" rx="12" class="card"/>
+    <text x="22" y="36" class="text" font-size="18" font-weight="700">CloudFormation</text>
+    <text x="190" y="36" class="muted mono" font-size="12">active stacks</text>
+    <rect x="22" y="62" width="286" height="18" rx="4" fill="#1b2733"/>
+    <rect x="22" y="92" width="244" height="18" rx="4" fill="#17212b"/>
+    <rect x="22" y="122" width="272" height="18" rx="4" fill="#17212b"/>
+  </g>
+
+  <g transform="translate(784 132)">
+    <rect width="330" height="160" rx="12" class="card"/>
+    <text x="22" y="36" class="text" font-size="18" font-weight="700">Lambda Log Tail</text>
+    <text x="22" y="70" class="mono" font-size="12">2026-06-29T10:14:02Z INFO request ok</text>
+    <text x="22" y="96" class="mono" font-size="12" fill="#d29922">2026-06-29T10:14:05Z WARN retry</text>
+    <text x="22" y="122" class="mono" font-size="12" fill="#f85149">2026-06-29T10:14:09Z ERROR timeout</text>
+  </g>
+
+  <g transform="translate(64 324)">
+    <rect width="510" height="190" rx="12" class="card"/>
+    <text x="22" y="38" class="text" font-size="18" font-weight="700">Errors by Stack</text>
+    <text x="22" y="76" class="muted mono" font-size="12">payment-handler</text>
+    <rect x="170" y="62" width="250" height="16" rx="8" fill="#253142"/>
+    <rect x="170" y="62" width="198" height="16" rx="8" class="accent"/>
+    <text x="22" y="112" class="muted mono" font-size="12">invoice-worker</text>
+    <rect x="170" y="98" width="250" height="16" rx="8" fill="#253142"/>
+    <rect x="170" y="98" width="124" height="16" rx="8" class="accent"/>
+    <text x="22" y="148" class="muted mono" font-size="12">api-gateway</text>
+    <rect x="170" y="134" width="250" height="16" rx="8" fill="#253142"/>
+    <rect x="170" y="134" width="68" height="16" rx="8" class="accent"/>
+  </g>
+
+  <g transform="translate(604 324)">
+    <rect width="510" height="190" rx="12" class="card"/>
+    <text x="22" y="38" class="text" font-size="18" font-weight="700">Policy Gate</text>
+    <rect x="22" y="62" width="466" height="38" rx="8" fill="#11261a" stroke="#2f6f4f"/>
+    <text x="42" y="86" class="text" font-size="14">registered operation + read-only guard + policy.yaml</text>
+    <text x="22" y="132" class="mono" font-size="12">sso:GetRoleCredentials checked before service calls</text>
+    <text x="22" y="158" class="mono" font-size="12">blocked calls return a local missing-permission tile</text>
+  </g>
+</svg>

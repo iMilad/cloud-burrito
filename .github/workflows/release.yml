@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "app-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example app-v0.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build-macos:
+    name: Build macOS ${{ matrix.suffix }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            suffix: aarch64
+          - target: x86_64-apple-darwin
+            suffix: x86_64
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Assert no AWS credentials are present
+        shell: bash
+        run: |
+          test -z "${AWS_ACCESS_KEY_ID:-}"
+          test -z "${AWS_SECRET_ACCESS_KEY:-}"
+          test -z "${AWS_SESSION_TOKEN:-}"
+          test -z "${AWS_PROFILE:-}"
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli@^2 --locked
+
+      - name: Check release metadata
+        run: python3 scripts/check-release-version.py "${TAG_NAME}"
+
+      - name: Run source privacy scan
+        run: python3 scripts/check-release-privacy.py
+
+      - name: Check frontend syntax
+        shell: bash
+        run: |
+          node --check frontend/app.js
+          node --check frontend/mock-data.js
+
+      - name: Test Rust backend
+        working-directory: src-tauri
+        run: cargo test -p cloud-burrito
+
+      - name: Lint Rust backend
+        working-directory: src-tauri
+        run: cargo clippy -p cloud-burrito -- -D warnings
+
+      - name: Build app
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          workspace="$(cd .. && pwd)"
+          export RUSTFLAGS="--remap-path-prefix=${workspace}=. --remap-path-prefix=${HOME}/.cargo=.cargo"
+          cargo tauri build --target "${{ matrix.target }}"
+
+      - name: Run app bundle privacy scan
+        run: >
+          python3 scripts/check-release-privacy.py
+          --path "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
+
+      - name: Stage release assets
+        shell: bash
+        run: |
+          version="$(python3 scripts/check-release-version.py --print-version)"
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
+          dmg_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          mkdir -p release-assets
+          ditto -c -k --keepParent "$app" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}.app.zip"
+          dmg="$(find "$dmg_dir" -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          cp "$dmg" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}.dmg"
+          (
+            cd release-assets
+            shasum -a 256 *.app.zip *.dmg > "SHA256SUMS-${{ matrix.suffix }}.txt"
+          )
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.suffix }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish draft release
+    needs: build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: release
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Check release metadata
+        run: python3 scripts/check-release-version.py "${TAG_NAME}"
+
+      - name: Combine checksums
+        shell: bash
+        run: |
+          cd release-assets
+          cat SHA256SUMS-*.txt > SHA256SUMS.txt
+
+      - name: Publish draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${TAG_NAME#app-v}"
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" release-assets/* --clobber
+          else
+            gh release create "$TAG_NAME" release-assets/* \
+              --draft \
+              --verify-tag \
+              --title "Cloud Burrito ${version}" \
+              --notes "Unsigned macOS builds for Cloud Burrito ${version}. Verify downloads with SHA256SUMS.txt before installing."
+          fi
