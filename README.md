@@ -248,10 +248,6 @@ State lives in your home directory:
 | `~/.cloud_burrito/dashboard.json` | Saved dashboard layout and per-tile config |
 | `~/.cloud_burrito/audit.log` | Append-only JSONL log of AWS call preflights and blocked calls |
 
-If you used the app before it was renamed, Cloud Burrito copies existing files
-from `~/.aws_control_center/` into `~/.cloud_burrito/` the first time each file
-is needed. The old directory is left untouched as a rollback copy.
-
 Authentication uses the standard SSO flow: `aws-config` resolves your profile's
 cached SSO token into short-lived role credentials that the SDK auto-refreshes.
 When the token expires, the app detects it and prompts you to re-run
