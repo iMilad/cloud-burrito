@@ -51,17 +51,26 @@ fi
 
 if command -v detect-secrets >/dev/null 2>&1; then
   echo "== detect-secrets current tree =="
-  detect-secrets scan --all-files
+  detect-secrets scan \
+    --all-files \
+    --no-verify \
+    --exclude-files '^(src-tauri/target/|src-tauri/gen/)'
 else
   echo "skip: detect-secrets not installed"
 fi
 
 if command -v trufflehog >/dev/null 2>&1; then
-  echo "== trufflehog verified filesystem scan =="
+  echo "== trufflehog filesystem scan =="
   tmp_json="$(mktemp "${TMPDIR:-/tmp}/cloud-burrito-trufflehog.XXXXXX")"
-  trap 'rm -f "$tmp_json"' EXIT
+  tmp_exclude="$(mktemp "${TMPDIR:-/tmp}/cloud-burrito-trufflehog-exclude.XXXXXX")"
+  trap 'rm -f "$tmp_json" "$tmp_exclude"' EXIT
+  printf '^src-tauri/target/\n^src-tauri/gen/\n' >"$tmp_exclude"
   set +e
-  trufflehog filesystem . --only-verified --json >"$tmp_json"
+  trufflehog filesystem . \
+    --no-update \
+    --no-verification \
+    --exclude-paths "$tmp_exclude" \
+    --json >"$tmp_json"
   status=$?
   set -e
   if [[ -s "$tmp_json" ]]; then

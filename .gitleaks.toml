@@ -1,0 +1,11 @@
+title = "Cloud Burrito gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated and ignored local build artifacts are not publishable source."
+paths = [
+  '''^src-tauri/gen/''',
+  '''^src-tauri/target/''',
+]

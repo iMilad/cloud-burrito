@@ -17,16 +17,18 @@ MAX_FINDINGS_TO_PRINT = 80
 MIN_BINARY_STRING = 6
 KNOWN_VALUE_HASHES = {
     "known_account_number": {
-        "046bf650ef789a1b283efb7e39f51dbf1500b86adbf50bd07476acd1e9d643d3",
+        "046bf650ef789a1b283efb7e39f51dbf1500b86adbf50bd07476acd1e9d643d3",  # pragma: allowlist secret
     },
     "known_profile_name": {
-        "95eef90128d3a873878efb430a243f197b3d8b8709a3d52c24c7483aa96affa6",
+        "95eef90128d3a873878efb430a243f197b3d8b8709a3d52c24c7483aa96affa6",  # pragma: allowlist secret
     },
     "known_client_marker": {
-        "c718ccf49183aeecf51bdff0ba17e41a68c7bc153cd71b158efe8c54cf3e76ae",
+        "c718ccf49183aeecf51bdff0ba17e41a68c7bc153cd71b158efe8c54cf3e76ae",  # pragma: allowlist secret
+        "d416b46f2de3d5152053cf0265b337d7b9421de2086a80706e0f2c540dfea9a2",  # pragma: allowlist secret
+        "4f0c0d841ffcd452df7c23cfeaf7930bbc9d3543612b165601f910beecb65c39",  # pragma: allowlist secret
     },
     "known_owner_handle": {
-        "202ee8445e3ce73df6200e987e833397f37290f4741befec1c776549bb8e4dde",
+        "202ee8445e3ce73df6200e987e833397f37290f4741befec1c776549bb8e4dde",  # pragma: allowlist secret
     },
 }
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{1,}")
@@ -57,6 +59,12 @@ def rule_set() -> list[Rule]:
         Rule(
             "standalone_12_digit_number",
             re.compile(r"(?<![A-Za-z0-9])\d{12}(?![A-Za-z0-9])"),
+        ),
+        Rule(
+            "formatted_12_digit_number",
+            re.compile(
+                r"(?<![A-Za-z0-9])\d{4}(?:[ -]\d{4}){2}(?![A-Za-z0-9])"
+            ),
         ),
         Rule(
             "local_user_path",

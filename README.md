@@ -301,7 +301,10 @@ frontend files, checks whitespace, and uses optional local scanners such as
 gitleaks, detect-secrets, and trufflehog when they are already installed. The
 built-in privacy gate scans for AWS keys, credential assignments, private keys,
 account IDs, absolute local user paths, and hashed denylist values for
-project-private markers. Matched values are redacted in its output.
+project-private markers. Matched values are redacted in its output. Gitleaks is
+configured to ignore generated/build artifacts that are already excluded from
+Git. Detect-Secrets runs with `--no-verify`, and TruffleHog runs with
+`--no-update --no-verification`, so local checks do not contact live services.
 
 ## Release pipeline
 
