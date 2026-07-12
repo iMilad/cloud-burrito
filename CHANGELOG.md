@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-12
+
 ### Added
 
 - Browser-mode Playwright coverage for startup, region selection, CloudFormation
