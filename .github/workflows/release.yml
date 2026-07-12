@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish, for example app-v0.2.0"
+        description: "Must match the tag passed as the workflow ref, for example app-v0.2.6"
         required: true
         type: string
 
@@ -17,27 +17,35 @@ permissions:
 env:
   TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
-jobs:
-  build-macos:
-    name: Build macOS ${{ matrix.suffix }}
-    runs-on: macos-latest
-    permissions:
-      contents: read
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            suffix: aarch64
-          - target: x86_64-apple-darwin
-            suffix: x86_64
+jobs:
+  validate:
+    name: Validate release
+    runs-on: macos-15
+    timeout-minutes: 45
 
     steps:
+      - name: Require an immutable tag trigger
+        shell: bash
+        run: |
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$TAG_NAME"
+
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag points to the workflow commit
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse "${TAG_NAME}^{commit}")" = "$GITHUB_SHA"
 
       - name: Assert no AWS credentials are present
         shell: bash
@@ -47,20 +55,41 @@ jobs:
           test -z "${AWS_SESSION_TOKEN:-}"
           test -z "${AWS_PROFILE:-}"
 
-      - name: Install Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
-          rustup target add "${{ matrix.target }}"
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-host-${{ hashFiles('rust-toolchain.toml', 'scripts/tool-versions.env', 'src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rust-host-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
+          cache: npm
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli@^2 --locked
+      - name: Install frontend test dependencies
+        run: npm ci
+
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=high
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Test browser mode
+        run: npm run test:frontend
 
       - name: Check release metadata
         run: python3 scripts/check-release-version.py "${TAG_NAME}"
@@ -68,32 +97,150 @@ jobs:
       - name: Run source privacy scan
         run: python3 scripts/check-release-privacy.py
 
-      - name: Check frontend syntax
+      - name: Check source syntax
         shell: bash
         run: |
+          python3 -m py_compile scripts/check-release-privacy.py scripts/check-release-version.py scripts/check-tauri-commands.py
+          bash -n scripts/*.sh
           node --check frontend/app.js
           node --check frontend/mock-data.js
 
+      - name: Check Tauri command registry
+        run: python3 scripts/check-tauri-commands.py
+
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
       - name: Test Rust backend
         working-directory: src-tauri
-        run: cargo test -p cloud-burrito
+        run: cargo test -p cloud-burrito --locked
 
       - name: Lint Rust backend
         working-directory: src-tauri
-        run: cargo clippy -p cloud-burrito -- -D warnings
+        run: cargo clippy -p cloud-burrito --locked -- -D warnings
 
-      - name: Build app
-        working-directory: src-tauri
+      - name: Install pinned Cargo Audit
         shell: bash
         run: |
-          workspace="$(cd .. && pwd)"
-          export RUSTFLAGS="--remap-path-prefix=${workspace}=. --remap-path-prefix=${HOME}/.cargo=.cargo"
-          cargo tauri build --target "${{ matrix.target }}"
+          source scripts/tool-versions.env
+          installed="$(cargo audit --version 2>/dev/null | awk '{print $NF}' || true)"
+          if [[ "$installed" != "$CARGO_AUDIT_VERSION" ]]; then
+            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          fi
 
-      - name: Run app bundle privacy scan
-        run: >
-          python3 scripts/check-release-privacy.py
-          --path "src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
+      - name: Audit Rust dependencies
+        working-directory: src-tauri
+        run: cargo audit
+
+      - name: Check whitespace
+        run: git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
+
+  build-macos:
+    name: Build unsigned macOS ${{ matrix.suffix }}
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            suffix: aarch64
+            macho_arch: arm64
+          - target: x86_64-apple-darwin
+            suffix: x86_64
+            macho_arch: x86_64
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert no AWS credentials are present
+        shell: bash
+        run: |
+          test -z "${AWS_ACCESS_KEY_ID:-}"
+          test -z "${AWS_SECRET_ACCESS_KEY:-}"
+          test -z "${AWS_SESSION_TOKEN:-}"
+          test -z "${AWS_PROFILE:-}"
+
+      - name: Install pinned Rust toolchain and target
+        shell: bash
+        run: |
+          rustup show active-toolchain
+          rustup target add "${{ matrix.target }}"
+
+      - name: Cache Rust build inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-${{ matrix.target }}-tools-${{ hashFiles('rust-toolchain.toml', 'scripts/tool-versions.env', 'src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-rust-${{ matrix.target }}-tools-
+
+      - name: Install pinned Tauri CLI
+        shell: bash
+        run: |
+          source scripts/tool-versions.env
+          installed="$(cargo tauri --version 2>/dev/null | awk '{print $NF}' || true)"
+          if [[ "$installed" != "$TAURI_CLI_VERSION" ]]; then
+            cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+          fi
+
+      - name: Build unsigned release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-release.sh "${{ matrix.target }}"
+
+      - name: Verify unsigned bundle and disk image
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
+          binary="$app/Contents/MacOS/cloud-burrito"
+          dmg="$(
+            find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" \
+              -maxdepth 1 -name '*.dmg' -print -quit
+          )"
+          test -d "$app"
+          test -x "$binary"
+          test -n "$dmg"
+          test "$(lipo -archs "$binary")" = "${{ matrix.macho_arch }}"
+          plutil -lint "$app/Contents/Info.plist"
+
+          assert_no_publisher_identity() {
+            local target="$1"
+            local metadata team
+            metadata="$(codesign --display --verbose=4 "$target" 2>&1 || true)"
+            if grep -q '^Authority=' <<< "$metadata"; then
+              echo "publisher identity unexpectedly present in $target" >&2
+              exit 1
+            fi
+            team="$(sed -n 's/^TeamIdentifier=//p' <<< "$metadata")"
+            if [[ -n "$team" && "$team" != "not set" ]]; then
+              echo "publisher team unexpectedly present in $target" >&2
+              exit 1
+            fi
+          }
+
+          assert_no_publisher_identity "$app"
+          assert_no_publisher_identity "$binary"
+          assert_no_publisher_identity "$dmg"
+          hdiutil verify "$dmg"
 
       - name: Stage release assets
         shell: bash
@@ -102,38 +249,50 @@ jobs:
           app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
           dmg_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
           mkdir -p release-assets
-          ditto -c -k --keepParent "$app" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}.app.zip"
+          ditto -c -k --keepParent "$app" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}_unsigned.app.zip"
           dmg="$(find "$dmg_dir" -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "$dmg"
-          cp "$dmg" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}.dmg"
+          cp "$dmg" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}_unsigned.dmg"
           (
             cd release-assets
             shasum -a 256 *.app.zip *.dmg > "SHA256SUMS-${{ matrix.suffix }}.txt"
           )
 
       - name: Upload release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets-${{ matrix.suffix }}
           path: release-assets/*
           if-no-files-found: error
+          retention-days: 14
 
   publish:
     name: Publish draft release
     needs: build-macos
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
-    environment: release
 
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm release tag is still immutable
+        shell: bash
+        run: |
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$TAG_NAME"
+          git fetch --force origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse "${TAG_NAME}^{commit}")" = "$GITHUB_SHA"
 
       - name: Download release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-assets-*
           path: release-assets
@@ -142,24 +301,42 @@ jobs:
       - name: Check release metadata
         run: python3 scripts/check-release-version.py "${TAG_NAME}"
 
-      - name: Combine checksums
+      - name: Combine and verify checksums
         shell: bash
         run: |
           cd release-assets
-          cat SHA256SUMS-*.txt > SHA256SUMS.txt
+          cat SHA256SUMS-*.txt | sort -k2 > SHA256SUMS.txt
+          shasum -a 256 -c SHA256SUMS.txt
 
       - name: Publish draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           version="${TAG_NAME#app-v}"
+          notes="$(printf '%s\n' \
+            "Unsigned macOS convenience builds for Cloud Burrito ${version}." \
+            "No publisher certificate, account, or team identity was used." \
+            "Build from the tagged source with ./scripts/build-release.sh if preferred." \
+            "" \
+            "Verify checksums with: shasum -a 256 -c SHA256SUMS.txt")"
+
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "refusing to replace assets on published release $TAG_NAME" >&2
+              exit 1
+            fi
             gh release upload "$TAG_NAME" release-assets/* --clobber
+            gh release edit "$TAG_NAME" \
+              --draft \
+              --title "Cloud Burrito ${version}" \
+              --notes "$notes"
           else
             gh release create "$TAG_NAME" release-assets/* \
               --draft \
               --verify-tag \
               --title "Cloud Burrito ${version}" \
-              --notes "Unsigned macOS builds for Cloud Burrito ${version}. Verify downloads with SHA256SUMS.txt before installing."
+              --notes "$notes"
           fi

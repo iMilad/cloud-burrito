@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-aws-list-pipelines"
+description = "Enables the aws_list_pipelines command without any pre-configured scope."
+commands.allow = ["aws_list_pipelines"]
+
+[[permission]]
+identifier = "deny-aws-list-pipelines"
+description = "Denies the aws_list_pipelines command without any pre-configured scope."
+commands.deny = ["aws_list_pipelines"]

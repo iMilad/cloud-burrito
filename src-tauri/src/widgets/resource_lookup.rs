@@ -174,8 +174,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             (arn, stack)
         }
     });
-    let stack_by_arn: HashMap<String, Option<String>> =
-        join_all(futs).await.into_iter().collect();
+    let stack_by_arn: HashMap<String, Option<String>> = join_all(futs).await.into_iter().collect();
 
     let mut matches = Vec::new();
     for (i, (arn, tags)) in matches_raw.iter().enumerate() {

@@ -74,7 +74,10 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         match total {
             Ok(t) if t > 0 => rows.push((group, t)),
             Ok(_) => {}
-            Err(err) => ctx.log("cw_insights failed", json!({"log_group": group, "error": err})),
+            Err(err) => ctx.log(
+                "cw_insights failed",
+                json!({"log_group": group, "error": err}),
+            ),
         }
     }
     rows.sort_by_key(|row| std::cmp::Reverse(row.1));
@@ -130,7 +133,9 @@ async fn cw_insights_count(
                 }
                 return Ok(total);
             }
-            Some(QueryStatus::Failed) | Some(QueryStatus::Cancelled) | Some(QueryStatus::Timeout) => {
+            Some(QueryStatus::Failed)
+            | Some(QueryStatus::Cancelled)
+            | Some(QueryStatus::Timeout) => {
                 return Err(format!("query terminated: {:?}", resp.status()));
             }
             _ => {

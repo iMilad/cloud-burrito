@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-aws-auth-status"
+description = "Enables the aws_auth_status command without any pre-configured scope."
+commands.allow = ["aws_auth_status"]
+
+[[permission]]
+identifier = "deny-aws-auth-status"
+description = "Denies the aws_auth_status command without any pre-configured scope."
+commands.deny = ["aws_auth_status"]

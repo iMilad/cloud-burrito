@@ -1,6 +1,6 @@
-//! CloudFormation Stacks — list active stacks, enrich the top 20 with a
-//! resource count (concurrently). The enrichment is best-effort and bounded so
-//! the widget never explodes into thousands of API calls.
+//! CloudFormation Stacks — list every non-deleted stack, enrich the first 20
+//! with a resource count (concurrently). The enrichment is best-effort and
+//! bounded so the widget never explodes into thousands of API calls.
 
 use std::collections::HashMap;
 
@@ -10,51 +10,67 @@ use serde_json::{json, Value};
 
 use super::{dt_iso, err_msg, WidgetCtx};
 
-const DEFAULT_STATUS: &[&str] = &[
-    "CREATE_COMPLETE",
-    "UPDATE_COMPLETE",
-    "ROLLBACK_COMPLETE",
-    "UPDATE_ROLLBACK_COMPLETE",
-];
 const ENRICH_LIMIT: usize = 20;
+
+fn include_stack_status(status: Option<&str>, has_explicit_filter: bool) -> bool {
+    has_explicit_filter || status != Some("DELETE_COMPLETE")
+}
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let name_prefix = ctx.input_str("name_prefix", "");
-    let status_filter: Vec<String> = match ctx.input_value("status_filter") {
-        Some(Value::Array(a)) if !a.is_empty() => a
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect(),
-        _ => DEFAULT_STATUS.iter().map(|s| s.to_string()).collect(),
+    let status_filters: Option<Vec<StackStatus>> = match ctx.input_value("status_filter") {
+        Some(Value::Array(a)) if !a.is_empty() => Some(
+            a.iter()
+                .filter_map(|v| v.as_str().map(StackStatus::from))
+                .collect(),
+        ),
+        _ => None,
     };
 
     let client = aws_sdk_cloudformation::Client::new(&ctx.sdk);
-    let filters: Vec<StackStatus> = status_filter
-        .iter()
-        .map(|s| StackStatus::from(s.as_str()))
-        .collect();
-
-    if let Some(denied) = ctx.preflight("cloudformation", "ListStacks") {
-        return denied;
-    }
-    let resp = match client
-        .list_stacks()
-        .set_stack_status_filter(Some(filters))
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return json!({
-                "render": "table",
-                "columns": ["stack", "status", "resources", "last_updated"],
-                "rows": [],
-                "error": err_msg(e),
-            });
+    let mut summaries = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        if let Some(denied) = ctx.preflight("cloudformation", "ListStacks") {
+            return denied;
         }
-    };
+        let mut req = client
+            .list_stacks()
+            .set_stack_status_filter(status_filters.clone());
+        if let Some(next_token) = &token {
+            req = req.next_token(next_token);
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return json!({
+                    "render": "table",
+                    "columns": ["stack", "status", "resources", "last_updated"],
+                    "rows": [],
+                    "error": err_msg(e),
+                });
+            }
+        };
+        summaries.extend(
+            resp.stack_summaries()
+                .iter()
+                .filter(|summary| {
+                    include_stack_status(
+                        summary.stack_status().map(StackStatus::as_str),
+                        status_filters.is_some(),
+                    )
+                })
+                .cloned(),
+        );
+        token = resp
+            .next_token()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if token.is_none() {
+            break;
+        }
+    }
 
-    let mut summaries = resp.stack_summaries().to_vec();
     if !name_prefix.is_empty() {
         summaries.retain(|s| {
             s.stack_name()
@@ -115,4 +131,27 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         "columns": ["stack", "status", "resources", "last_updated"],
         "rows": rows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::include_stack_status;
+
+    #[test]
+    fn default_view_keeps_active_and_failed_stacks_but_hides_deleted_stacks() {
+        for status in [
+            "CREATE_IN_PROGRESS",
+            "UPDATE_FAILED",
+            "IMPORT_COMPLETE",
+            "DELETE_FAILED",
+        ] {
+            assert!(include_stack_status(Some(status), false), "{status}");
+        }
+        assert!(!include_stack_status(Some("DELETE_COMPLETE"), false));
+    }
+
+    #[test]
+    fn explicit_status_filter_is_preserved() {
+        assert!(include_stack_status(Some("DELETE_COMPLETE"), true));
+    }
 }

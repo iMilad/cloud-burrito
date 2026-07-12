@@ -6,10 +6,9 @@
 
 /// Operation-name prefixes that are read-only by convention across AWS.
 pub const READ_ONLY_PREFIXES: &[&str] = &[
-    "Get", "List", "Describe", "Search", "Scan", "Filter", "Query", "Head",
-    "Lookup", "Read", "View", "Show", "Check", "Validate", "Detect",
-    "Discover", "Test", "Estimate", "Simulate", "Verify", "Preview",
-    "Resolve", "Compare", "Trace", "Sample", "Match", "Diff", "Decode",
+    "Get", "List", "Describe", "Search", "Scan", "Filter", "Query", "Head", "Lookup", "Read",
+    "View", "Show", "Check", "Validate", "Detect", "Discover", "Test", "Estimate", "Simulate",
+    "Verify", "Preview", "Resolve", "Compare", "Trace", "Sample", "Match", "Diff", "Decode",
     "Locate", "Find", "Batch",
 ];
 

@@ -44,14 +44,28 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     for d in resp.action_execution_details() {
         let input = d.input();
         let type_id = input.and_then(|i| i.action_type_id());
-        let category = type_id.map(|t| t.category().as_str().to_string()).unwrap_or_default();
-        let provider = type_id.map(|t| t.provider().to_string()).unwrap_or_default();
+        let category = type_id
+            .map(|t| t.category().as_str().to_string())
+            .unwrap_or_default();
+        let provider = type_id
+            .map(|t| t.provider().to_string())
+            .unwrap_or_default();
         let result = d.output().and_then(|o| o.execution_result());
-        let summary = result.and_then(|r| r.external_execution_summary()).unwrap_or("").to_string();
-        let url = result.and_then(|r| r.external_execution_url()).unwrap_or("").to_string();
+        let summary = result
+            .and_then(|r| r.external_execution_summary())
+            .unwrap_or("")
+            .to_string();
+        let url = result
+            .and_then(|r| r.external_execution_url())
+            .unwrap_or("")
+            .to_string();
         let error = result
             .and_then(|r| r.error_details())
-            .map(|e| format!("{} {}", e.code().unwrap_or(""), e.message().unwrap_or("")).trim().to_string())
+            .map(|e| {
+                format!("{} {}", e.code().unwrap_or(""), e.message().unwrap_or(""))
+                    .trim()
+                    .to_string()
+            })
             .filter(|s| !s.is_empty())
             .unwrap_or_default();
         let started = d.start_time();

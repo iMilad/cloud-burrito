@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT">
-  <img src="https://img.shields.io/badge/Rust-1.77%2B-orange.svg?style=flat-square&logo=rust" alt="Rust 1.77+">
+  <img src="https://img.shields.io/badge/Rust-1.91.1%2B-orange.svg?style=flat-square&logo=rust" alt="Rust 1.91.1+">
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB.svg?style=flat-square&logo=tauri" alt="Tauri 2">
   <img src="https://img.shields.io/badge/Platform-macOS-lightgrey.svg?style=flat-square&logo=apple" alt="Platform: macOS">
   <img src="https://img.shields.io/badge/AWS-read--only-success.svg?style=flat-square&logo=amazonaws" alt="AWS read-only">
@@ -45,6 +45,7 @@ compiled binary that talks to AWS in-process via the AWS SDK for Rust.
 - [Project layout](#project-layout)
 - [Development](#development)
 - [Release pipeline](#release-pipeline)
+- [Contributing and security](#contributing-and-security)
 - [License](#license)
 
 ## Highlights
@@ -58,7 +59,7 @@ compiled binary that talks to AWS in-process via the AWS SDK for Rust.
   to a JSONL audit log and shown live in an in-app Audit panel, tagged `aws`,
   `aws-blocked`, or lifecycle.
 - **Multi-account via AWS SSO.** Uses your existing `~/.aws/config` SSO profiles;
-  set a default account/region from the top bar, or pin account/region per widget.
+  search for a default account/region from the top bar, or pin account/region per widget.
 - **Customizable dashboard.** Drag/resize widget tiles (GridStack); the layout
   and per-tile config persist across launches.
 - **Single binary.** Pure Rust + a webview UI. No interpreter, no helper process.
@@ -182,7 +183,7 @@ stack details, pipeline execution details, and CodeBuild logs:
 
 | Widget | What it shows |
 | --- | --- |
-| `cfn-stacks` | CloudFormation stacks in the active region with status and resource count |
+| `cfn-stacks` | Searchable non-deleted CloudFormation stacks in the active region, with status and resource count |
 | `log-tail` | Lambda function browser with ARN/update/log-group details, log streams, and events |
 | `cloudwatch-logs` | Search CloudWatch log groups, browse their streams, and view events |
 | `errors-by-stack` | CloudWatch errors grouped by stack over a selected time window, with in-widget filtering |
@@ -209,8 +210,10 @@ rule render readable labels and values.
 
 ### Prerequisites
 
-- **Rust** 1.77+ and Cargo
-- **Tauri CLI v2** — `cargo install tauri-cli@^2 --locked`
+- **macOS** with Xcode Command Line Tools (`xcode-select --install`)
+- **Node.js** 22 with **npm** 10.9.8, plus **Python 3** for local test servers
+- **Rust** 1.91.1 and Cargo (automatically selected by `rust-toolchain.toml`)
+- **Tauri CLI** 2.11.4 — `cargo install tauri-cli --version 2.11.4 --locked`
 - **AWS CLI v2** with at least one **SSO** profile configured in `~/.aws/config`
   (`aws configure sso`), and a valid session (`aws sso login`)
 - A system webview (preinstalled on macOS)
@@ -226,18 +229,27 @@ cd cloud-burrito
 ### Build a release bundle
 
 ```bash
-cd src-tauri
-cargo tauri build         # produces a .app and .dmg (macOS)
+./scripts/build-release.sh
 ```
 
-Automated releases are published by GitHub Actions from `app-vX.Y.Z` tags; see
+The release script selects the host Rust target by default, constrains Cargo to
+the committed lockfile, removes local source paths from the binary, builds the
+`.app` and `.dmg`, and privacy-scans the packaged application. Pass an explicit
+target such as `aarch64-apple-darwin` or `x86_64-apple-darwin` when needed.
+All bundles are intentionally produced with Tauri's `--no-sign` option. No
+publisher certificate, account, or team identity is read by the build. macOS may
+reject downloaded unsigned applications, so building locally from tagged source
+is the recommended distribution path.
+
+GitHub Actions prepares unsigned convenience release drafts from `app-vX.Y.Z`
+tags; a maintainer reviews and publishes each draft. See
 [Release pipeline](#release-pipeline).
 
 ## Configuration
 
-Pick your default account and region in the top bar, and set your SSO session in
-the Settings panel. Individual widgets can inherit the default or pin their own
-account/region.
+Search for your default account and region in the top bar, and set your SSO
+session in the Settings panel. Individual widgets can inherit the default or pin
+their own account/region.
 State lives in your home directory:
 
 | Path | Purpose |
@@ -274,7 +286,8 @@ frontend/    Vanilla HTML/CSS/JS dashboard (open index.html for the offline demo
 src-tauri/   Tauri 2 (Rust) app — all AWS calls happen in-process
   src/aws/   Credentials/SSO context, config parsing, read-only guard + policy
   src/widgets/  The compiled-in widgets
-scripts/     dev.sh (cargo tauri dev wrapper)
+scripts/     Development, release-build, version, privacy, and security checks
+tests/       Browser-mode Playwright tests
 info/        Design spec, architecture notes, status page
 docs/        Project docs / specs / plans
 ```
@@ -282,12 +295,18 @@ docs/        Project docs / specs / plans
 ## Development
 
 ```bash
+npm ci
+npx playwright install chromium
+npm run test:frontend
+
 cd src-tauri
-cargo test -p cloud-burrito             # unit tests
-cargo clippy -p cloud-burrito -- -D warnings
+cargo fmt --all --check
+cargo test -p cloud-burrito --locked
+cargo clippy -p cloud-burrito --locked -- -D warnings
 ```
 
-The frontend has no build step; edit `frontend/*.js`/`*.css` and reload.
+The frontend has no production build step; edit `frontend/*.js`/`*.css` and
+reload. Its browser-mode behavior is tested against Chromium with synthetic data.
 
 ### Local security check
 
@@ -295,44 +314,82 @@ The frontend has no build step; edit `frontend/*.js`/`*.css` and reload.
 ./scripts/security-check.sh
 ```
 
-Run this before publishing or tagging. It runs the release metadata and privacy
-gates, scans any non-ignored untracked files, syntax checks the local scripts and
-frontend files, checks whitespace, and uses optional local scanners such as
-gitleaks, detect-secrets, and trufflehog when they are already installed. The
-built-in privacy gate scans for AWS keys, credential assignments, private keys,
-account IDs, absolute local user paths, and hashed denylist values for
-project-private markers. Matched values are redacted in its output. Gitleaks is
-configured to ignore generated/build artifacts that are already excluded from
-Git. Detect-Secrets runs with `--no-verify`, and TruffleHog runs with
-`--no-update --no-verification`, so local checks do not contact live services.
+Run this before publishing or tagging. It checks release/toolchain metadata,
+source and untracked-file privacy, script and frontend syntax, Rust formatting,
+Rust tests, Clippy, whitespace, and Cargo advisories when `cargo-audit` is installed.
+Cargo Audit uses the existing local RustSec database during the gate; run
+`cargo audit` separately when you intentionally want to refresh that data.
+It also uses optional local scanners such as Gitleaks, Detect-Secrets, and
+TruffleHog when available. The built-in privacy gate scans for AWS keys,
+credential assignments, private keys, account IDs, absolute local user paths,
+concrete project-owner references, personal CODEOWNERS/author fields, and hashed
+denylist values for project-private markers. Findings are redacted.
+Detect-Secrets and TruffleHog run without live secret verification, so the local
+gate makes no AWS or other credential-validation calls.
 
 ## Release pipeline
 
 Cloud Burrito releases are tag-driven. The tag must match both app manifests:
 
 ```bash
-python3 scripts/check-release-version.py app-v0.2.2
-git tag app-v0.2.2
-git push origin app-v0.2.2
+python3 scripts/check-release-version.py app-v0.2.6
+git tag app-v0.2.6
+git push origin app-v0.2.6
+```
+
+Pushing the tag starts the release automatically. To rerun it manually, dispatch
+the workflow from that same immutable tag ref (a branch dispatch is rejected):
+
+```bash
+gh workflow run release.yml \
+  --ref app-v0.2.6 \
+  -f tag=app-v0.2.6
 ```
 
 The pipeline has two workflows:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `CI` | PRs and pushes to `dev`/`main` | Checks version metadata, runs the release privacy scan, syntax-checks frontend JS, runs Rust tests, runs Clippy, and checks whitespace |
-| `Release` | `app-v*` tags or manual dispatch with a tag | Re-runs all CI gates, builds macOS Apple Silicon and Intel bundles, scans the built `.app`, uploads `.app.zip`, `.dmg`, and SHA-256 files, then creates a draft GitHub release |
+| `CI` | PRs and pushes to `dev`/`main` | Runs browser tests and dependency audits, validates metadata/privacy/syntax/formatting, tests and lints Rust, and checks whitespace |
+| `Release` | `app-v*` tags or a manual dispatch on that tag ref | Re-runs the gates, builds explicitly unsigned bundles for both macOS architectures, rejects publisher identities, validates and privacy-scans the app, verifies checksums, then creates a draft GitHub release |
 
 Release privacy is a hard gate. `scripts/check-release-privacy.py` scans tracked
 source files and the packaged app bundle for AWS access key IDs, credential
 assignments, private keys, standalone 12-digit account IDs, local absolute user
-paths, and hashed denylist values for project-private markers. The workflows also
-assert that AWS credential environment variables are empty before any job runs.
+paths, concrete project-owner references, and hashed denylist values for
+project-private markers. The workflows also assert that AWS credential
+environment variables are empty before any job runs.
+All external Actions are pinned to immutable commit SHAs and updated by
+Dependabot. Rust build caches reduce repeated compilation without containing
+credentials.
 
-No AWS credentials or AWS API calls are used anywhere in CI or release. The
-current release workflow produces unsigned macOS bundles; public notarized
-distribution can be added later with Apple signing credentials stored only as
-GitHub environment secrets on the protected `release` environment.
+The workflow always builds the immutable commit that triggered the tag run and
+refuses to continue if the tag moves. A rerun may update an existing draft, but
+it cannot overwrite assets on an already published release.
+
+No AWS credentials, AWS API calls, Apple credentials, publisher certificates,
+or publisher identities are used anywhere in CI or release. The build script
+clears inherited Apple identity variables and passes `--no-sign`; the workflow
+also rejects any bundle containing a certificate authority or publisher team.
+Release filenames include `_unsigned` so their trust status is unambiguous.
+
+For the repository itself, enable GitHub secret scanning with push protection
+and private vulnerability reporting. Protect `main` and `dev` with required
+`CI` checks, pull-request review, and force-push/deletion protection. These
+GitHub settings are external to the files in this repository.
+
+Draft release downloads can be checked independently:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull-request
+expectations, [CHANGELOG.md](CHANGELOG.md) for release notes, and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting. Participation is
+governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-aws-set-account"
+description = "Enables the aws_set_account command without any pre-configured scope."
+commands.allow = ["aws_set_account"]
+
+[[permission]]
+identifier = "deny-aws-set-account"
+description = "Denies the aws_set_account command without any pre-configured scope."
+commands.deny = ["aws_set_account"]

@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible problem without sharing sensitive AWS data.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Cloud Burrito. For security issues, use private vulnerability reporting instead of this form.
+  - type: input
+    id: version
+    attributes:
+      label: Cloud Burrito version
+      placeholder: "0.2.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple Silicon
+        - Intel
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_source
+    attributes:
+      label: Installation source
+      options:
+        - GitHub DMG
+        - GitHub app ZIP
+        - Local source build
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Use synthetic account, ARN, profile, and resource names.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove credentials, tokens, account IDs, ARNs, private names, and local user paths.
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues for a duplicate.
+          required: true
+        - label: I removed all credentials, tokens, account IDs, private ARNs, customer data, and personal paths.
+          required: true

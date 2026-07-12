@@ -33,7 +33,9 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
     if query.trim().is_empty() {
         return json!({"ok": false, "error": "query is required"});
     }
-    let range = ctx.input_i64("range_seconds", 3600).clamp(60, MAX_RANGE_SECONDS);
+    let range = ctx
+        .input_i64("range_seconds", 3600)
+        .clamp(60, MAX_RANGE_SECONDS);
 
     if let Some(denied) = ctx.preflight("logs", "StartQuery") {
         return denied;
@@ -98,7 +100,9 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
                 out["region"] = json!(ctx.region);
                 return out;
             }
-            Some(QueryStatus::Failed) | Some(QueryStatus::Cancelled) | Some(QueryStatus::Timeout) => {
+            Some(QueryStatus::Failed)
+            | Some(QueryStatus::Cancelled)
+            | Some(QueryStatus::Timeout) => {
                 return json!({"ok": false, "error": format!("query terminated: {:?}", resp.status())});
             }
             _ => {
@@ -157,7 +161,10 @@ mod tests {
     use super::*;
 
     fn row(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(f, v)| (f.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(f, v)| (f.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]

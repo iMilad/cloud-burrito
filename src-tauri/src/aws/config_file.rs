@@ -107,7 +107,10 @@ pub fn read_sso_token(sso_session_name: &str) -> Value {
     if !exists {
         return out;
     }
-    match fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+    match fs::read_to_string(&p)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    {
         Some(data) => {
             out["expires_at"] = data
                 .get("expiresAt")

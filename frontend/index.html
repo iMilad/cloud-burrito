@@ -15,19 +15,28 @@
         <img class="brand-mark" src="assets/cloud-burrito-icon.svg" alt="" aria-hidden="true" />
         <span class="brand-name">Cloud Burrito</span>
       </div>
-      <label class="picker" for="account-select">
-        <span class="picker-label">Default account</span>
-        <select class="picker-select" id="account-select" aria-label="Account">
+      <div class="picker picker-account">
+        <label class="picker-label" for="account-picker-search">Default account</label>
+        <input class="picker-search" id="account-picker-search" type="text"
+          role="combobox" aria-autocomplete="list" aria-expanded="false"
+          aria-controls="topbar-picker-list" autocomplete="off" autocorrect="off"
+          spellcheck="false" data-select-id="account-select" />
+        <select class="picker-select" id="account-select" aria-label="Account" hidden aria-hidden="true" tabindex="-1">
           <option value="">(loading…)</option>
         </select>
-      </label>
-      <label class="picker" for="region-select">
-        <span class="picker-label">Default region</span>
-        <select class="picker-select" id="region-select" aria-label="Region">
+      </div>
+      <div class="picker picker-region">
+        <label class="picker-label" for="region-picker-search">Default region</label>
+        <input class="picker-search" id="region-picker-search" type="text"
+          role="combobox" aria-autocomplete="list" aria-expanded="false"
+          aria-controls="topbar-picker-list" autocomplete="off" autocorrect="off"
+          spellcheck="false" data-select-id="region-select" />
+        <select class="picker-select" id="region-select" aria-label="Region" hidden aria-hidden="true" tabindex="-1">
           <option value="eu-west-1">eu-west-1</option>
           <option value="us-east-1">us-east-1</option>
         </select>
-      </label>
+      </div>
+      <span class="sr-only" id="topbar-picker-status" aria-live="polite"></span>
       <span class="ro-badge" title="This app assumes a read-only AWS role. It cannot create, modify, or delete resources.">
         <span class="ro-dot"></span>READ-ONLY
       </span>
@@ -43,7 +52,8 @@
     <div class="topbar-center">
       <div class="search">
         <span class="search-icon">⌕</span>
-        <input id="global-search" type="text" placeholder="Search any resource, ARN, stack, or log group…" />
+        <input id="global-search" type="text" aria-label="Global search"
+          placeholder="Search any resource, ARN, stack, or log group…" />
         <span class="search-hint">⌘K</span>
       </div>
     </div>

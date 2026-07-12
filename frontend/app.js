@@ -620,11 +620,239 @@
     wrap.appendChild(table);
   }
 
-  // ===== Top bar pickers (real dropdowns; populated from ~/.aws/config in Tauri) =====
+  // ===== Searchable top bar pickers (backed by selects populated from ~/.aws/config) =====
   const ALLOWED_REGIONS = ["eu-west-1", "us-east-1"];
   const topbarState = { profile: null, accountId: null, role: null, region: null };
+  let topbarPickerList = null;
+  let topbarPickerInput = null;
+  let topbarPickerActiveIndex = -1;
+  let topbarPickerGlobalsWired = false;
+
+  function pickerInputForSelect(select) {
+    if (!select || !select.id) return null;
+    return document.querySelector(`.picker-search[data-select-id="${select.id}"]`);
+  }
+
+  function syncTopbarPicker(select) {
+    const input = pickerInputForSelect(select);
+    if (!input || !select) return;
+    const option = select.options[select.selectedIndex] || select.options[0];
+    const label = option ? option.textContent : "";
+    input.disabled = select.disabled;
+    input.dataset.committedLabel = label;
+    input.title = label;
+    if (topbarPickerInput !== input) input.value = label;
+  }
+
+  function matchingTopbarOptions(select, query) {
+    const tokens = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return Array.from(select.options)
+      .map((option, index) => ({ option, index }))
+      .filter(({ option }) => {
+        if (!option.value) return false;
+        const haystack = [option.textContent, option.value, ...Object.values(option.dataset)]
+          .join(" ").toLowerCase();
+        return tokens.every(token => haystack.includes(token));
+      });
+  }
+
+  function ensureTopbarPickerList() {
+    if (topbarPickerList) return topbarPickerList;
+    topbarPickerList = el("ul", {
+      id: "topbar-picker-list",
+      class: "combo-list topbar-picker-list",
+      role: "listbox",
+      hidden: "",
+    });
+    document.body.appendChild(topbarPickerList);
+    return topbarPickerList;
+  }
+
+  function positionTopbarPickerList(input) {
+    if (!topbarPickerList || !input) return;
+    const rect = input.getBoundingClientRect();
+    const accountPicker = input.dataset.selectId === "account-select";
+    const width = Math.min(window.innerWidth - 16, Math.max(rect.width, accountPicker ? 320 : 180));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const below = window.innerHeight - rect.bottom;
+    const above = rect.top;
+    topbarPickerList.style.left = `${left}px`;
+    topbarPickerList.style.width = `${width}px`;
+    if (below < 180 && above > below) {
+      topbarPickerList.style.bottom = `${window.innerHeight - rect.top + 2}px`;
+      topbarPickerList.style.top = "auto";
+      topbarPickerList.style.maxHeight = `${Math.min(320, Math.max(80, above - 8))}px`;
+    } else {
+      topbarPickerList.style.top = `${rect.bottom + 2}px`;
+      topbarPickerList.style.bottom = "auto";
+      topbarPickerList.style.maxHeight = `${Math.min(320, Math.max(80, below - 8))}px`;
+    }
+  }
+
+  function setTopbarPickerActive(index) {
+    if (!topbarPickerList || !topbarPickerInput) return;
+    const items = Array.from(topbarPickerList.querySelectorAll(".combo-item"));
+    if (items.length === 0) {
+      topbarPickerActiveIndex = -1;
+      topbarPickerInput.removeAttribute("aria-activedescendant");
+      return;
+    }
+    topbarPickerActiveIndex = Math.max(0, Math.min(index, items.length - 1));
+    items.forEach((item, itemIndex) => {
+      const active = itemIndex === topbarPickerActiveIndex;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-selected", String(active));
+    });
+    const active = items[topbarPickerActiveIndex];
+    topbarPickerInput.setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  }
+
+  function renderTopbarPicker(input, query) {
+    if (!input || input.disabled) return;
+    const select = document.getElementById(input.dataset.selectId);
+    if (!select) return;
+    const list = ensureTopbarPickerList();
+    const matches = matchingTopbarOptions(select, query);
+    clear(list);
+    matches.forEach(({ option, index }, visibleIndex) => {
+      const item = el("li", {
+        id: `topbar-picker-option-${visibleIndex}`,
+        class: "combo-item",
+        role: "option",
+        dataset: { optionIndex: String(index) },
+      }, option.textContent);
+      item.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        chooseTopbarPickerOption(index);
+      });
+      item.addEventListener("click", () => chooseTopbarPickerOption(index));
+      list.appendChild(item);
+    });
+    if (matches.length === 0) {
+      list.appendChild(el("li", { class: "combo-empty" }, "No matches"));
+    }
+    const status = $("#topbar-picker-status");
+    if (status) status.textContent = matches.length === 0
+      ? "No matching options"
+      : `${matches.length} matching option${matches.length === 1 ? "" : "s"}`;
+    topbarPickerInput = input;
+    topbarPickerActiveIndex = -1;
+    positionTopbarPickerList(input);
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    const selectedMatch = matches.findIndex(match => match.index === select.selectedIndex);
+    setTopbarPickerActive(selectedMatch >= 0 ? selectedMatch : 0);
+  }
+
+  function closeTopbarPicker(restoreValue) {
+    const input = topbarPickerInput;
+    if (topbarPickerList) topbarPickerList.hidden = true;
+    topbarPickerInput = null;
+    topbarPickerActiveIndex = -1;
+    if (!input) return;
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+    if (restoreValue) {
+      const select = document.getElementById(input.dataset.selectId);
+      syncTopbarPicker(select);
+    }
+  }
+
+  function chooseTopbarPickerOption(optionIndex) {
+    if (!topbarPickerInput) return;
+    const input = topbarPickerInput;
+    const select = document.getElementById(input.dataset.selectId);
+    if (!select || !select.options[optionIndex]) return;
+    select.selectedIndex = optionIndex;
+    closeTopbarPicker(false);
+    syncTopbarPicker(select);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function moveTopbarPickerActive(delta) {
+    if (!topbarPickerList || topbarPickerList.hidden) {
+      renderTopbarPicker(topbarPickerInput, "");
+      return;
+    }
+    const count = topbarPickerList.querySelectorAll(".combo-item").length;
+    if (count === 0) return;
+    const next = topbarPickerActiveIndex < 0
+      ? (delta > 0 ? 0 : count - 1)
+      : (topbarPickerActiveIndex + delta + count) % count;
+    setTopbarPickerActive(next);
+  }
+
+  function wireTopbarSearchablePicker(input) {
+    if (!input || input.dataset.wired === "1") return;
+    const select = document.getElementById(input.dataset.selectId);
+    if (!select) return;
+    input.dataset.wired = "1";
+    select.addEventListener("change", () => syncTopbarPicker(select));
+    input.addEventListener("focus", () => {
+      input.value = "";
+      renderTopbarPicker(input, "");
+    });
+    input.addEventListener("click", () => {
+      if (!topbarPickerList || topbarPickerList.hidden || topbarPickerInput !== input) {
+        input.value = "";
+        renderTopbarPicker(input, "");
+      }
+    });
+    input.addEventListener("input", () => renderTopbarPicker(input, input.value));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (topbarPickerInput !== input) {
+          topbarPickerInput = input;
+          renderTopbarPicker(input, "");
+        }
+        moveTopbarPickerActive(event.key === "ArrowDown" ? 1 : -1);
+      } else if (event.key === "Home" || event.key === "End") {
+        if (!topbarPickerList || topbarPickerList.hidden || topbarPickerInput !== input) return;
+        event.preventDefault();
+        const count = topbarPickerList.querySelectorAll(".combo-item").length;
+        setTopbarPickerActive(event.key === "Home" ? 0 : count - 1);
+      } else if (event.key === "Enter") {
+        if (!topbarPickerList || topbarPickerList.hidden || topbarPickerInput !== input) {
+          event.preventDefault();
+          renderTopbarPicker(input, "");
+          return;
+        }
+        const items = Array.from(topbarPickerList.querySelectorAll(".combo-item"));
+        const active = items[topbarPickerActiveIndex];
+        if (active) {
+          event.preventDefault();
+          chooseTopbarPickerOption(Number(active.dataset.optionIndex));
+        }
+      } else if (event.key === "Escape") {
+        event.stopPropagation();
+        closeTopbarPicker(true);
+      } else if (event.key === "Tab") {
+        closeTopbarPicker(true);
+      }
+    });
+    input.addEventListener("blur", () => setTimeout(() => {
+      if (topbarPickerInput === input) closeTopbarPicker(true);
+    }, 120));
+    syncTopbarPicker(select);
+  }
+
+  function wireTopbarSearchablePickers() {
+    document.querySelectorAll(".picker-search[data-select-id]").forEach(wireTopbarSearchablePicker);
+    if (topbarPickerGlobalsWired) return;
+    topbarPickerGlobalsWired = true;
+    document.addEventListener("mousedown", (event) => {
+      if (!topbarPickerInput || (topbarPickerList && topbarPickerList.contains(event.target))) return;
+      if (topbarPickerInput.contains(event.target)) return;
+      closeTopbarPicker(true);
+    });
+    window.addEventListener("resize", () => closeTopbarPicker(true));
+  }
 
   function resetSelect(sel) {
+    const input = pickerInputForSelect(sel);
+    if (input && topbarPickerInput === input) closeTopbarPicker(true);
     while (sel.firstChild) sel.removeChild(sel.firstChild);
   }
   function addOption(sel, value, label, dataset) {
@@ -644,6 +872,7 @@
       const opt = addOption(sel, r, r);
       if (r === current) opt.selected = true;
     });
+    syncTopbarPicker(sel);
   }
 
   function populateAccountSelect(profiles) {
@@ -653,6 +882,7 @@
     if (!profiles || profiles.length === 0) {
       addOption(sel, "", "(no profiles in ~/.aws/config)");
       sel.disabled = true;
+      syncTopbarPicker(sel);
       return;
     }
     sel.disabled = false;
@@ -665,6 +895,7 @@
         ssoSession: p.sso_session || "",
       });
     });
+    syncTopbarPicker(sel);
   }
 
   // Monotonic counter — every applyTopbarSelection call gets a unique id and
@@ -697,6 +928,7 @@
     const regSel = $("#region-select");
     if (fromProfile && profileRegion && ALLOWED_REGIONS.includes(profileRegion)) {
       regSel.value = profileRegion;
+      syncTopbarPicker(regSel);
     }
     const region = regSel.value || ALLOWED_REGIONS[0];
     const profile = opt.value;
@@ -817,6 +1049,7 @@
     const match = Array.from(accSel.options).find(o => o.value === name);
     if (!match) return false;
     accSel.selectedIndex = match.index;
+    syncTopbarPicker(accSel);
     applyTopbarSelection(opts || { fromProfile: true });
     return true;
   }
@@ -841,6 +1074,7 @@
         resetSelect(accSel);
         addOption(accSel, "", describeProfilesEmpty(info));
         accSel.disabled = true;
+        syncTopbarPicker(accSel);
       }
       console.warn("aws_list_profiles returned 0 profiles:", info);
       return;
@@ -873,22 +1107,51 @@
     }
   }
 
+  function applyBrowserRegionSelection() {
+    const regSel = $("#region-select");
+    if (!regSel) return;
+    const region = ALLOWED_REGIONS.includes(regSel.value)
+      ? regSel.value
+      : ALLOWED_REGIONS[0];
+    topbarState.region = region;
+    writeLastSelection("", region);
+    updateAllWidgetContextChips();
+  }
+
   async function initTopbarPickers() {
+    wireTopbarSearchablePickers();
     if (!isTauri) {
       const sel = $("#account-select");
       resetSelect(sel);
       addOption(sel, "", "(browser mode — no profiles)");
       sel.disabled = true;
-      populateRegionSelect(ALLOWED_REGIONS[0]);
-      updateAllWidgetContextChips();
+      syncTopbarPicker(sel);
+      const regSel = $("#region-select");
+      const last = readLastSelection();
+      const initialRegion = last && ALLOWED_REGIONS.includes(last.region)
+        ? last.region
+        : ALLOWED_REGIONS[0];
+      populateRegionSelect(initialRegion);
+      if (regSel.dataset.contextWired !== "1") {
+        regSel.dataset.contextWired = "1";
+        regSel.addEventListener("change", applyBrowserRegionSelection);
+      }
+      applyBrowserRegionSelection();
       return;
     }
     const accSel = $("#account-select");
-    accSel.addEventListener("change", () => applyTopbarSelection({ fromProfile: true }));
-    $("#region-select").addEventListener("change", () => {
-      writeLastSelection(accSel.value, $("#region-select").value);
-      applyTopbarSelection({ fromProfile: false });
-    });
+    const regSel = $("#region-select");
+    if (accSel.dataset.contextWired !== "1") {
+      accSel.dataset.contextWired = "1";
+      accSel.addEventListener("change", () => applyTopbarSelection({ fromProfile: true }));
+    }
+    if (regSel.dataset.contextWired !== "1") {
+      regSel.dataset.contextWired = "1";
+      regSel.addEventListener("change", () => {
+        writeLastSelection(accSel.value, regSel.value);
+        applyTopbarSelection({ fromProfile: false });
+      });
+    }
     // 1) Fast path: hydrate from localStorage so the dropdown is usable
     //    immediately — caching makes every subsequent launch instant.
     const cached = readProfilesCache();
@@ -907,6 +1170,7 @@
       resetSelect(accSel);
       addOption(accSel, "", "(loading profiles — first launch may take ~30s)");
       accSel.disabled = true;
+      syncTopbarPicker(accSel);
     }
     // 2) Background refresh: re-read ~/.aws/config from the backend and
     //    reconcile. Identical lists are a no-op; differences repopulate
@@ -1067,7 +1331,7 @@
 
   // Manual refresh: clicking the Account label re-runs the profile lookup.
   document.addEventListener("DOMContentLoaded", () => {
-    const label = document.querySelector('label[for="account-select"] .picker-label');
+    const label = document.querySelector('label[for="account-picker-search"]');
     if (label) {
       label.style.cursor = "pointer";
       label.title = "Click to reload profiles from ~/.aws/config";
@@ -1900,6 +2164,9 @@
       host.appendChild(el("pre", { class: "raw-json" }, JSON.stringify(spec, null, 2)));
       return;
     }
+    if (spec.error) {
+      host.appendChild(el("div", { class: "muted small table-error" }, "Error: " + spec.error));
+    }
     const columns = Array.isArray(spec.columns) ? spec.columns : [];
     const rows = Array.isArray(spec.rows) ? spec.rows : [];
     const expandable = !!(opts && typeof opts.expand === "function");
@@ -1930,16 +2197,24 @@
       tbody,
     );
 
-    // Regex filter — only for tables big enough that searching actually helps,
-    // so small result sets (e.g. pipeline last-10) stay uncluttered. Matches
-    // across every column; invalid regex falls back to a case-insensitive
+    // Regex filter — normally only for tables big enough that searching helps,
+    // with an opt-in for lookup-oriented tables such as CloudFormation stacks.
+    // Matches every column; invalid regex falls back to a case-insensitive
     // substring match (with a warning border), mirroring the pipeline picker.
-    if (rows.length > 10) {
+    if (rows.length > 10 || (opts && opts.alwaysFilter)) {
+      const filterPlaceholder = (opts && opts.filterPlaceholder) || "filter rows (regex)…";
       const filter = el("input", {
-        class: "table-filter", type: "text", placeholder: "filter rows (regex)…",
+        class: "table-filter", type: "text", placeholder: filterPlaceholder,
+        "aria-label": filterPlaceholder,
         autocomplete: "off", autocorrect: "off", spellcheck: "false",
       });
       const count = el("span", { class: "table-filter-count muted small" }, String(rows.length));
+      const empty = el("div", {
+        class: "table-filter-empty",
+        role: "status",
+        "aria-live": "polite",
+        hidden: true,
+      }, (opts && opts.filterEmptyText) || "No matching rows.");
       const trs = Array.from(tbody.children);
       const applyFilter = () => {
         const q = filter.value.trim();
@@ -1955,9 +2230,17 @@
         }
         filter.classList.toggle("table-filter-bad", !ok);
         count.textContent = q ? `${shown} / ${rows.length}` : String(rows.length);
+        const noMatches = q !== "" && shown === 0;
+        empty.hidden = !noMatches;
+        table.hidden = noMatches;
+        // Filtering can sharply reduce this scroll container's height. Reset
+        // its local scroll position so WebKit keeps the sticky search control
+        // painted and the first remaining match is immediately visible.
+        host.scrollTop = 0;
       };
       filter.addEventListener("input", applyFilter);
       host.appendChild(el("div", { class: "table-filter-bar" }, filter, count));
+      host.appendChild(empty);
     }
     host.appendChild(table);
   }
@@ -2893,6 +3176,9 @@
         const result = await fetchWidgetData("cfn-stacks", {}, body);
         if (result && result.render === "table") {
           renderTable(body, result, {
+            alwaysFilter: true,
+            filterPlaceholder: "Search stacks (name, status, or date)…",
+            filterEmptyText: "No matching stacks.",
             expand: (row, cell) =>
               fetchWidgetData("cfn-stack-detail", { stack_name: row.stack }, body)
                 .then((res) => dispatchRender(cell, res)),
@@ -2910,33 +3196,37 @@
     return withWidgets("cfn-stacks", target, (widget) => {
       const body = $(".cfn-stacks-body", widget);
       if (!body) return;
-      clear(body);
-      const tree = el("div", { class: "tree" });
-      Mock.stacks.forEach(stack => {
-        const children = el("div", { class: "tree-children" });
-        stack.resources.forEach(r => {
-          children.appendChild(
-            el("div", { class: "tree-node" },
-              el("span", { class: "tree-toggle" }, "  "),
-              el("span", { class: "tree-name" }, r.name),
-              el("span", { class: "tree-meta" }, r.type),
-            )
-          );
-        });
-        const toggle = el("span", { class: "tree-toggle" }, "▸");
-        const node = el("div", { class: "tree-node" },
-          toggle,
-          el("span", { class: "tree-name" }, stack.name),
-          el("span", { class: "badge " + cfnEventBadge(stack.status), style: "margin-left:8px" }, stack.status),
-        );
-        node.addEventListener("click", () => {
-          const open = children.classList.toggle("open");
-          toggle.textContent = open ? "▾" : "▸";
-        });
-        tree.appendChild(node);
-        tree.appendChild(children);
+      const rows = Mock.stacks.map(stack => ({
+        stack: stack.name,
+        status: stack.status,
+        resources: stack.resources.length,
+        last_updated: "",
+      }));
+      renderTable(body, {
+        render: "table",
+        columns: ["stack", "status", "resources", "last_updated"],
+        rows,
+      }, {
+        alwaysFilter: true,
+        filterPlaceholder: "Search stacks (name, status, or date)…",
+        filterEmptyText: "No matching stacks.",
+        expand: (row, cell) => {
+          const stack = Mock.stacks.find(item => item.name === row.stack);
+          clear(cell);
+          if (!stack || stack.resources.length === 0) {
+            cell.appendChild(el("div", { class: "muted small" }, "No resources in this stack."));
+            return;
+          }
+          cell.appendChild(el("div", { class: "stack-detail-title" }, `Resources (${stack.resources.length})`));
+          cell.appendChild(el("table", { class: "events-table" },
+            el("thead", {}, el("tr", {},
+              el("th", {}, "Logical ID"),
+              el("th", {}, "Type"))),
+            el("tbody", {}, ...stack.resources.map(resource => el("tr", {},
+              el("td", {}, resource.name),
+              el("td", {}, resource.type))))));
+        },
       });
-      body.appendChild(tree);
     });
   }
 

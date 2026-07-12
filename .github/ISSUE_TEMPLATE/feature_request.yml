@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose an outcome that preserves Cloud Burrito's read-only safety model.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem or workflow gap are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the user-visible result rather than only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: security
+    attributes:
+      label: Read-only and security impact
+      description: List any AWS operations, credentials, local files, IPC commands, or network access involved.
+    validations:
+      required: true
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you contribute an implementation?
+      options:
+        - "Yes"
+        - "Possibly, with guidance"
+        - "No"
+    validations:
+      required: true

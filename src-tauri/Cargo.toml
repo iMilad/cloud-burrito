@@ -5,7 +5,7 @@ description = "Cloud Burrito: read-only desktop client for AWS (pure Rust, aws-s
 authors = ["Cloud Burrito contributors"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.91.1"
 publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -38,11 +38,11 @@ shell-words = "1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
 aws-smithy-types = "1"
-aws-sdk-sts = "1"
-aws-sdk-cloudformation = "1"
-aws-sdk-codepipeline = "1"
-aws-sdk-codebuild = "1"
-aws-sdk-codeartifact = "1"
-aws-sdk-cloudwatchlogs = "1"
-aws-sdk-lambda = "1"
-aws-sdk-resourcegroupstagging = "1"
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }
+aws-sdk-cloudformation = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codepipeline = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codebuild = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codeartifact = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cloudwatchlogs = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-lambda = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-resourcegroupstagging = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }

@@ -79,9 +79,14 @@ impl Policy {
     /// (which denies everything by default). A bare `*` action means "all
     /// operations"; otherwise actions are `service:Action` (globs allowed).
     pub fn parse(text: &str) -> Result<Policy, PolicyError> {
-        let yaml = if text.trim().is_empty() { "statements: []" } else { text };
-        let raw: RawPolicy =
-            serde_yaml::from_str(yaml).map_err(|e| PolicyError { message: e.to_string() })?;
+        let yaml = if text.trim().is_empty() {
+            "statements: []"
+        } else {
+            text
+        };
+        let raw: RawPolicy = serde_yaml::from_str(yaml).map_err(|e| PolicyError {
+            message: e.to_string(),
+        })?;
         let mut statements = Vec::new();
         for (i, st) in raw.statements.into_iter().enumerate() {
             let effect = match st.effect.to_ascii_lowercase().as_str() {
@@ -99,11 +104,17 @@ impl Policy {
             for a in &st.action {
                 if a != "*" && !a.contains(':') {
                     return Err(PolicyError {
-                        message: format!("statement {}: action '{a}' must be 'service:Action' or '*'", i + 1),
+                        message: format!(
+                            "statement {}: action '{a}' must be 'service:Action' or '*'",
+                            i + 1
+                        ),
                     });
                 }
             }
-            statements.push(Statement { effect, actions: st.action });
+            statements.push(Statement {
+                effect,
+                actions: st.action,
+            });
         }
         Ok(Policy { statements })
     }
@@ -403,8 +414,12 @@ pub fn load() -> Result<Policy, PolicyError> {
 pub fn write_text(text: &str) -> Result<Policy, PolicyError> {
     let policy = Policy::parse(text)?;
     let path = policy_path();
-    ensure_parent(&path).map_err(|e| PolicyError { message: e.to_string() })?;
-    fs::write(&path, text).map_err(|e| PolicyError { message: e.to_string() })?;
+    ensure_parent(&path).map_err(|e| PolicyError {
+        message: e.to_string(),
+    })?;
+    fs::write(&path, text).map_err(|e| PolicyError {
+        message: e.to_string(),
+    })?;
     Ok(policy)
 }
 
@@ -463,7 +478,10 @@ mod tests {
 
     #[test]
     fn glob_matches() {
-        assert!(glob_match("cloudformation:List*", "cloudformation:ListStacks"));
+        assert!(glob_match(
+            "cloudformation:List*",
+            "cloudformation:ListStacks"
+        ));
         assert!(glob_match("logs:*", "logs:StartQuery"));
         assert!(glob_match("*", "anything:AtAll"));
         assert!(glob_match("logs:Get?ueryResults", "logs:GetQueryResults"));
@@ -480,11 +498,20 @@ mod tests {
             "statements:\n  - effect: Allow\n    action: [cloudformation:Describe*, logs:*]\n  - effect: Deny\n    action: [logs:StartQuery]\n",
         )
         .unwrap();
-        assert_eq!(p.decision("cloudformation", "DescribeStacks"), Effect::Allow);
+        assert_eq!(
+            p.decision("cloudformation", "DescribeStacks"),
+            Effect::Allow
+        );
         assert_eq!(p.decision("logs", "FilterLogEvents"), Effect::Allow);
         assert_eq!(p.decision("logs", "StartQuery"), Effect::Deny); // explicit deny wins
-        assert_eq!(p.decision("codepipeline", "ListPipelineExecutions"), Effect::Deny); // default deny
-        assert_eq!(p.decision("CloudFormation", "DescribeStacks"), Effect::Allow); // service case-insensitive
+        assert_eq!(
+            p.decision("codepipeline", "ListPipelineExecutions"),
+            Effect::Deny
+        ); // default deny
+        assert_eq!(
+            p.decision("CloudFormation", "DescribeStacks"),
+            Effect::Allow
+        ); // service case-insensitive
     }
 
     #[test]
@@ -506,7 +533,10 @@ mod tests {
             "statements:\n  - effect: Allow\n    action: [logs:*, cloudformation:Describe*]\n  - effect: Allow\n    action: [logs:*]\n  - effect: Deny\n    action: [s3:*]\n",
         )
         .unwrap();
-        assert_eq!(p.allow_summary(), vec!["cloudformation:Describe*", "logs:*"]);
+        assert_eq!(
+            p.allow_summary(),
+            vec!["cloudformation:Describe*", "logs:*"]
+        );
     }
 
     #[test]
@@ -530,7 +560,11 @@ mod tests {
     fn default_allows_every_app_op() {
         let p = Policy::parse(&default_yaml()).unwrap();
         for (svc, op) in APP_OPS {
-            assert_eq!(p.decision(svc, op), Effect::Allow, "default must allow {svc}:{op}");
+            assert_eq!(
+                p.decision(svc, op),
+                Effect::Allow,
+                "default must allow {svc}:{op}"
+            );
         }
     }
 
@@ -586,8 +620,9 @@ mod tests {
     #[test]
     fn gate_cli_uses_guard_floor_and_policy_without_registry() {
         // Read-only op outside the compiled registry, explicitly allowed by policy.
-        let p = Ok(Policy::parse("statements:\n  - effect: Allow\n    action: [ec2:Describe*]\n")
-            .unwrap());
+        let p = Ok(
+            Policy::parse("statements:\n  - effect: Allow\n    action: [ec2:Describe*]\n").unwrap(),
+        );
         assert!(gate_cli(&p, "ec2", "DescribeInstances").is_ok());
         // Write ops stay blocked even with a wildcard policy.
         let permissive =
@@ -620,7 +655,8 @@ mod tests {
         let allow = Ok(Policy::parse(&default_yaml()).unwrap());
         assert!(gate(&allow, "cloudformation", "ListStacks").is_ok());
         // unregistered operations are denied even if policy text allowed them
-        let permissive = Ok(Policy::parse("statements:\n  - effect: Allow\n    action: [\"*\"]\n").unwrap());
+        let permissive =
+            Ok(Policy::parse("statements:\n  - effect: Allow\n    action: [\"*\"]\n").unwrap());
         assert!(gate(&permissive, "cloudformation", "DeleteStack").is_err());
         assert!(gate(&permissive, "s3", "ListBuckets").is_err());
         // invalid policy => fail closed
@@ -684,8 +720,14 @@ mod tests {
         assert!(policy_path().exists());
         // round-trip a narrowed policy
         write_text("statements:\n  - effect: Allow\n    action: [logs:*]\n").unwrap();
-        assert_eq!(load().unwrap().decision("cloudformation", "ListStacks"), Effect::Deny);
-        assert_eq!(load().unwrap().decision("logs", "StartQuery"), Effect::Allow);
+        assert_eq!(
+            load().unwrap().decision("cloudformation", "ListStacks"),
+            Effect::Deny
+        );
+        assert_eq!(
+            load().unwrap().decision("logs", "StartQuery"),
+            Effect::Allow
+        );
         match _prev_home {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),

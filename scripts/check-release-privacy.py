@@ -27,9 +27,6 @@ KNOWN_VALUE_HASHES = {
         "d416b46f2de3d5152053cf0265b337d7b9421de2086a80706e0f2c540dfea9a2",  # pragma: allowlist secret
         "4f0c0d841ffcd452df7c23cfeaf7930bbc9d3543612b165601f910beecb65c39",  # pragma: allowlist secret
     },
-    "known_owner_handle": {
-        "202ee8445e3ce73df6200e987e833397f37290f4741befec1c776549bb8e4dde",  # pragma: allowlist secret
-    },
 }
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{1,}")
 TOKEN_SPLIT_RE = re.compile(r"[._-]+")
@@ -70,6 +67,24 @@ def rule_set() -> list[Rule]:
             "local_user_path",
             re.compile(r"/Users/(?!runner(?:/|\b))[A-Za-z0-9._-]+(?:/[^\s'\"<>]*)?"),
         ),
+        Rule(
+            "repository_owner_reference",
+            re.compile(
+                r"(?:github\.com[/:]|"
+                r"img\.shields\.io/github/actions/workflow/status/|"
+                r"--repo\s+)"
+                r"[A-Za-z0-9_.-]+/cloud-burrito(?:\.git)?",
+                re.IGNORECASE,
+            ),
+        ),
+        Rule(
+            "personal_codeowner",
+            re.compile(r"^\s*\*\s+@[A-Za-z0-9_.-]+\s*$"),
+        ),
+        Rule(
+            "personal_author_attribution",
+            re.compile(r"^\s*(?:\*\*)?Author:(?:\*\*)?\s+\S.*$", re.IGNORECASE),
+        ),
     ]
 
 
@@ -84,7 +99,11 @@ def tracked_files() -> list[Path]:
     for raw_path in result.stdout.split(b"\0"):
         if raw_path:
             path = (ROOT / raw_path.decode("utf-8")).resolve()
-            paths.append(path)
+            # `git ls-files` includes tracked paths deleted in the current
+            # worktree. Release checks should scan the files that will be
+            # packaged, not crash while an intentional deletion is pending.
+            if path.is_file():
+                paths.append(path)
     return paths
 
 

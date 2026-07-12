@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-widget-get-source"
+description = "Enables the widget_get_source command without any pre-configured scope."
+commands.allow = ["widget_get_source"]
+
+[[permission]]
+identifier = "deny-widget-get-source"
+description = "Denies the widget_get_source command without any pre-configured scope."
+commands.deny = ["widget_get_source"]

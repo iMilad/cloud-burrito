@@ -1,12 +1,24 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Allows the main window to invoke only Cloud Burrito's registered commands.",
   "windows": [
     "main"
   ],
   "permissions": [
-    "core:default",
-    "log:default"
+    "allow-ping",
+    "allow-aws-set-account",
+    "allow-aws-list-profiles",
+    "allow-aws-list-pipelines",
+    "allow-aws-auth-status",
+    "allow-widget-fetch",
+    "allow-widget-get-source",
+    "allow-settings-get",
+    "allow-settings-set",
+    "allow-dashboard-get",
+    "allow-dashboard-set",
+    "allow-audit-tail",
+    "allow-policy-get",
+    "allow-policy-set"
   ]
 }

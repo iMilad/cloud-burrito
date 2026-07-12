@@ -1,7 +1,6 @@
 # Cloud Burrito — Design Spec
 
 **Date:** 2026-04-28
-**Author:** mk + Claude
 **Status:** Superseded draft. The current app is pure Rust, has no Python
 sidecar, and no longer includes the retired experimental widgets from this
 draft as active widgets.
@@ -260,8 +259,10 @@ PR review of widget changes happens in the team's normal git workflow.
 
 ## 12. Bundling and distribution
 
-- macOS: signed `.app` bundle, drag-to-Applications.
-- Windows: signed `.exe` installer + portable `.zip` variant.
+- macOS: explicitly unsigned `.app`/`.dmg` convenience bundles, with local
+  source builds as the recommended distribution path.
+- Windows: future source-build instructions and clearly labeled unsigned
+  artifacts; no publisher certificate is used.
 - Bundle contents (~120 MB total):
   - Tauri shell binary
   - Embedded CPython 3.12 + the sidecar's pinned site-packages (boto3, etc.)
@@ -269,7 +270,7 @@ PR review of widget changes happens in the team's normal git workflow.
   - `saw` binary (Go, ~10 MB)
   - `aws` CLI v2 binary
   - Frontend assets (HTML/CSS/JS)
-- Auto-update via Tauri's updater channel, signed releases.
+- No automatic updater; users move between tagged source versions explicitly.
 
 First launch runs a setup-check: SSO config detected? Read-only-role accessible? Bundled binaries executable? Surfaces any issue with copy-pasteable remediation.
 
@@ -307,7 +308,7 @@ Windows:  %APPDATA%\AWSControlCenter\
 | Risk | Mitigation |
 |---|---|
 | Steampipe bundling complexity (it's a server, not a library) | Spawn-on-launch, kill-on-quit. If bundling proves brittle, fall back to "user installs Steampipe" with a setup-check warning. |
-| Tauri Windows packaging gotchas | Build CI on both OSes from day one. Sign with a real cert before first internal release. |
+| Tauri Windows packaging gotchas | Build CI on both OSes from day one and label all convenience artifacts as unsigned. |
 | AWS CLI bundle size (~70 MB) | Acceptable for a dev tool. If it bloats the binary too much, replace with direct boto3 calls for the few adapter use-cases that need it. |
 | AI generates code that calls things unexpectedly | Read-only role makes worst-case bounded. Dry-run before accept. Code shown verbatim before save. |
 | LLM cost runs away | BYOK = user's wallet. v3 may add per-team budget caps. |

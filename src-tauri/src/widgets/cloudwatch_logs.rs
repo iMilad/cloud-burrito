@@ -19,9 +19,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
 }
 
 pub(super) async fn fetch_groups(ctx: &WidgetCtx) -> Value {
-    let max_groups = ctx
-        .input_i64("max_groups", 500)
-        .clamp(1, MAX_GROUPS as i64) as usize;
+    let max_groups = ctx.input_i64("max_groups", 500).clamp(1, MAX_GROUPS as i64) as usize;
     // Optional server-side narrowing (case-insensitive substring match) for
     // accounts with more groups than the cap.
     let pattern = ctx.input_str("name_pattern", "");

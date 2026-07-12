@@ -67,10 +67,7 @@ pub fn tail(limit: usize) -> Vec<Value> {
         Ok(f) => f,
         Err(_) => return Vec::new(),
     };
-    let lines: Vec<String> = BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .collect();
+    let lines: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
     let start = lines.len().saturating_sub(limit);
     let mut out = Vec::new();
     for line in &lines[start..] {

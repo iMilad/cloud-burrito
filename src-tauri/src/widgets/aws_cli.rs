@@ -146,8 +146,8 @@ pub struct ParsedCli {
 /// `aws <service> <operation> [args...]`; identity/output overrides are
 /// rejected; quoting follows shell rules but no shell ever runs.
 pub fn parse_cli_command(command: &str) -> Result<ParsedCli, String> {
-    let tokens = shell_words::split(command.trim())
-        .map_err(|e| format!("could not parse command: {e}"))?;
+    let tokens =
+        shell_words::split(command.trim()).map_err(|e| format!("could not parse command: {e}"))?;
     if tokens.first().map(String::as_str) != Some("aws") {
         return Err("command must start with `aws`".to_string());
     }
@@ -181,7 +181,11 @@ pub fn parse_cli_command(command: &str) -> Result<ParsedCli, String> {
     let mut argv: Vec<String> = tokens[1..].to_vec();
     argv.push("--output".to_string());
     argv.push("json".to_string());
-    Ok(ParsedCli { service, operation, argv })
+    Ok(ParsedCli {
+        service,
+        operation,
+        argv,
+    })
 }
 
 /// Lowercase kebab-case, as CLI service/operation names are: `s3api`,
@@ -190,7 +194,8 @@ fn is_kebab_token(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
         && !s.ends_with('-')
-        && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// `describe-instances` -> `DescribeInstances` (the SDK/IAM operation name).
@@ -217,16 +222,21 @@ pub fn table_model(value: &Value) -> Value {
         Value::Object(map) => {
             // The CLI's usual top level: one array of results plus scalar
             // siblings (NextToken and friends). Unwrap to the array.
-            let array_keys: Vec<&String> =
-                map.iter().filter(|(_, v)| v.is_array()).map(|(k, _)| k).collect();
+            let array_keys: Vec<&String> = map
+                .iter()
+                .filter(|(_, v)| v.is_array())
+                .map(|(k, _)| k)
+                .collect();
             if array_keys.len() == 1 && map.values().all(|v| v.is_array() || is_scalar(v)) {
                 let items = map[array_keys[0]].as_array().expect("filtered on is_array");
                 return array_table(items).unwrap_or_else(|| raw_json(value));
             }
             // Flat object of scalars (sts get-caller-identity) -> key/value.
             if !map.is_empty() && map.values().all(is_scalar) {
-                let rows: Vec<Value> =
-                    map.iter().map(|(k, v)| json!({"key": k, "value": cell(v)})).collect();
+                let rows: Vec<Value> = map
+                    .iter()
+                    .map(|(k, v)| json!({"key": k, "value": cell(v)}))
+                    .collect();
                 return json!({"render": "table", "columns": ["key", "value"], "rows": rows});
             }
             raw_json(value)
@@ -296,7 +306,10 @@ mod tests {
         let p = parse_cli_command("aws ec2 describe-instances").unwrap();
         assert_eq!(p.service, "ec2");
         assert_eq!(p.operation, "DescribeInstances");
-        assert_eq!(p.argv, vec!["ec2", "describe-instances", "--output", "json"]);
+        assert_eq!(
+            p.argv,
+            vec!["ec2", "describe-instances", "--output", "json"]
+        );
     }
 
     #[test]
@@ -315,11 +328,15 @@ mod tests {
     #[test]
     fn multi_dash_operations_map_to_pascal_case() {
         assert_eq!(
-            parse_cli_command("aws codebuild batch-get-builds --ids x").unwrap().operation,
+            parse_cli_command("aws codebuild batch-get-builds --ids x")
+                .unwrap()
+                .operation,
             "BatchGetBuilds"
         );
         assert_eq!(
-            parse_cli_command("aws s3api list-objects-v2 --bucket b").unwrap().operation,
+            parse_cli_command("aws s3api list-objects-v2 --bucket b")
+                .unwrap()
+                .operation,
             "ListObjectsV2"
         );
     }

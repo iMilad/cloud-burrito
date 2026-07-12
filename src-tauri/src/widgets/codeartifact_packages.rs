@@ -24,7 +24,10 @@ struct PackageRow {
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let domain = ctx.input_str("domain", DEFAULT_DOMAIN).trim().to_string();
-    let repository = ctx.input_str("repository", DEFAULT_REPOSITORY).trim().to_string();
+    let repository = ctx
+        .input_str("repository", DEFAULT_REPOSITORY)
+        .trim()
+        .to_string();
     let package_prefix = ctx
         .input_str("package_prefix", DEFAULT_PACKAGE_PREFIX)
         .trim()
@@ -71,19 +74,13 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
 
     let mut out: Vec<Value> = Vec::with_capacity(packages.len());
     for package in packages {
-        let row = match latest_package_row(
-            ctx,
-            &client,
-            &domain,
-            &repository,
-            package,
-            &domain_owner,
-        )
-        .await
-        {
-            Ok(row) => row,
-            Err(render) => return render,
-        };
+        let row =
+            match latest_package_row(ctx, &client, &domain, &repository, package, &domain_owner)
+                .await
+            {
+                Ok(row) => row,
+                Err(render) => return render,
+            };
         out.push(json!({
             "package": row.package,
             "latest_version": row.latest_version,
@@ -136,10 +133,7 @@ async fn list_packages(
             req = req.next_token(token);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| table_with_error(err_msg(e)))?;
+        let resp = req.send().await.map_err(|e| table_with_error(err_msg(e)))?;
         packages.extend(
             resp.packages()
                 .iter()

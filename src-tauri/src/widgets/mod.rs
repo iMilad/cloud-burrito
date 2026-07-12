@@ -11,11 +11,11 @@ mod aws_cli;
 mod cfn_stack_detail;
 mod cfn_stacks;
 mod cloudwatch_logs;
-mod logs_insights;
 mod codeartifact_packages;
 mod codebuild_log;
 mod errors_by_stack;
 mod log_tail;
+mod logs_insights;
 mod pipeline_execution_detail;
 mod pipeline_runs;
 mod resource_lookup;
@@ -166,7 +166,8 @@ pub fn permission_denied_render(service: &str, operation: &str, reason: &str) ->
 
 /// Format an AWS timestamp as an ISO-8601 string (empty when absent).
 pub fn dt_iso(dt: Option<&DateTime>) -> String {
-    dt.and_then(|d| d.fmt(Format::DateTime).ok()).unwrap_or_default()
+    dt.and_then(|d| d.fmt(Format::DateTime).ok())
+        .unwrap_or_default()
 }
 
 /// Epoch-seconds float for an AWS timestamp (None when absent).
@@ -328,12 +329,12 @@ permissions: [logs:DescribeLogGroups, logs:StartQuery, logs:GetQueryResults, log
 
 const CFN_STACKS_YAML: &str = r#"name: "CloudFormation Stacks"
 version: 1
-description: "Stacks in the active region with their current status and resource count."
+description: "All non-deleted stacks in the active region with their current status and resource count."
 inputs:
   name_prefix: { type: string, default: "" }
   status_filter:
     type: list
-    default: [CREATE_COMPLETE, UPDATE_COMPLETE, ROLLBACK_COMPLETE, UPDATE_ROLLBACK_COMPLETE]
+    default: []
 refresh: 60s
 permissions: [cloudformation:read]
 "#;

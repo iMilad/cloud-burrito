@@ -9,7 +9,7 @@ use crate::aws::{self, AwsContext};
 use crate::state::AppState;
 use crate::{audit, dashboard, settings, widgets};
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn config_path_from_settings(s: &Value) -> String {
     let p = settings::get_str(s, "aws_config_path");
@@ -100,8 +100,16 @@ pub async fn aws_set_account(state: State<'_, AppState>, params: Value) -> Resul
         "region": params.get("region"),
     }));
 
-    let profile = params.get("profile").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let account_id = params.get("account_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let profile = params
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let account_id = params
+        .get("account_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if profile.is_empty() {
         return Ok(json!({"ok": false, "error": "missing required field 'profile'"}));
     }
@@ -133,7 +141,10 @@ pub async fn aws_set_account(state: State<'_, AppState>, params: Value) -> Resul
         }
     };
     let sso_session = {
-        let p = params.get("sso_session_name").and_then(|v| v.as_str()).unwrap_or("");
+        let p = params
+            .get("sso_session_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let s = if p.is_empty() {
             settings::get_str(&user_settings, "sso_session_name")
         } else {
@@ -162,13 +173,9 @@ pub async fn aws_set_account(state: State<'_, AppState>, params: Value) -> Resul
     }));
 
     let policy = aws::policy::load().map_err(|e| e.message);
-    if let Err((action, reason)) = audit_aws_call(
-        &policy,
-        "sso",
-        "GetRoleCredentials",
-        &account_id,
-        &region,
-    ) {
+    if let Err((action, reason)) =
+        audit_aws_call(&policy, "sso", "GetRoleCredentials", &account_id, &region)
+    {
         let error = format!("missing permission: {action} — {reason}");
         {
             let mut last = state.last_attempt.lock();
@@ -245,7 +252,12 @@ fn pinned_context_fields(scope: &Value) -> Option<(&str, &str, &str)> {
     }
 }
 
-fn cached_pinned_context(state: &AppState, profile: &str, account: &str, region: &str) -> AwsContext {
+fn cached_pinned_context(
+    state: &AppState,
+    profile: &str,
+    account: &str,
+    region: &str,
+) -> AwsContext {
     let key = (profile.to_string(), account.to_string(), region.to_string());
     let mut cache = state.overrides.lock();
     if let Some(c) = cache.get(&key) {
@@ -313,6 +325,13 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn ping_reports_the_cargo_package_version() {
+        let response = ping().await.unwrap();
+
+        assert_eq!(response["version"], env!("CARGO_PKG_VERSION"));
+    }
+
     #[test]
     fn pinned_context_resolves_without_active_topbar_context() {
         let state = AppState::default();
@@ -363,12 +382,20 @@ mod tests {
 
 #[tauri::command]
 pub async fn widget_fetch(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    let name = params.get("widget").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = params
+        .get("widget")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if name.is_empty() {
-        return Ok(json!({"render": "raw_json", "data": {"error": "missing required field 'widget'"}}));
+        return Ok(
+            json!({"render": "raw_json", "data": {"error": "missing required field 'widget'"}}),
+        );
     }
     if !widgets::is_known(&name) {
-        return Ok(json!({"render": "raw_json", "data": {"error": format!("Unknown widget: {name}")}}));
+        return Ok(
+            json!({"render": "raw_json", "data": {"error": format!("Unknown widget: {name}")}}),
+        );
     }
 
     let aws_ctx = match resolve_widget_ctx(&state, &params) {
@@ -437,11 +464,16 @@ pub async fn aws_list_profiles() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn aws_list_pipelines(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
+pub async fn aws_list_pipelines(
+    state: State<'_, AppState>,
+    params: Value,
+) -> Result<Value, String> {
     let ctx = match resolve_widget_ctx(&state, &params) {
         Some(c) => c,
         None => {
-            return Ok(json!({"ok": false, "error": "no context — pick a default account or pin this widget"}));
+            return Ok(
+                json!({"ok": false, "error": "no context — pick a default account or pin this widget"}),
+            );
         }
     };
     let policy = aws::policy::load().map_err(|e| e.message);
@@ -471,7 +503,9 @@ pub async fn aws_list_pipelines(state: State<'_, AppState>, params: Value) -> Re
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                return Ok(json!({"ok": false, "error": widgets::err_msg(e), "error_type": "ClientError"}));
+                return Ok(
+                    json!({"ok": false, "error": widgets::err_msg(e), "error_type": "ClientError"}),
+                );
             }
         };
         for p in resp.pipelines() {
@@ -486,13 +520,19 @@ pub async fn aws_list_pipelines(state: State<'_, AppState>, params: Value) -> Re
         if pipelines.len() >= 200 {
             break;
         }
-        token = resp.next_token().filter(|s| !s.is_empty()).map(str::to_string);
+        token = resp
+            .next_token()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         if token.is_none() {
             break;
         }
     }
     pipelines.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
     Ok(json!({"ok": true, "pipelines": pipelines}))
 }
@@ -501,7 +541,11 @@ pub async fn aws_list_pipelines(state: State<'_, AppState>, params: Value) -> Re
 pub async fn aws_auth_status(state: State<'_, AppState>) -> Result<Value, String> {
     let last = state.last_attempt.lock().clone();
     let set_at = *state.set_account_at.lock();
-    let lp = |k: &str| last.as_ref().and_then(|l| l.get(k).cloned()).unwrap_or(Value::Null);
+    let lp = |k: &str| {
+        last.as_ref()
+            .and_then(|l| l.get(k).cloned())
+            .unwrap_or(Value::Null)
+    };
 
     let mut out = json!({
         "has_context": false,
@@ -635,7 +679,11 @@ pub async fn policy_get() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn policy_set(params: Value) -> Result<Value, String> {
-    let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let text = params
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     match aws::policy::write_text(&text) {
         Ok(_) => Ok(policy_status(text)),
         // Return the candidate text + error WITHOUT writing, so the editor keeps it.
