@@ -46,13 +46,15 @@ node --check frontend/mock-data.js
 echo "== whitespace =="
 git diff --check
 untracked_whitespace=0
-for path in "${untracked_paths[@]}"; do
-  findings="$(git diff --no-index --check -- /dev/null "$path" 2>&1 || true)"
-  if [[ -n "$findings" ]]; then
-    printf '%s\n' "$findings" >&2
-    untracked_whitespace=1
-  fi
-done
+if (( ${#untracked_paths[@]} > 0 )); then
+  for path in "${untracked_paths[@]}"; do
+    findings="$(git diff --no-index --check -- /dev/null "$path" 2>&1 || true)"
+    if [[ -n "$findings" ]]; then
+      printf '%s\n' "$findings" >&2
+      untracked_whitespace=1
+    fi
+  done
+fi
 if (( untracked_whitespace != 0 )); then
   exit 1
 fi
