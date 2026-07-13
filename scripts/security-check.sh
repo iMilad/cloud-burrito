@@ -37,7 +37,7 @@ python3 -m py_compile \
   scripts/check-tauri-commands.py
 bash -n scripts/*.sh
 
-echo "== release status helper tests =="
+echo "== release helper tests =="
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 
 echo "== Tauri command registry =="

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Must match the tag passed as the workflow ref, for example app-v0.2.6"
+        description: "Must match the tag passed as the workflow ref (app-vX.Y.Z)"
         required: true
         type: string
 
@@ -109,7 +109,7 @@ jobs:
           node --check frontend/app.js
           node --check frontend/mock-data.js
 
-      - name: Test release status helper
+      - name: Test release helpers
         run: python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 
       - name: Check Tauri command registry

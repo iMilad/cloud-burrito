@@ -30,6 +30,9 @@ KNOWN_VALUE_HASHES = {
 }
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{1,}")
 TOKEN_SPLIT_RE = re.compile(r"[._-]+")
+BINARY_MATCH_EXEMPTIONS = frozenset(
+    {("standalone_12_digit_number", "0" * 12)}
+)
 
 
 @dataclass(frozen=True)
@@ -149,13 +152,13 @@ def binary_strings(data: bytes) -> str:
     return "\n".join(runs)
 
 
-def file_text(path: Path) -> str:
+def file_text(path: Path) -> tuple[str, bool]:
     data = path.read_bytes()
     if len(data) > MAX_BYTES:
         raise SystemExit(f"refusing to scan unusually large file: {relative(path)}")
     if is_probably_text(data):
-        return data.decode("utf-8")
-    return binary_strings(data)
+        return data.decode("utf-8"), False
+    return binary_strings(data), True
 
 
 def relative(path: Path) -> str:
@@ -198,12 +201,24 @@ def known_hash_findings(path: Path, line_number: int, line: str) -> list[str]:
     return findings
 
 
+def is_ignored_binary_sentinel(rule: Rule, value: str, *, is_binary: bool) -> bool:
+    # Compiled dependencies may embed an all-zero formatting sentinel. Keep the
+    # exception binary-only and exact so source text and real IDs remain gated.
+    return is_binary and (rule.name, value) in BINARY_MATCH_EXEMPTIONS
+
+
 def scan_file(path: Path, rules: list[Rule]) -> list[str]:
-    text = file_text(path)
+    text, is_binary = file_text(path)
     findings: list[str] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         for rule in rules:
             for match in rule.regex.finditer(line):
+                if is_ignored_binary_sentinel(
+                    rule,
+                    match.group(0),
+                    is_binary=is_binary,
+                ):
+                    continue
                 findings.append(
                     f"{relative(path)}:{line_number}: {rule.name}: "
                     f"{redact(match.group(0))}"

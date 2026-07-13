@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-07-13
+
+### Fixed
+
+- Supersede the tagged but unpublished 0.2.6 build by ignoring only all-zero
+  12-digit sentinels extracted from compiled binaries in the privacy gate,
+  while continuing to reject nonzero account IDs and hashed private markers.
+
 ## [0.2.6] - 2026-07-12
 
 ### Added

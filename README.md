@@ -350,18 +350,20 @@ Use `--json` for machine-readable output. After the user approves a pending
 release, validate and push the lightweight tag:
 
 ```bash
-python3 scripts/check-release-version.py app-v0.2.6
-git tag app-v0.2.6
-git push origin app-v0.2.6
+TAG="app-v$(python3 scripts/check-release-version.py --print-version)"
+python3 scripts/check-release-version.py "$TAG"
+git tag "$TAG"
+git push origin "$TAG"
 ```
 
 Pushing the tag starts the release automatically. To rerun it manually, dispatch
 the workflow from that same immutable tag ref (a branch dispatch is rejected):
 
 ```bash
+TAG="app-v$(python3 scripts/check-release-version.py --print-version)"
 gh workflow run release.yml \
-  --ref app-v0.2.6 \
-  -f tag=app-v0.2.6
+  --ref "$TAG" \
+  -f "tag=$TAG"
 ```
 
 The pipeline has two workflows:

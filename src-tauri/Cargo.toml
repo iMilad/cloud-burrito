@@ -1,6 +1,6 @@
 [package]
 name = "cloud-burrito"
-version = "0.2.6"
+version = "0.2.7"
 description = "Cloud Burrito: read-only desktop client for AWS (pure Rust, aws-sdk-rust)"
 authors = ["Cloud Burrito contributors"]
 license = "MIT"
