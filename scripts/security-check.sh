@@ -33,8 +33,12 @@ echo "== script syntax =="
 python3 -m py_compile \
   scripts/check-release-privacy.py \
   scripts/check-release-version.py \
+  scripts/release-status.py \
   scripts/check-tauri-commands.py
 bash -n scripts/*.sh
+
+echo "== release status helper tests =="
+python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 
 echo "== Tauri command registry =="
 python3 scripts/check-tauri-commands.py

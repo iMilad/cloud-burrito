@@ -329,7 +329,25 @@ gate makes no AWS or other credential-validation calls.
 
 ## Release pipeline
 
-Cloud Burrito releases are tag-driven. The tag must match both app manifests:
+Cloud Burrito releases are tag-driven. The tag must match both app manifests.
+
+After every green `main` build, check the authoritative remote release tag:
+
+```bash
+python3 scripts/release-status.py
+```
+
+The read-only command reports one of these states and never creates, moves, or
+deletes a tag:
+
+| Result | Exit | Meaning |
+| --- | ---: | --- |
+| `release pending: app-vX.Y.Z` | `0` | The validated version has no remote release tag and may be proposed for release |
+| `release tag exists: app-vX.Y.Z` | `10` | The immutable version tag points to `HEAD`; inspect the workflow and draft before reporting completion |
+| `version bump required: app-vX.Y.Z already points to another commit` | `20` | New changes require a new version; never move the existing tag |
+
+Use `--json` for machine-readable output. After the user approves a pending
+release, validate and push the lightweight tag:
 
 ```bash
 python3 scripts/check-release-version.py app-v0.2.6

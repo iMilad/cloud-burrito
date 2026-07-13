@@ -16,6 +16,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Dependency automation and community contribution templates.
 - Explicitly unsigned, identity-free macOS convenience artifacts with SHA-256
   checksums and source-build instructions.
+- A repository-level release follow-up policy and read-only release-status
+  checker.
 
 ### Changed
 

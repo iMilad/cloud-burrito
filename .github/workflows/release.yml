@@ -100,10 +100,17 @@ jobs:
       - name: Check source syntax
         shell: bash
         run: |
-          python3 -m py_compile scripts/check-release-privacy.py scripts/check-release-version.py scripts/check-tauri-commands.py
+          python3 -m py_compile \
+            scripts/check-release-privacy.py \
+            scripts/check-release-version.py \
+            scripts/release-status.py \
+            scripts/check-tauri-commands.py
           bash -n scripts/*.sh
           node --check frontend/app.js
           node --check frontend/mock-data.js
+
+      - name: Test release status helper
+        run: python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 
       - name: Check Tauri command registry
         run: python3 scripts/check-tauri-commands.py
