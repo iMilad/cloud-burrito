@@ -7,6 +7,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-07-15
+
+### Added
+
+- Expand CodeArtifact package rows into a cached, newest-first history of up to
+  ten complete versions, each with its publication date and copy action.
+
+### Changed
+
+- Compact the CodeArtifact package filters, use the header refresh control as
+  the single load action, and improve normal and full-screen version layouts.
+
 ## [0.2.7] - 2026-07-13
 
 ### Fixed

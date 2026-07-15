@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "cloud-burrito"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "aws-config",
  "aws-credential-types",
