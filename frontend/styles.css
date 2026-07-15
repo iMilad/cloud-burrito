@@ -1564,9 +1564,150 @@ dl.identity-kv dd {
 .exec-icon-btn { padding: 1px 6px; font-size: 12px; line-height: 1.3; }
 .exec-log { margin-top: 6px; }
 .exec-log .log-stream { max-height: 320px; }
-.stack-detail-title { font-weight: 600; font-size: 12px; margin: 10px 0 4px; }
-.stack-detail-title:first-child { margin-top: 0; }
-.stack-detail-phys { font-family: var(--font-mono); word-break: break-all; }
+.cfn-stacks-body > table.events-table > thead > tr > th:first-child,
+.cfn-stacks-body > table.events-table > tbody > tr.expandable > td:first-child {
+  padding-left: 30px;
+}
+.cfn-stacks-body > table.events-table > tbody > tr.expandable > td:first-child {
+  position: relative;
+}
+.cfn-stacks-body > table.events-table > tbody > tr.expandable > td:first-child::before {
+  content: "›";
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  transform: translateY(-51%);
+  transition: color 120ms ease, transform 120ms ease;
+}
+.cfn-stacks-body > table.events-table > tbody > tr.expanded > td:first-child::before {
+  color: var(--accent);
+  transform: translateY(-51%) rotate(90deg);
+}
+.cfn-stacks-body > table.events-table > tbody > tr.expandable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.cfn-stacks-body > table.events-table > tbody > tr.expanded > td {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
+  border-bottom-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+.cfn-stacks-body > table.events-table > tbody > tr.expanded > td:first-child {
+  box-shadow: inset 3px 0 var(--accent);
+  color: var(--text-primary);
+  font-weight: 650;
+}
+.cfn-stacks-body > table.events-table > tbody > tr.row-detail > td {
+  padding: 0 10px 10px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-elev));
+  box-shadow: inset 3px 0 var(--accent);
+}
+.stack-detail-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-elev);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+}
+.stack-detail-error {
+  padding: 7px 9px;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 24%, transparent);
+  border-radius: var(--radius-sm);
+}
+.stack-detail-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.stack-detail-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.stack-detail-tab:hover { color: var(--text-primary); }
+.stack-detail-tab.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
+}
+.stack-detail-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.stack-detail-tab-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.stack-detail-tab.active .stack-detail-tab-count {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+.stack-detail-panel[hidden] { display: none; }
+.stack-detail-empty {
+  padding: 16px;
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+.stack-resources-table,
+.stack-events-table {
+  table-layout: fixed;
+}
+.stack-resource-logical-col { width: 31%; }
+.stack-resource-type-col { width: 22%; }
+.stack-resource-status-col { width: 15%; }
+.stack-resource-physical-col { width: 32%; }
+.stack-event-time-col { width: 15%; }
+.stack-event-logical-col { width: 24%; }
+.stack-event-status-col { width: 17%; }
+.stack-event-reason-col { width: 44%; }
+.stack-resource-logical,
+.stack-resource-type,
+.stack-resource-physical,
+.stack-event-logical,
+.stack-event-reason {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.stack-resource-logical,
+.stack-resource-physical,
+.stack-event-logical {
+  font-family: var(--font-mono);
+}
+.stack-resource-status,
+.stack-event-status {
+  vertical-align: middle;
+}
 
 /* ================================================================
    Instrument theme

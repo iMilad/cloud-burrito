@@ -61,6 +61,33 @@
     return displayName(column);
   }
 
+  // Logical IDs are usually long PascalCase strings with a final CDK hash.
+  // Add non-copying line-break opportunities at their semantic boundaries so
+  // fixed-width tables wrap whole name segments before falling back mid-word.
+  function breakableIdentifier(value) {
+    const raw = String(value ?? "");
+    const fragment = document.createDocumentFragment();
+    const hash = raw.match(/[A-F0-9]{8}$/);
+    const hashStart = hash && raw.length > 8 ? raw.length - 8 : -1;
+    let segmentStart = 0;
+
+    for (let i = 1; i < raw.length; i++) {
+      const previous = raw[i - 1];
+      const current = raw[i];
+      const next = raw[i + 1] || "";
+      const atHash = i === hashStart;
+      const insideHash = hashStart >= 0 && i > hashStart;
+      const camelBoundary = !insideHash && /[a-z0-9]/.test(previous) && /[A-Z]/.test(current);
+      const acronymBoundary = !insideHash && /[A-Z]/.test(previous) && /[A-Z]/.test(current) && /[a-z]/.test(next);
+      if (!atHash && !camelBoundary && !acronymBoundary) continue;
+      fragment.appendChild(document.createTextNode(raw.slice(segmentStart, i)));
+      fragment.appendChild(document.createElement("wbr"));
+      segmentStart = i;
+    }
+    fragment.appendChild(document.createTextNode(raw.slice(segmentStart)));
+    return fragment;
+  }
+
   // ===== Backend handshake (Tauri ↔ Rust core) =====
   const isTauri = typeof window.__TAURI__ !== "undefined";
   const tauriInvoke = isTauri ? window.__TAURI__.core.invoke : null;
@@ -2294,36 +2321,92 @@
 
   function renderStackDetail(host, spec) {
     clear(host);
-    if (spec && spec.error) {
-      host.appendChild(el("div", { class: "muted small" }, "Error: " + spec.error));
-    }
     const resources = (spec && Array.isArray(spec.resources)) ? spec.resources : [];
     const events = (spec && Array.isArray(spec.events)) ? spec.events : [];
+    const instanceId = ++renderStackDetail.nextId;
+    const resourcePanelId = `stack-resources-${instanceId}`;
+    const eventPanelId = `stack-events-${instanceId}`;
+    const resourceTabId = `stack-resources-tab-${instanceId}`;
+    const eventTabId = `stack-events-tab-${instanceId}`;
 
-    host.appendChild(el("div", { class: "stack-detail-title" }, `Resources (${resources.length})`));
+    const shell = el("div", { class: "stack-detail-shell" });
+    if (spec && spec.error) {
+      shell.appendChild(el("div", { class: "muted small stack-detail-error" }, "Error: " + spec.error));
+    }
+
+    const resourceTab = el("button", {
+      class: "stack-detail-tab active",
+      type: "button",
+      role: "tab",
+      id: resourceTabId,
+      "aria-controls": resourcePanelId,
+      "aria-selected": "true",
+    },
+    el("span", {}, "Resources"),
+    el("span", { class: "stack-detail-tab-count" }, String(resources.length)));
+    const eventTab = el("button", {
+      class: "stack-detail-tab",
+      type: "button",
+      role: "tab",
+      id: eventTabId,
+      "aria-controls": eventPanelId,
+      "aria-selected": "false",
+      tabindex: "-1",
+    },
+    el("span", {}, "Events"),
+    el("span", { class: "stack-detail-tab-count" }, String(events.length)));
+    const tabs = el("div", {
+      class: "stack-detail-tabs",
+      role: "tablist",
+      "aria-label": "Stack detail view",
+    }, resourceTab, eventTab);
+
+    const resourcePanel = el("div", {
+      class: "stack-detail-panel",
+      id: resourcePanelId,
+      role: "tabpanel",
+      "aria-labelledby": resourceTabId,
+    });
+
     if (resources.length === 0) {
-      host.appendChild(el("div", { class: "muted small" }, "No resources returned for this stack."));
+      resourcePanel.appendChild(el("div", { class: "muted small stack-detail-empty" }, "No resources returned for this stack."));
     } else {
-      host.appendChild(el("table", { class: "events-table" },
+      resourcePanel.appendChild(el("table", { class: "events-table stack-resources-table" },
+        el("colgroup", {},
+          el("col", { class: "stack-resource-logical-col" }),
+          el("col", { class: "stack-resource-type-col" }),
+          el("col", { class: "stack-resource-status-col" }),
+          el("col", { class: "stack-resource-physical-col" })),
         el("thead", {}, el("tr", {},
           el("th", {}, tableHeaderLabel("logical_id")),
           el("th", {}, tableHeaderLabel("type")),
           el("th", {}, tableHeaderLabel("status")),
           el("th", {}, tableHeaderLabel("physical_id")))),
         el("tbody", {}, ...resources.map((r) => el("tr", {},
-          el("td", {}, r.logical_id || ""),
-          el("td", {}, r.type || ""),
-          el("td", {}, el("span", { class: "badge " + statusToBadge(r.status) }, formatStatusLabel(r.status))),
-          el("td", { class: "stack-detail-phys" }, r.physical_id || ""),
+          el("td", { class: "stack-resource-logical", title: r.logical_id || undefined }, breakableIdentifier(r.logical_id)),
+          el("td", { class: "stack-resource-type", title: r.type || undefined }, r.type || ""),
+          el("td", { class: "stack-resource-status" }, el("span", { class: "badge " + statusToBadge(r.status) }, formatStatusLabel(r.status))),
+          el("td", { class: "stack-resource-physical", title: r.physical_id || undefined }, r.physical_id || ""),
         ))),
       ));
     }
 
-    host.appendChild(el("div", { class: "stack-detail-title" }, `Recent Events (${events.length})`));
+    const eventPanel = el("div", {
+      class: "stack-detail-panel",
+      id: eventPanelId,
+      role: "tabpanel",
+      "aria-labelledby": eventTabId,
+      hidden: "hidden",
+    });
     if (events.length === 0) {
-      host.appendChild(el("div", { class: "muted small" }, "No recent stack events returned."));
+      eventPanel.appendChild(el("div", { class: "muted small stack-detail-empty" }, "No recent stack events returned."));
     } else {
-      host.appendChild(el("table", { class: "events-table" },
+      eventPanel.appendChild(el("table", { class: "events-table stack-events-table" },
+        el("colgroup", {},
+          el("col", { class: "stack-event-time-col" }),
+          el("col", { class: "stack-event-logical-col" }),
+          el("col", { class: "stack-event-status-col" }),
+          el("col", { class: "stack-event-reason-col" })),
         el("thead", {}, el("tr", {},
           el("th", {}, tableHeaderLabel("time")),
           el("th", {}, tableHeaderLabel("logical_id")),
@@ -2333,13 +2416,42 @@
           el("td",
             e.time ? { class: "value-date", title: e.time } : {},
             formatDisplayValue("time", e.time).text),
-          el("td", {}, e.logical_id || ""),
-          el("td", {}, el("span", { class: "badge " + statusToBadge(e.status) }, formatStatusLabel(e.status))),
-          el("td", {}, e.reason || ""),
+          el("td", { class: "stack-event-logical", title: e.logical_id || undefined }, breakableIdentifier(e.logical_id)),
+          el("td", { class: "stack-event-status" }, el("span", { class: "badge " + statusToBadge(e.status) }, formatStatusLabel(e.status))),
+          el("td", { class: "stack-event-reason", title: e.reason || undefined }, e.reason || ""),
         ))),
       ));
     }
+
+    const tabEntries = [
+      { button: resourceTab, panel: resourcePanel },
+      { button: eventTab, panel: eventPanel },
+    ];
+    const activateTab = (activeButton) => {
+      for (const entry of tabEntries) {
+        const active = entry.button === activeButton;
+        entry.button.classList.toggle("active", active);
+        entry.button.setAttribute("aria-selected", String(active));
+        entry.button.tabIndex = active ? 0 : -1;
+        entry.panel.hidden = !active;
+      }
+    };
+    resourceTab.addEventListener("click", () => activateTab(resourceTab));
+    eventTab.addEventListener("click", () => activateTab(eventTab));
+    tabs.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const nextTab = event.target === resourceTab ? eventTab : resourceTab;
+      activateTab(nextTab);
+      nextTab.focus();
+    });
+
+    shell.appendChild(tabs);
+    shell.appendChild(resourcePanel);
+    shell.appendChild(eventPanel);
+    host.appendChild(shell);
   }
+  renderStackDetail.nextId = 0;
 
   function renderExecutionDetail(host, spec) {
     clear(host);
@@ -3232,19 +3344,17 @@
         filterEmptyText: "No matching stacks.",
         expand: (row, cell) => {
           const stack = Mock.stacks.find(item => item.name === row.stack);
-          clear(cell);
-          if (!stack || stack.resources.length === 0) {
-            cell.appendChild(el("div", { class: "muted small" }, "No resources in this stack."));
-            return;
-          }
-          cell.appendChild(el("div", { class: "stack-detail-title" }, `Resources (${stack.resources.length})`));
-          cell.appendChild(el("table", { class: "events-table" },
-            el("thead", {}, el("tr", {},
-              el("th", {}, "Logical ID"),
-              el("th", {}, "Type"))),
-            el("tbody", {}, ...stack.resources.map(resource => el("tr", {},
-              el("td", {}, resource.name),
-              el("td", {}, resource.type))))));
+          renderStackDetail(cell, {
+            render: "stack_detail",
+            stack: row.stack,
+            resources: stack ? stack.resources.map((resource) => ({
+              logical_id: resource.name,
+              type: resource.type,
+              status: resource.status || stack.status,
+              physical_id: resource.physical_id || resource.name,
+            })) : [],
+            events: stack && Array.isArray(stack.events) ? stack.events : [],
+          });
         },
       });
     });
@@ -4226,7 +4336,7 @@
     { name: "CloudWatch Logs",         desc: "Search log groups, browse streams, view events.",          gsId: "cloudwatch-logs",         phase: 2 },
     { name: "Pipeline Runs",           desc: "Recent CodePipeline executions with status color.",        gsId: "pipeline-runs",           phase: 1 },
     { name: "CodeArtifact Packages",   desc: "Latest CodeArtifact package versions by prefix.",          gsId: "codeartifact-packages",   phase: 1 },
-    { name: "CloudFormation Stacks",   desc: "Browse CloudFormation stacks and resources.",              gsId: "cfn-stacks",              phase: 2 },
+    { name: "CloudFormation Stacks",   desc: "Browse stacks, resources, and recent events.",              gsId: "cfn-stacks",              phase: 2 },
     { name: "Resource Reverse Lookup", desc: "Find the stack that owns a resource.",                     gsId: "resource-lookup",         phase: 2 },
     { name: "Errors by Stack",         desc: "CloudWatch errors by stack over the last 24 hours.",       gsId: "errors-by-stack",         phase: 2 },
     { name: "Logs Insights Query",     desc: "Run your own Logs Insights query on any log group.",       gsId: "logs-insights",           phase: 2 },

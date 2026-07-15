@@ -31,10 +31,16 @@ const Mock = (() => {
       name: "uc-payment-service-prod",
       status: "UPDATE_ROLLBACK_COMPLETE",
       resources: [
-        { name: "PaymentLambdaV2",   type: "AWS::Lambda::Function" },
-        { name: "PaymentLambdaRole", type: "AWS::IAM::Role" },
-        { name: "PaymentDB",         type: "AWS::RDS::DBInstance" },
-        { name: "PaymentApi",        type: "AWS::ApiGatewayV2::Api" },
+        { name: "PaymentLambdaV2", type: "AWS::Lambda::Function", physical_id: "uc-payment-service-prod-PaymentLambdaV2-k4d2m8q" },
+        { name: "PaymentLambdaExecutionRoleForProductionWorkloads00000000", type: "AWS::IAM::Role", physical_id: "uc-payment-service-prod-PaymentLambdaRole-7h3v9" },
+        { name: "PaymentDB", type: "AWS::RDS::DBInstance", physical_id: "uc-payment-prod-db-01" },
+        { name: "PaymentApi", type: "AWS::ApiGatewayV2::Api", physical_id: "a1b2c3d4e5" },
+      ],
+      events: [
+        { time: "2026-07-15T14:29:08Z", logical_id: "uc-payment-service-prod", status: "UPDATE_ROLLBACK_COMPLETE", reason: "" },
+        { time: "2026-07-15T14:29:02Z", logical_id: "PaymentLambdaV2", status: "UPDATE_COMPLETE", reason: "" },
+        { time: "2026-07-15T14:28:41Z", logical_id: "PaymentLambdaV2", status: "UPDATE_IN_PROGRESS", reason: "Resource update initiated" },
+        { time: "2026-07-15T14:28:25Z", logical_id: "PaymentApi", status: "UPDATE_FAILED", reason: "Deployment validation failed; rolling back to the previous configuration" },
       ],
     },
     {
@@ -45,6 +51,10 @@ const Mock = (() => {
         { name: "OrderQueue",   type: "AWS::SQS::Queue" },
         { name: "OrderTable",   type: "AWS::DynamoDB::Table" },
       ],
+      events: [
+        { time: "2026-07-15T13:16:10Z", logical_id: "uc-order-service-prod", status: "UPDATE_COMPLETE", reason: "" },
+        { time: "2026-07-15T13:15:44Z", logical_id: "OrderLambda", status: "UPDATE_COMPLETE", reason: "" },
+      ],
     },
     {
       name: "uc-inventory-service-prod",
@@ -52,6 +62,9 @@ const Mock = (() => {
       resources: [
         { name: "InventoryLambda", type: "AWS::Lambda::Function" },
         { name: "InventoryTable",  type: "AWS::DynamoDB::Table" },
+      ],
+      events: [
+        { time: "2026-07-15T12:47:31Z", logical_id: "uc-inventory-service-prod", status: "UPDATE_COMPLETE", reason: "" },
       ],
     },
     {
@@ -61,6 +74,9 @@ const Mock = (() => {
         { name: "VPC",        type: "AWS::EC2::VPC" },
         { name: "PrivateSubnetA", type: "AWS::EC2::Subnet" },
         { name: "PrivateSubnetB", type: "AWS::EC2::Subnet" },
+      ],
+      events: [
+        { time: "2026-07-14T09:12:04Z", logical_id: "shared-vpc-prod", status: "CREATE_COMPLETE", reason: "" },
       ],
     },
   ];

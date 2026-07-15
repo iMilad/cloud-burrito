@@ -94,8 +94,26 @@ test("filters and expands CloudFormation mock stacks", async ({ page }) => {
     ".cfn-stacks-body > table.events-table > tbody > tr.row-detail"
   );
   await expect(detail).toBeVisible();
-  await expect(detail).toContainText("Resources (4)");
+  await expect(rows.filter({ hasText: "uc-payment-service-prod" })).toHaveAttribute("aria-expanded", "true");
+  await expect(rows.filter({ hasText: "uc-payment-service-prod" })).toHaveClass(/expanded/);
+  await expect(detail.getByRole("tablist", { name: "Stack detail view" })).toBeVisible();
+  const resourceTab = detail.getByRole("tab", { name: "Resources 4" });
+  const eventTab = detail.getByRole("tab", { name: "Events 4" });
+  await expect(resourceTab).toHaveAttribute("aria-selected", "true");
+  await expect(eventTab).toHaveAttribute("aria-selected", "false");
   await expect(detail).toContainText("PaymentLambdaV2");
+  await expect(detail.locator(
+    '.stack-resource-logical[title="PaymentLambdaExecutionRoleForProductionWorkloads00000000"] wbr'
+  )).toHaveCount(7);
+  await eventTab.click();
+  await expect(eventTab).toHaveAttribute("aria-selected", "true");
+  await expect(detail.getByRole("tabpanel", { name: "Resources 4" })).toBeHidden();
+  const eventPanel = detail.getByRole("tabpanel", { name: "Events 4" });
+  await expect(eventPanel).toBeVisible();
+  await expect(eventPanel).toContainText("UPDATE FAILED");
+  await expect(eventPanel).toContainText("rolling back to the previous configuration");
+  await resourceTab.click();
+  await expect(resourceTab).toHaveAttribute("aria-selected", "true");
 
   await filter.fill("rollback");
   await expect(visibleStackRows(page)).toHaveCount(1);

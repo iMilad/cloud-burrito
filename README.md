@@ -183,7 +183,7 @@ stack details, pipeline execution details, and CodeBuild logs:
 
 | Widget | What it shows |
 | --- | --- |
-| `cfn-stacks` | Searchable non-deleted CloudFormation stacks in the active region, with status and resource count |
+| `cfn-stacks` | Searchable non-deleted CloudFormation stacks with status, resource count, resources, and recent events |
 | `log-tail` | Lambda function browser with ARN/update/log-group details, log streams, and events |
 | `cloudwatch-logs` | Search CloudWatch log groups, browse their streams, and view events |
 | `errors-by-stack` | CloudWatch errors grouped by stack over a selected time window, with in-widget filtering |

@@ -7,6 +7,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-07-15
+
+### Added
+
+- Switch expanded CloudFormation stacks between resource and recent-event
+  tables without leaving the widget.
+
+### Changed
+
+- Give expanded CloudFormation rows a stronger visual treatment and rebalance
+  detail columns so long logical and physical IDs wrap readably.
+
 ## [0.2.8] - 2026-07-15
 
 ### Added
