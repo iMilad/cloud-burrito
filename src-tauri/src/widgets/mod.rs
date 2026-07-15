@@ -205,6 +205,9 @@ pub async fn fetch(name: &str, ctx: &WidgetCtx) -> Value {
         "resource-lookup" => resource_lookup::fetch(ctx).await,
         "pipeline-runs" => pipeline_runs::fetch(ctx).await,
         "codeartifact-packages" => codeartifact_packages::fetch(ctx).await,
+        "codeartifact-package-version-history" => {
+            codeartifact_packages::fetch_version_history(ctx).await
+        }
         "pipeline-execution-detail" => pipeline_execution_detail::fetch(ctx).await,
         "codebuild-log" => codebuild_log::fetch(ctx).await,
         other => json!({
@@ -227,6 +230,7 @@ pub fn is_known(name: &str) -> bool {
             | "resource-lookup"
             | "pipeline-runs"
             | "codeartifact-packages"
+            | "codeartifact-package-version-history"
             | "pipeline-execution-detail"
             | "codebuild-log"
     )
@@ -286,6 +290,11 @@ pub fn get_source(name: &str) -> Value {
             CODEARTIFACT_PACKAGES_YAML,
             include_str!("codeartifact_packages.rs"),
             "CodeArtifact Packages — latest package versions filtered by package prefix.",
+        ),
+        "codeartifact-package-version-history" => (
+            CODEARTIFACT_PACKAGES_YAML,
+            include_str!("codeartifact_packages.rs"),
+            "CodeArtifact Package Version History — publish dates for one package's recent versions.",
         ),
         "pipeline-execution-detail" => (
             PIPELINE_EXECUTION_DETAIL_YAML,
