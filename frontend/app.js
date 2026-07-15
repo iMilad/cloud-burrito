@@ -2145,18 +2145,24 @@
     if (next && next.classList.contains("row-detail")) {
       next.remove();
       tr.classList.remove("expanded");
+      tr.setAttribute("aria-expanded", "false");
+      tr.removeAttribute("aria-controls");
       return;
     }
     const cell = el("td", { colspan: String(colspan) });
     cell.appendChild(el("div", { class: "muted small" }, "Loading…"));
-    const detail = el("tr", { class: "row-detail" }, cell);
+    const detailId = `row-detail-${++toggleRowDetail.nextId}`;
+    const detail = el("tr", { class: "row-detail", id: detailId }, cell);
     tr.after(detail);
     tr.classList.add("expanded");
+    tr.setAttribute("aria-expanded", "true");
+    tr.setAttribute("aria-controls", detailId);
     Promise.resolve(opts.expand(row, cell)).catch((e) => {
       clear(cell);
       cell.appendChild(el("div", { class: "muted small" }, "Error: " + e));
     });
   }
+  toggleRowDetail.nextId = 0;
 
   function renderTable(host, spec, opts) {
     clear(host);
@@ -2174,6 +2180,10 @@
       ...rows.map(row => {
         const tr = el("tr", {}, ...columns.map(c => {
           const raw = String(row[c] ?? "");
+          const custom = opts && typeof opts.renderCell === "function"
+            ? opts.renderCell(c, row)
+            : null;
+          if (custom) return el("td", {}, custom);
           const formatted = formatDisplayValue(c, raw);
           if (c === "status") {
             return el("td", {}, el("span", { class: "badge " + statusToBadge(raw) }, formatted.text));
@@ -2187,7 +2197,17 @@
         tr.dataset.search = columns.map(c => String(row[c] ?? "")).join(" ");
         if (expandable) {
           tr.classList.add("expandable");
-          tr.addEventListener("click", () => toggleRowDetail(tr, row, opts, columns.length));
+          tr.tabIndex = 0;
+          tr.setAttribute("aria-expanded", "false");
+          tr.addEventListener("click", (event) => {
+            if (event.target.closest && event.target.closest("button, a, input, select, textarea")) return;
+            toggleRowDetail(tr, row, opts, columns.length);
+          });
+          tr.addEventListener("keydown", (event) => {
+            if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            toggleRowDetail(tr, row, opts, columns.length);
+          });
         }
         return tr;
       }),
@@ -3415,6 +3435,209 @@
     persistTileInputs(form, inputs);
   }
 
+  function requestCodeArtifactLoad(form) {
+    if (!form) return;
+    if (typeof form.requestSubmit === "function") form.requestSubmit();
+    else form.dispatchEvent(new Event("submit", { cancelable: true }));
+  }
+
+  function codeArtifactCopyButton(version, label) {
+    if (!version) return null;
+    const button = el("button", {
+      class: "exec-btn exec-icon-btn codeartifact-copy-btn",
+      type: "button",
+      title: label,
+      "aria-label": label,
+    }, "⧉");
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      copyToClipboard(version, button);
+    });
+    return button;
+  }
+
+  function codeArtifactVersions(row) {
+    const candidates = Array.isArray(row.versions) ? row.versions : [row.latest_version];
+    const latestVersion = String(row.latest_version || "").trim();
+    const latestPublished = parseIsoDateTime(row.last_published) ? row.last_published : "";
+    const seen = new Set();
+    const versions = [];
+    for (const candidate of candidates) {
+      const version = String(
+        candidate && typeof candidate === "object" ? candidate.version : candidate || ""
+      ).trim();
+      if (!version || seen.has(version)) continue;
+      seen.add(version);
+      const rawPublished = candidate && typeof candidate === "object"
+        ? (candidate.published || candidate.published_at || candidate.published_time || "")
+        : "";
+      const published = parseIsoDateTime(rawPublished)
+        ? String(rawPublished)
+        : (version === latestVersion ? latestPublished : "");
+      versions.push({
+        version,
+        published,
+        error: candidate && typeof candidate === "object" ? String(candidate.error || "") : "",
+      });
+      if (versions.length === 10) break;
+    }
+    return versions;
+  }
+
+  function formatCodeArtifactPublished(value) {
+    const date = parseIsoDateTime(value);
+    if (!date) return "";
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  }
+
+  function renderCodeArtifactVersionHistory(row, cell, providedVersions) {
+    clear(cell);
+    cell.removeAttribute("aria-busy");
+    const versions = providedVersions || codeArtifactVersions(row);
+    if (versions.length === 0) {
+      cell.appendChild(el("div", { class: "muted small" }, "No published versions."));
+      return;
+    }
+    const list = el("ol", { class: "codeartifact-version-list" },
+      ...versions.map((item, index) => {
+        const publishedLabel = formatCodeArtifactPublished(item.published);
+        const published = publishedLabel
+          ? el("time", {
+            class: "codeartifact-version-published",
+            datetime: item.published,
+            title: item.published,
+          }, `Published ${publishedLabel}`)
+          : el("span", {
+            class: "codeartifact-version-published codeartifact-version-date-missing",
+            title: item.error || "Publish date unavailable",
+          }, "Published date unavailable");
+        return el("li", { class: "codeartifact-version-item" },
+        el("span", { class: "codeartifact-version-rank muted" }, String(index + 1)),
+          el("div", { class: "codeartifact-version-main" },
+            el("code", { class: "codeartifact-version-value" }, item.version),
+            published,
+          ),
+          codeArtifactCopyButton(item.version, `Copy version ${item.version}`),
+        );
+      }),
+    );
+    cell.appendChild(el("div", { class: "codeartifact-version-history" },
+      el("div", { class: "codeartifact-version-history-head" },
+        el("div", { class: "codeartifact-version-history-title" }, "Version history"),
+        el("div", { class: "codeartifact-version-history-meta muted small" },
+          `${versions.length} published · newest first`),
+      ),
+      list,
+    ));
+  }
+
+  function renderCodeArtifactVersionError(row, cell, error, historyOptions) {
+    clear(cell);
+    cell.removeAttribute("aria-busy");
+    const retry = el("button", { class: "exec-btn small", type: "button" }, "Retry");
+    retry.addEventListener("click", (event) => {
+      event.stopPropagation();
+      loadCodeArtifactVersionHistory(row, cell, historyOptions);
+    });
+    cell.appendChild(el("div", { class: "codeartifact-version-history-error" },
+      el("div", { class: "muted small" }, `Could not load version dates: ${error}`),
+      retry,
+    ));
+  }
+
+  async function loadCodeArtifactVersionHistory(row, cell, historyOptions) {
+    const localVersions = codeArtifactVersions(row);
+    if (!isTauri || !historyOptions.form) {
+      renderCodeArtifactVersionHistory(row, cell, localVersions);
+      return;
+    }
+    if (Array.isArray(row._codeArtifactVersionHistory)) {
+      renderCodeArtifactVersionHistory(row, cell, row._codeArtifactVersionHistory);
+      return;
+    }
+
+    clear(cell);
+    cell.setAttribute("aria-busy", "true");
+    cell.appendChild(el("div", { class: "muted small", role: "status" }, "Loading version dates…"));
+
+    if (!row._codeArtifactVersionHistoryPromise) {
+      const sourceInputs = historyOptions.inputs || {};
+      const detailInputs = {
+        domain: sourceInputs.domain || "",
+        repository: sourceInputs.repository || "",
+        domain_owner: sourceInputs.domain_owner || "",
+        package: String(row.package || ""),
+        versions: localVersions.map(item => ({
+          version: item.version,
+          published: item.published,
+        })),
+      };
+      row._codeArtifactVersionHistoryPromise = fetchWidgetData(
+        "codeartifact-package-version-history",
+        detailInputs,
+        historyOptions.form,
+        historyOptions.context,
+      ).then((result) => {
+        if (result && result.render === "permission_denied") {
+          const denied = new Error("permission denied");
+          denied.render = result;
+          throw denied;
+        }
+        if (!result || result.render !== "codeartifact_version_history") {
+          throw new Error("unexpected response");
+        }
+        if (result.error) throw new Error(result.error);
+        const versions = codeArtifactVersions({
+          latest_version: row.latest_version,
+          last_published: row.last_published,
+          versions: result.versions,
+        });
+        if (versions.length === 0) throw new Error("no versions returned");
+        row._codeArtifactVersionHistory = versions;
+        delete row._codeArtifactVersionHistoryPromise;
+        return versions;
+      }).catch((error) => {
+        delete row._codeArtifactVersionHistoryPromise;
+        throw error;
+      });
+    }
+
+    try {
+      const versions = await row._codeArtifactVersionHistoryPromise;
+      if (cell.isConnected) renderCodeArtifactVersionHistory(row, cell, versions);
+    } catch (error) {
+      if (!cell.isConnected) return;
+      if (error && error.render) {
+        cell.removeAttribute("aria-busy");
+        renderPermissionDenied(cell, error.render);
+      } else {
+        renderCodeArtifactVersionError(row, cell, String(error), historyOptions);
+      }
+    }
+  }
+
+  function renderCodeArtifactPackagesTable(host, spec, historyOptions = {}) {
+    renderTable(host, spec, {
+      expand: (row, cell) => loadCodeArtifactVersionHistory(row, cell, historyOptions),
+      renderCell: (column, row) => {
+        if (column !== "latest_version") return null;
+        const version = String(row.latest_version || "");
+        if (!version) return el("span", {}, "");
+        return el("span", { class: "codeartifact-latest-version" },
+          el("span", { class: "codeartifact-latest-version-value", title: version }, version),
+          codeArtifactCopyButton(version, `Copy latest version ${version}`),
+        );
+      },
+    });
+  }
+
   async function renderCodeArtifactPackages(target) {
     if (!isTauri) return renderCodeArtifactPackagesMock(target);
 
@@ -3431,6 +3654,11 @@
 
       if (form.dataset.wired !== "1") {
         form.dataset.wired = "1";
+        form.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" || !e.target.matches("input")) return;
+          e.preventDefault();
+          requestCodeArtifactLoad(form);
+        });
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
           const inputs = readCodeArtifactForm(form);
@@ -3441,10 +3669,21 @@
           $(".codeartifact-max", form).value = String(inputs.max_packages);
           errorEl.textContent = "Loading...";
           try {
-            const result = await fetchWidgetData("codeartifact-packages", inputs, form);
+            const fetchInputs = { ...inputs };
+            const fetchContext = effectivePinnedContextForTile(form) || contextPayloadForTile(form);
+            const result = await fetchWidgetData(
+              "codeartifact-packages",
+              fetchInputs,
+              form,
+              fetchContext,
+            );
             if (result && result.error) errorEl.textContent = result.error;
             else errorEl.textContent = "";
-            renderTable(rows, result);
+            renderCodeArtifactPackagesTable(rows, result, {
+              form,
+              inputs: fetchInputs,
+              context: fetchContext,
+            });
             rows.hidden = false;
             persistCodeArtifactInputs(form, inputs);
           } catch (err) {
@@ -3457,14 +3696,15 @@
 
   function renderCodeArtifactPackagesMock(target) {
     return withWidgets("codeartifact-packages", target, (widget) => {
-      const body = $(".codeartifact-packages-body", widget);
-      if (!body) return;
-      clear(body);
-      renderTable(body, {
+      const rows = $(".codeartifact-packages-rows", widget);
+      if (!rows) return;
+      renderCodeArtifactPackagesTable(rows, {
         render: "table",
         columns: ["package", "latest_version", "last_published"],
         rows: Mock.codeArtifactPackages,
       });
+      rows.hidden = false;
+      updateWidgetContextChip(widget.closest(".grid-stack-item"));
     });
   }
 
@@ -4206,7 +4446,11 @@
             el("h2", { class: "widget-title" }, "CodeArtifact Packages"),
             el("span", { class: "widget-sub" }, "Latest package versions by prefix"),
             el("div", { class: "widget-actions" },
-              el("button", { class: "icon-btn", title: "Refresh" }, "↻"),
+              el("button", {
+                class: "icon-btn",
+                title: "Refresh",
+                "aria-label": "Load or refresh packages",
+              }, "↻"),
               el("button", { class: "icon-btn fs-btn", title: "Fullscreen" }, "⛶"),
               el("button", { class: "icon-btn cfg-btn", title: "Configure widget" }, "⚙"),
               el("button", { class: "icon-btn rm-btn", title: "Remove widget" }, "✕"),
@@ -4257,7 +4501,6 @@
                   value: String(CODEARTIFACT_DEFAULTS.max_packages),
                 }),
               ),
-              el("button", { type: "submit", class: "btn btn-primary" }, "Load packages"),
               el("p", { class: "muted small codeartifact-packages-error" }),
             ),
             el("div", { class: "widget-data codeartifact-packages-rows", hidden: true }),
@@ -4833,11 +5076,12 @@ def fetch(ctx):
           renderPipelineRuns(widget);
         }
       },
-      "codeartifact-packages": (widget) => {
+      "codeartifact-packages": (widget, options = {}) => {
         const rows = $(".codeartifact-packages-rows", widget);
         const form = $(".codeartifact-packages-config", widget);
-        if (isTauri && rows && !rows.hidden && form) {
-          form.dispatchEvent(new Event("submit", { cancelable: true }));
+        const explicitlyRefreshed = options.explicit === true;
+        if (isTauri && form && (explicitlyRefreshed || (rows && !rows.hidden))) {
+          requestCodeArtifactLoad(form);
         } else {
           renderCodeArtifactPackages(widget);
         }
@@ -4916,7 +5160,7 @@ def fetch(ctx):
         btn.style.transition = "transform 0.6s";
         btn.style.transform = "rotate(360deg)";
         setTimeout(() => { btn.style.transform = ""; }, 600);
-        if (fn) fn(widget);
+        if (fn) fn(widget, { explicit: true });
       });
     });
   }

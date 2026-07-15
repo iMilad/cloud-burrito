@@ -7,6 +7,10 @@ const stackRows = (page) => stackWidget(page).locator(
 const visibleStackRows = (page) => stackWidget(page).locator(
   ".cfn-stacks-body > table.events-table > tbody > tr:not(.row-detail):not([hidden])"
 );
+const codeArtifactWidget = (page) => page.locator('.widget[data-widget="codeartifact-packages"]');
+const codeArtifactRows = (page) => codeArtifactWidget(page).locator(
+  ".codeartifact-packages-rows > table.events-table > tbody > tr:not(.row-detail)"
+);
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -113,6 +117,222 @@ test("filters and expands CloudFormation mock stacks", async ({ page }) => {
   await expect(visibleStackRows(page)).toHaveCount(4);
   await expect(count).toHaveText("4");
   await expect(table).toBeVisible();
+});
+
+test("copies and expands CodeArtifact package versions", async ({ page, context }) => {
+  const widget = codeArtifactWidget(page);
+  const form = widget.locator(".codeartifact-packages-config");
+  const labels = form.locator(":scope > label");
+
+  await expect(widget.locator(".widget-sub")).toHaveText("Latest package versions by prefix");
+  await expect(widget.getByRole("button", { name: "Load packages" })).toHaveCount(0);
+  await expect(labels).toHaveCount(4);
+
+  const fieldLayout = await labels.evaluateAll((nodes) => nodes.map((label) => {
+    const key = label.querySelector("span").getBoundingClientRect();
+    const input = label.querySelector("input").getBoundingClientRect();
+    return { keyTop: key.top, keyBottom: key.bottom, inputTop: input.top };
+  }));
+  expect(Math.max(...fieldLayout.map(field => field.keyTop))
+    - Math.min(...fieldLayout.map(field => field.keyTop))).toBeLessThan(2);
+  expect(Math.max(...fieldLayout.map(field => field.inputTop))
+    - Math.min(...fieldLayout.map(field => field.inputTop))).toBeLessThan(2);
+  fieldLayout.forEach(field => expect(field.inputTop).toBeGreaterThan(field.keyBottom));
+
+  const row = codeArtifactRows(page).filter({ hasText: "example-config-library" });
+  const latestVersion = "1.2.1.260701.093637+9c0581c";
+  const oldestVersion = "1.1.0.260217.143437+14d2544";
+  const copyLatest = row.getByRole("button", { name: `Copy latest version ${latestVersion}` });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: "http://127.0.0.1:4173",
+  });
+  await copyLatest.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(latestVersion);
+  await expect(widget.locator("tr.row-detail")).toHaveCount(0);
+
+  await row.locator("td").first().click();
+  await expect(row).toHaveAttribute("aria-expanded", "true");
+  const detail = widget.locator("tr.row-detail");
+  await expect(detail).toBeVisible();
+  await expect(detail.locator(".codeartifact-version-item")).toHaveCount(10);
+  await expect(detail.locator("time.codeartifact-version-published")).toHaveCount(10);
+  await expect(detail).toContainText(latestVersion);
+  await expect(detail).toContainText(oldestVersion);
+  await expect(detail).toContainText("Published 01 Jul 2026");
+
+  const fullVersionStyle = await detail.locator(".codeartifact-version-value").first().evaluate(
+    (node) => {
+      const style = getComputedStyle(node);
+      return {
+        overflowWrap: style.overflowWrap,
+        textOverflow: style.textOverflow,
+        whiteSpace: style.whiteSpace,
+      };
+    }
+  );
+  expect(fullVersionStyle).toEqual({
+    overflowWrap: "anywhere",
+    textOverflow: "clip",
+    whiteSpace: "normal",
+  });
+  expect(await detail.locator(".codeartifact-version-history").evaluate(
+    (node) => node.scrollWidth <= node.clientWidth + 1
+  )).toBe(true);
+
+  const versionList = detail.locator(".codeartifact-version-list");
+  expect(await versionList.evaluate(
+    (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length
+  )).toBe(1);
+  await widget.locator(".fs-btn").click();
+  expect(await versionList.evaluate(
+    (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length
+  )).toBe(2);
+  await widget.locator(".fs-btn").click();
+
+  await row.locator("td").first().click();
+  await expect(row).toHaveAttribute("aria-expanded", "false");
+  await expect(detail).toHaveCount(0);
+
+  await row.focus();
+  await row.press("Enter");
+  await expect(row).toHaveAttribute("aria-expanded", "true");
+  await row.press("Space");
+  await expect(row).toHaveAttribute("aria-expanded", "false");
+});
+
+test("uses CodeArtifact refresh as the first-load and reload action", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__codeArtifactInvocations = [];
+    window.__codeArtifactHistoryInvocations = [];
+    window.__TAURI__ = {
+      core: {
+        invoke: async (command, payload) => {
+          if (command === "widget_fetch") {
+            if (payload?.params?.widget === "codeartifact-packages") {
+              window.__codeArtifactInvocations.push(payload);
+              return {
+                render: "table",
+                columns: ["package", "latest_version", "last_published"],
+                rows: [{
+                  package: "demo-package",
+                  latest_version: "3.2.1.260715.083000+abc1234",
+                  last_published: "2026-07-15T08:30:00Z",
+                  versions: [
+                    "3.2.1.260715.083000+abc1234",
+                    "3.2.0.260701.101500+def5678",
+                    "3.1.0.260615.074500+987fedc",
+                  ],
+                }],
+              };
+            }
+            if (payload?.params?.widget === "codeartifact-package-version-history") {
+              window.__codeArtifactHistoryInvocations.push(payload);
+              return {
+                render: "codeartifact_version_history",
+                package: "demo-package",
+                versions: [
+                  { version: "3.2.1.260715.083000+abc1234", published: "2026-07-15T08:30:00Z" },
+                  { version: "3.2.0.260701.101500+def5678", published: "2026-07-01T10:15:00Z" },
+                  { version: "3.1.0.260615.074500+987fedc", published: "2026-06-15T07:45:00Z" },
+                ],
+              };
+            }
+            return {};
+          }
+          if (command === "ping") return { version: "test" };
+          if (command === "settings_get") {
+            return { default_profile: "default", default_region: "eu-west-1" };
+          }
+          if (command === "dashboard_get") return { tiles: [] };
+          if (command === "aws_list_profiles") return { profiles: [], config_path: "" };
+          if (command === "aws_auth_status") {
+            return { has_context: false, logged_in: false, needs_sso_login: false };
+          }
+          return {};
+        },
+      },
+    };
+  });
+  await page.reload();
+
+  const widget = codeArtifactWidget(page);
+  const domain = widget.locator(".codeartifact-domain");
+  const repository = widget.locator(".codeartifact-repository");
+  const prefix = widget.locator(".codeartifact-prefix");
+  const maxPackages = widget.locator(".codeartifact-max");
+  const refresh = widget.getByRole("button", { name: "Load or refresh packages" });
+
+  await expect.poll(() => page.evaluate(() => window.__codeArtifactInvocations.length)).toBe(0);
+  await domain.fill("demo-domain");
+  await repository.fill("demo_repo");
+  await prefix.fill("demo");
+  await maxPackages.fill("25");
+  await refresh.click();
+
+  await expect(widget.locator(".codeartifact-packages-rows")).toBeVisible();
+  await expect(widget.locator(".codeartifact-packages-rows")).toContainText("demo-package");
+  await expect.poll(() => page.evaluate(() => window.__codeArtifactInvocations.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (
+    window.__codeArtifactHistoryInvocations.length
+  ))).toBe(0);
+  expect(await page.evaluate(() => window.__codeArtifactInvocations[0])).toEqual({
+    params: {
+      widget: "codeartifact-packages",
+      inputs: {
+        domain: "demo-domain",
+        repository: "demo_repo",
+        package_prefix: "demo",
+        max_packages: 25,
+      },
+      context: { mode: "inherit", profile: null, account_id: null, region: null },
+    },
+  });
+
+  const row = codeArtifactRows(page).filter({ hasText: "demo-package" });
+  await row.locator("td").first().click();
+  const detail = widget.locator("tr.row-detail");
+  await expect(detail.locator("time.codeartifact-version-published")).toHaveCount(3);
+  await expect(detail).toContainText("3.2.0.260701.101500+def5678");
+  await expect.poll(() => page.evaluate(() => (
+    window.__codeArtifactHistoryInvocations.length
+  ))).toBe(1);
+  expect(await page.evaluate(() => window.__codeArtifactHistoryInvocations[0])).toEqual({
+    params: {
+      widget: "codeartifact-package-version-history",
+      inputs: {
+        domain: "demo-domain",
+        repository: "demo_repo",
+        domain_owner: "",
+        package: "demo-package",
+        versions: [
+          { version: "3.2.1.260715.083000+abc1234", published: "2026-07-15T08:30:00Z" },
+          { version: "3.2.0.260701.101500+def5678", published: "" },
+          { version: "3.1.0.260615.074500+987fedc", published: "" },
+        ],
+      },
+      context: { mode: "inherit", profile: null, account_id: null, region: null },
+    },
+  });
+  await row.locator("td").first().click();
+  await row.locator("td").first().click();
+  await expect(detail.locator("time.codeartifact-version-published")).toHaveCount(3);
+  await expect.poll(() => page.evaluate(() => (
+    window.__codeArtifactHistoryInvocations.length
+  ))).toBe(1);
+
+  await prefix.fill("updated");
+  await refresh.click();
+  await expect.poll(() => page.evaluate(() => window.__codeArtifactInvocations.length)).toBe(2);
+  expect(await page.evaluate(() => (
+    window.__codeArtifactInvocations[1].params.inputs.package_prefix
+  ))).toBe("updated");
+
+  await domain.fill("");
+  await refresh.click();
+  await expect(widget.locator(".codeartifact-packages-error")).toHaveText(
+    "Domain, repository, and package prefix are required."
+  );
+  await expect.poll(() => page.evaluate(() => window.__codeArtifactInvocations.length)).toBe(2);
 });
 
 test("persists widget configuration across browser reloads", async ({ page }) => {

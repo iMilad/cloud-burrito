@@ -2216,3 +2216,193 @@ body {
 .combo-list {
   border-radius: 8px;
 }
+
+/* ============ CodeArtifact packages ============ */
+.codeartifact-packages-body {
+  container-type: inline-size;
+}
+
+.codeartifact-packages-config {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(82px, 0.6fr);
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+
+.codeartifact-packages-config > label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.codeartifact-packages-config > label > input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.codeartifact-packages-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.codeartifact-packages-error:empty {
+  display: none;
+}
+
+@container (max-width: 540px) {
+  .codeartifact-packages-config {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.events-table tr.expandable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.codeartifact-packages-rows .events-table > tbody > tr.expandable > td:first-child::before {
+  display: inline-block;
+  width: 12px;
+  margin-right: 3px;
+  color: var(--text-muted);
+  content: "›";
+  transform-origin: center;
+  transition: transform 0.14s ease;
+}
+
+.codeartifact-packages-rows .events-table > tbody > tr.expanded > td:first-child::before {
+  transform: rotate(90deg);
+}
+
+.codeartifact-latest-version {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: flex-start;
+  gap: 6px;
+  vertical-align: middle;
+}
+
+.codeartifact-latest-version-value,
+.codeartifact-version-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.codeartifact-latest-version-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.codeartifact-copy-btn {
+  flex: none;
+  opacity: 0.72;
+}
+
+.codeartifact-copy-btn:hover,
+.codeartifact-copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.codeartifact-version-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 14px 10px;
+}
+
+.codeartifact-version-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+
+.codeartifact-version-history-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.codeartifact-version-history-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+.codeartifact-version-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.codeartifact-version-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-elev) 76%, transparent);
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.codeartifact-version-item:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elev);
+}
+
+.codeartifact-version-rank {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.codeartifact-version-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.codeartifact-version-value {
+  display: block;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.codeartifact-version-published {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.codeartifact-version-date-missing {
+  font-style: italic;
+}
+
+.codeartifact-version-history-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+}
+
+@container (min-width: 1100px) {
+  .codeartifact-version-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

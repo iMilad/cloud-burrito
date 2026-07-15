@@ -100,10 +100,59 @@ const Mock = (() => {
   ];
 
   const codeArtifactPackages = [
-    { package: "example-config-library", latest_version: "0.8.3", last_published: "2026-06-21T10:14:00Z" },
-    { package: "example-deploy-tools", latest_version: "1.4.1", last_published: "2026-06-18T08:40:00Z" },
-    { package: "example-aws-constructs", latest_version: "2.2.0", last_published: "2026-06-10T13:25:00Z" },
-    { package: "example-policy-pack", latest_version: "0.5.7", last_published: "2026-05-29T15:02:00Z" },
+    {
+      package: "example-config-library",
+      latest_version: "1.2.1.260701.093637+9c0581c",
+      last_published: "2026-07-01T09:36:37Z",
+      versions: [
+        { version: "1.2.1.260701.093637+9c0581c", published: "2026-07-01T09:36:37Z" },
+        { version: "1.2.0.260624.133554+7e8c4d2", published: "2026-06-24T13:35:54Z" },
+        { version: "1.1.1.260624.064731+4f91bc8", published: "2026-06-24T06:47:31Z" },
+        { version: "1.1.1.260520.083120+7d70ced", published: "2026-05-20T08:31:20Z" },
+        { version: "1.1.0.260520.082952+a6e6f44", published: "2026-05-20T08:29:52Z" },
+        { version: "1.1.0.260218.160335+8bd32a1", published: "2026-02-18T16:03:35Z" },
+        { version: "1.1.0.260218.123958+6ac417e", published: "2026-02-18T12:39:58Z" },
+        { version: "1.1.0.260218.123329+d910be7", published: "2026-02-18T12:33:29Z" },
+        { version: "1.1.0.260218.115705+e04c4a9", published: "2026-02-18T11:57:05Z" },
+        { version: "1.1.0.260217.143437+14d2544", published: "2026-02-17T14:34:37Z" },
+      ],
+    },
+    {
+      package: "example-deploy-tools",
+      latest_version: "1.4.1",
+      last_published: "2026-06-18T08:40:00Z",
+      versions: [
+        { version: "1.4.1", published: "2026-06-18T08:40:00Z" },
+        { version: "1.4.0", published: "2026-06-04T11:12:00Z" },
+        { version: "1.3.2", published: "2026-05-22T14:06:00Z" },
+        { version: "1.3.1", published: "2026-05-06T09:31:00Z" },
+        { version: "1.3.0", published: "2026-04-15T12:45:00Z" },
+        { version: "1.2.1", published: "2026-03-28T07:58:00Z" },
+      ],
+    },
+    {
+      package: "example-aws-constructs",
+      latest_version: "2.2.0",
+      last_published: "2026-06-10T13:25:00Z",
+      versions: [
+        { version: "2.2.0", published: "2026-06-10T13:25:00Z" },
+        { version: "2.1.1", published: "2026-05-19T16:18:00Z" },
+        { version: "2.1.0", published: "2026-04-30T10:42:00Z" },
+        { version: "2.0.0", published: "2026-03-11T08:05:00Z" },
+      ],
+    },
+    {
+      package: "example-policy-pack",
+      latest_version: "0.5.7",
+      last_published: "2026-05-29T15:02:00Z",
+      versions: [
+        { version: "0.5.7", published: "2026-05-29T15:02:00Z" },
+        { version: "0.5.6", published: "2026-05-13T09:27:00Z" },
+        { version: "0.5.5", published: "2026-04-24T11:49:00Z" },
+        { version: "0.5.4", published: "2026-04-02T13:36:00Z" },
+        { version: "0.5.3", published: "2026-03-17T08:21:00Z" },
+      ],
+    },
   ];
 
   // A finite pool of fake log lines. The log-tail widget cycles through these.
