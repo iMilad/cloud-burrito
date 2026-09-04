@@ -13,6 +13,7 @@
     "allow-aws-auth-status",
     "allow-cli-availability",
     "allow-widget-fetch",
+    "allow-request-cancel",
     "allow-widget-get-source",
     "allow-settings-get",
     "allow-settings-set",

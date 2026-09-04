@@ -61,10 +61,12 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     if let Some(denied) = ctx.preflight("cloudformation", "DescribeStackResources") {
         return denied;
     }
-    let resources: Vec<Value> = match client
-        .describe_stack_resources()
-        .stack_name(&stack)
-        .send()
+    let resources: Vec<Value> = match ctx
+        .send(
+            "cloudformation",
+            "DescribeStackResources",
+            client.describe_stack_resources().stack_name(&stack).send(),
+        )
         .await
     {
         Ok(response) => response
@@ -133,10 +135,12 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             Some("Stack events were not permitted; the available resources are retained.".into()),
         );
     }
-    let response = match client
-        .describe_stack_events()
-        .stack_name(&stack)
-        .send()
+    let response = match ctx
+        .send(
+            "cloudformation",
+            "DescribeStackEvents",
+            client.describe_stack_events().stack_name(&stack).send(),
+        )
         .await
     {
         Ok(response) => response,

@@ -320,6 +320,9 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
     window.__TAURI__ = {
       core: {
         invoke: async (command, payload) => {
+          if (command === "request_cancel") {
+            const params = payload?.params || {}; if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID"); return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
+          }
           if (command === "widget_fetch") {
             if (payload?.params?.widget === "codeartifact-packages") {
               window.__codeArtifactInvocations.push(payload);
@@ -410,7 +413,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
   expect(await page.evaluate(() => window.__codeArtifactInvocations[0])).toEqual({
     params: {
       widget: "codeartifact-packages",
-      request_id: expect.stringMatching(/^ui-\d+$/),
+      request_id: expect.stringMatching(/^ui-[a-z0-9]+-[a-z0-9]+-\d+$/),
       inputs: {
         domain: "demo-domain",
         repository: "demo_repo",
@@ -432,7 +435,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
   expect(await page.evaluate(() => window.__codeArtifactHistoryInvocations[0])).toEqual({
     params: {
       widget: "codeartifact-package-version-history",
-      request_id: expect.stringMatching(/^ui-\d+$/),
+      request_id: expect.stringMatching(/^ui-[a-z0-9]+-[a-z0-9]+-\d+$/),
       inputs: {
         domain: "demo-domain",
         repository: "demo_repo",

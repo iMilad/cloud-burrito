@@ -37,6 +37,7 @@ async function boot(page, response = table, options = {}) {
       const params = payload?.params || {};
       let value;
       switch (name) {
+        case "request_cancel": if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID"); return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
         case "ping": value = { version: "synthetic" }; break;
         case "cli_availability": value = { ok: true, status: "available", available: true, version_verified: false }; break;
         case "settings_get": value = settingsResponse("loaded"); break;

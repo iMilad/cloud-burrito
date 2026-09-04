@@ -7,8 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 use futures::future::join_all;
 use serde_json::{json, Map, Value};
 
-use super::coverage::Coverage;
 use super::handoff::{self, Source};
+use super::{budget::PageBudget, coverage::Coverage};
 use super::{err_msg, WidgetCtx};
 
 const DEFAULT_MAX: i64 = 25;
@@ -161,7 +161,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     if max_results <= 0 {
         max_results = DEFAULT_MAX;
     }
-    let max_results = max_results as usize;
+    let max_results = max_results.clamp(1, 1000) as usize;
 
     if query.is_empty() {
         return json!({"render": "reverse_lookup", "query": "", "matches": []});
@@ -179,6 +179,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let mut capped = false;
     let mut result_limited = false;
     let mut page_error = None;
+    let mut budget = PageBudget::default();
     if let Some(denied) = ctx.preflight("resourcegroupstaggingapi", "GetResources") {
         return denied;
     }
@@ -187,7 +188,10 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         if let Some(t) = &token {
             req = req.pagination_token(t);
         }
-        let resp = match req.send().await {
+        let resp = match ctx
+            .send("resourcegroupstaggingapi", "GetResources", req.send())
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 page_error = Some(err_msg(e));
@@ -199,6 +203,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             .pagination_token()
             .filter(|token| !token.is_empty())
             .map(str::to_string);
+        let continue_scan = budget.advance(token.as_deref());
         for (index, rec) in resp.resource_tag_mapping_list().iter().enumerate() {
             scanned += 1;
             let arn = rec.resource_arn().unwrap_or("").to_string();
@@ -211,6 +216,9 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                     // resourcegroupstagging Tag has required key/value -> &str.
                     tags.insert(t.key().to_string(), json!(t.value()));
                 }
+                if !budget.retain(&json!({"arn":arn, "tags":tags})) {
+                    break 'pages;
+                }
                 matches_raw.push((arn, Value::Object(tags)));
                 if matches_raw.len() >= max_results {
                     result_limited =
@@ -219,7 +227,8 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                 }
             }
         }
-        if token.is_none() {
+        if !continue_scan || budget.stopped() {
+            capped = pages >= MAX_PAGES && token.is_some();
             break;
         }
         if pages >= MAX_PAGES {
@@ -260,10 +269,14 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let futs = enrich.iter().map(|(arn, probe)| {
         let cfn = cfn.clone();
         async move {
-            let stack = cfn
-                .describe_stack_resources()
-                .physical_resource_id(&probe.physical_id)
-                .send()
+            let stack = ctx
+                .send(
+                    "cloudformation",
+                    "DescribeStackResources",
+                    cfn.describe_stack_resources()
+                        .physical_resource_id(&probe.physical_id)
+                        .send(),
+                )
                 .await
                 .map(|response| confirmed_stack(response.stack_resources(), probe, ctx))
                 .map_err(|_| Source::OwnershipFailed);
@@ -374,6 +387,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             "Some resources have no confirmed stack association in the selected context.",
         );
     }
+    budget.apply(&mut listing, !matches.is_empty());
     let mut coverage = Coverage::complete(matches.len());
     coverage.section("matches", listing);
     coverage.section("enrichment", enrichment);

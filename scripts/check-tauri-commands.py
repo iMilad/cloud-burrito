@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_COMMANDS = {
     "ping", "aws_set_account", "aws_list_profiles", "aws_list_pipelines",
-    "aws_auth_status", "cli_availability", "widget_fetch", "widget_get_source",
+    "aws_auth_status", "cli_availability", "widget_fetch", "request_cancel", "widget_get_source",
     "settings_get", "settings_set", "dashboard_get", "dashboard_set",
     "audit_tail", "policy_get", "policy_set",
 }

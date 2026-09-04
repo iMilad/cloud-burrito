@@ -57,6 +57,13 @@ impl RequestEnvelope {
         self
     }
 
+    pub(crate) fn work_id(&self) -> String {
+        self.id
+            .clone()
+            .or_else(|| self.audit.as_ref().map(|(_, _, id)| id.clone()))
+            .expect("work registration follows request auditing")
+    }
+
     pub(crate) fn runtime(&self, fallback: &Runtime) -> Runtime {
         self.audit
             .as_ref()

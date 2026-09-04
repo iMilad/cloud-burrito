@@ -1,6 +1,7 @@
 //! Atomic connection state. Only the latest attempt may publish an outcome.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -20,6 +21,33 @@ pub(crate) struct PinnedKey {
 
 pub(crate) struct CachedContext {
     pub context: AwsContext,
+    pub last_used: std::time::Instant,
+}
+
+pub(crate) struct PendingContext {
+    pub context: AwsContext,
+    pub lease: Weak<ContextLease>,
+}
+
+pub(crate) struct ContextLease {
+    pub connection: Weak<Mutex<ConnectionState>>,
+    pub key: String,
+    pub context_id: u64,
+}
+
+impl Drop for ContextLease {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.upgrade() {
+            let mut connection = connection.lock();
+            if connection
+                .pending_contexts
+                .get(&self.key)
+                .is_some_and(|pending| pending.context.id() == self.context_id)
+            {
+                connection.pending_contexts.remove(&self.key);
+            }
+        }
+    }
 }
 
 pub(crate) struct ConnectionState {
@@ -31,6 +59,7 @@ pub(crate) struct ConnectionState {
     pub status: &'static str,
     pub active: Option<AwsContext>,
     pub overrides: HashMap<PinnedKey, CachedContext>,
+    pub pending_contexts: HashMap<String, PendingContext>,
     pub last_attempt: Option<Value>,
     pub set_account_at: Option<f64>,
 }
@@ -46,16 +75,19 @@ impl Default for ConnectionState {
             status: "disconnected",
             active: None,
             overrides: HashMap::new(),
+            pending_contexts: HashMap::new(),
             last_attempt: None,
             set_account_at: None,
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AppState {
     pub runtime: Runtime,
-    pub(crate) connection: Mutex<ConnectionState>,
+    pub(crate) connection: Arc<Mutex<ConnectionState>>,
+    pub(crate) work: Arc<crate::work_registry::WorkRegistry>,
+    observed_policy: Arc<Mutex<(Option<String>, u64)>>,
 }
 
 impl AppState {
@@ -63,8 +95,45 @@ impl AppState {
     pub fn with_runtime(runtime: Runtime) -> Self {
         Self {
             runtime,
-            connection: Mutex::default(),
+            connection: Arc::default(),
+            work: Arc::default(),
+            observed_policy: Arc::default(),
         }
+    }
+
+    pub(crate) fn observe_policy(
+        &self,
+        policy: &Result<crate::aws::policy::Policy, String>,
+    ) -> u64 {
+        let key = match policy {
+            Ok(policy) => serde_json::to_string(
+                &policy
+                    .statements
+                    .iter()
+                    .map(|statement| {
+                        (
+                            match statement.effect {
+                                crate::aws::policy::Effect::Allow => "allow",
+                                crate::aws::policy::Effect::Deny => "deny",
+                            },
+                            &statement.actions,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .expect("policy can be serialized"),
+            Err(_) => "invalid".into(),
+        };
+        let mut observed = self.observed_policy.lock();
+        if observed.0.as_ref() != Some(&key) {
+            let changed = observed.0.is_some();
+            observed.0 = Some(key);
+            observed.1 += 1;
+            if changed {
+                self.work.cancel_jobs();
+            }
+        }
+        observed.1
     }
 
     #[cfg(test)]
@@ -87,9 +156,11 @@ impl AppState {
             state.sso_constraint = sso_constraint.to_string();
             state.settings_revision += 1;
             if was_configured {
+                self.work.cancel_all();
                 state.attempt += 1;
                 state.active = None;
                 state.overrides.clear();
+                state.pending_contexts.clear();
                 state.set_account_at = None;
                 state.status = "disconnected";
                 if let Some(last) = state.last_attempt.as_mut() {
@@ -104,6 +175,7 @@ impl AppState {
 
     /// A broken app-settings file cannot leave a formerly verified context usable.
     pub(crate) fn invalidate_settings(&self) {
+        self.work.cancel_all();
         let mut state = self.connection.lock();
         if !state.settings_failed {
             state.settings_failed = true;
@@ -112,6 +184,7 @@ impl AppState {
         }
         state.active = None;
         state.overrides.clear();
+        state.pending_contexts.clear();
         state.set_account_at = None;
         state.status = "failed";
     }
@@ -131,6 +204,9 @@ impl AppState {
 
     pub(crate) fn invalidate_context(&self, id: u64, error_type: &str, message: &str) {
         let mut state = self.connection.lock();
+        state
+            .pending_contexts
+            .retain(|_, pending| pending.context.id() != id);
         state
             .overrides
             .retain(|_, cached| cached.context.id() != id);

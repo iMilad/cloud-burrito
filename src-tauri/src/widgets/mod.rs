@@ -8,6 +8,7 @@
 //! never a shell — after exact operation, argument and policy checks.
 
 mod aws_cli;
+pub(crate) mod budget;
 pub(crate) use aws_cli::parse_cli_command;
 mod cfn_stack_detail;
 mod cfn_stacks;
@@ -32,12 +33,14 @@ use crate::runtime::Runtime;
 
 /// Explicit per-request authority supplied only after connection verification.
 /// Do not derive Debug: AWS Credentials Debug includes the access-key ID.
+#[derive(Clone)]
 pub(crate) struct CliAccess {
     pub credentials: aws_credential_types::Credentials,
     pub cancellation: crate::process::ProcessCancellation,
 }
 
 /// The per-fetch execution surface a widget is allowed to use.
+#[derive(Clone)]
 pub struct WidgetCtx {
     pub runtime: Runtime,
     pub sdk: SdkConfig,
@@ -51,6 +54,121 @@ pub struct WidgetCtx {
 }
 
 impl WidgetCtx {
+    /// Schedule the SDK operation only after local authorization. The future
+    /// stays unpolled while queued; the shared scope bounds retries and pages.
+    pub(crate) async fn send<T, E, F>(
+        &self,
+        service: &str,
+        operation: &str,
+        future: F,
+    ) -> Result<T, crate::scheduler::WorkFailure>
+    where
+        E: aws_smithy_types::error::metadata::ProvideErrorMetadata,
+        F: std::future::Future<Output = Result<T, E>>,
+    {
+        use crate::scheduler::{ResourceKind, WorkFailure};
+        crate::aws::policy::gate(&self.policy, service, operation)
+            .map_err(|_| WorkFailure::new("WorkPolicyDenied"))?;
+        let fallback;
+        let scope = if let Some(scope) = &self.runtime.work {
+            scope
+        } else {
+            fallback = self.fallback_scope();
+            &fallback
+        };
+        let cleanup;
+        let (scope, kind) = if service == "logs" && operation == "StopQuery" {
+            cleanup = scope.cleanup_scope();
+            (&cleanup, ResourceKind::Cleanup)
+        } else {
+            (scope, ResourceKind::Ordinary)
+        };
+        self.runtime
+            .scheduler
+            .run(scope, service, kind, async {
+                self.authorize_dispatch(service, operation).await?;
+                scope.check()?;
+                future.await.map_err(WorkFailure::service)
+            })
+            .await?
+    }
+
+    pub(crate) async fn authorize_dispatch(
+        &self,
+        service: &str,
+        operation: &str,
+    ) -> Result<(), crate::scheduler::WorkFailure> {
+        use crate::scheduler::WorkFailure;
+        let gate = |policy: &Result<crate::aws::policy::Policy, String>| {
+            if self.widget_name == "aws-cli" {
+                crate::aws::policy::gate_cli(policy, service, operation)
+            } else {
+                crate::aws::policy::gate(policy, service, operation)
+            }
+        };
+        gate(&self.policy).map_err(|_| WorkFailure::new("WorkPolicyDenied"))?;
+        let paths = self.runtime.paths.clone();
+        let current = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || crate::runtime::read_current_policy(&paths, true)),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| Err("policy unavailable".into()));
+        if gate(&current).is_err()
+            || matches!(
+                crate::aws::policy::credential_preflight(&current, service, operation),
+                crate::aws::policy::CredentialPreflight::Denied { .. }
+            )
+        {
+            self.audit_call(
+                service,
+                operation,
+                "aws-blocked",
+                Some("Policy changed before dispatch"),
+            );
+            return Err(WorkFailure::new("WorkPolicyDenied"));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn query_permit(
+        &self,
+    ) -> Result<crate::scheduler::Permit, crate::scheduler::WorkFailure> {
+        let fallback;
+        let scope = if let Some(scope) = &self.runtime.work {
+            scope
+        } else {
+            fallback = self.fallback_scope();
+            &fallback
+        };
+        self.runtime
+            .scheduler
+            .acquire(scope, "logs", crate::scheduler::ResourceKind::Query)
+            .await
+    }
+
+    fn fallback_scope(&self) -> crate::scheduler::WorkScope {
+        crate::scheduler::WorkScope::new(
+            format!("isolated-widget:{}:{}", self.account_id, self.region),
+            self.account_id.clone(),
+            self.region.clone(),
+            self.cli
+                .as_ref()
+                .map(|cli| cli.cancellation.clone())
+                .unwrap_or_default(),
+            crate::scheduler::WorkBudget::for_widget(&self.widget_name),
+        )
+        .with_priority(
+            if self.widget_name == "codeartifact-packages" && self.input_str("mode", "") != "list" {
+                crate::scheduler::Priority::Background
+            } else {
+                crate::scheduler::Priority::Interactive
+            },
+        )
+    }
+
     pub fn input_str(&self, key: &str, default: &str) -> String {
         self.inputs
             .get(key)
@@ -188,6 +306,17 @@ pub fn dt_secs(dt: Option<&DateTime>) -> Option<f64> {
 /// Transport/construction failures and unknown codes use the same fixed fallback.
 pub fn err_msg<E: aws_smithy_types::error::metadata::ProvideErrorMetadata>(e: E) -> String {
     match e.code() {
+        Some("WorkPolicyDenied") => "This request was denied by the current local policy.",
+        Some("WorkCancelled") => "This request was cancelled before it completed.",
+        Some("WorkDeadline") => {
+            "This request reached its time limit. Narrow the inputs and try again."
+        }
+        Some("WorkOperationLimit") => {
+            "This request reached its operation limit. Narrow the inputs to load more."
+        }
+        Some("WorkQueueFull") => {
+            "The request queue is full. Wait for current work to finish and try again."
+        }
         Some(
             "AccessDenied"
             | "AccessDeniedException"
@@ -234,6 +363,100 @@ pub fn err_msg<E: aws_smithy_types::error::metadata::ProvideErrorMetadata>(e: E)
 /// Dispatch a fetch to the named widget. Never panics; unknown names return an
 /// inline error render.
 pub async fn fetch(name: &str, ctx: &WidgetCtx) -> Value {
+    let scoped;
+    let ctx = if ctx.runtime.work.is_some() {
+        ctx
+    } else {
+        scoped = WidgetCtx {
+            runtime: ctx.runtime.with_work(ctx.fallback_scope()),
+            ..ctx.clone()
+        };
+        &scoped
+    };
+    let _cli_permit = if name == "aws-cli" {
+        let scope = ctx
+            .runtime
+            .work
+            .as_ref()
+            .expect("fetch always has a work scope");
+        match ctx
+            .runtime
+            .scheduler
+            .acquire(scope, "cli", crate::scheduler::ResourceKind::Cli)
+            .await
+        {
+            Ok(permit) => Some(permit),
+            Err(error) => return json!({"ok":false, "error":err_msg(error)}),
+        }
+    } else {
+        None
+    };
+    if name == "aws-cli" {
+        if let Ok(parsed) = parse_cli_command(&ctx.input_str("command", "")) {
+            if ctx
+                .authorize_dispatch(&parsed.service, &parsed.operation)
+                .await
+                .is_err()
+            {
+                return permission_denied_render(
+                    &parsed.service,
+                    &parsed.operation,
+                    "not allowed by your read-only policy",
+                );
+            }
+            if let Err(error) = ctx.runtime.work.as_ref().expect("scoped fetch").check() {
+                return json!({"ok":false,"error":err_msg(error)});
+            }
+        }
+    }
+    let mut output = fetch_scoped(name, ctx).await;
+    output["_budget"] = json!(ctx.runtime.scheduler.snapshot());
+    let limit = ctx
+        .runtime
+        .work
+        .as_ref()
+        .expect("scoped fetch")
+        .budget
+        .response_bytes;
+    if response_fits(&output, limit) {
+        output
+    } else {
+        let mut failure = json!({"ok":false,"error_type":"WorkResponseLimit",
+            "error":"This result exceeds the local response limit. Narrow the inputs and refresh.",
+            "coverage":{"completeness":"unknown","has_more":null,"reasons":[{"code":"response_bytes","message":"The complete result was withheld because it exceeds the response byte limit."}]}});
+        if let Some(cleanup) = output
+            .get("cleanup")
+            .filter(|value| response_fits(value, 4096))
+        {
+            failure["cleanup"] = cleanup.clone();
+        }
+        failure["recovery_required"] = json!(output
+            .get("recovery_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false));
+        failure["_budget"] = output["_budget"].take();
+        failure
+    }
+}
+
+fn response_fits(value: &Value, limit: usize) -> bool {
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.0 {
+                return Err(std::io::Error::other("response byte limit"));
+            }
+            self.0 -= bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(Budget(limit), value).is_ok()
+}
+
+async fn fetch_scoped(name: &str, ctx: &WidgetCtx) -> Value {
     match name {
         "aws-cli" => aws_cli::fetch(ctx).await,
         "cfn-stacks" => cfn_stacks::fetch(ctx).await,
@@ -628,5 +851,217 @@ mod capability_tests {
                 assert_eq!(counters.transport.load(Ordering::SeqCst), 0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+    use crate::{
+        scheduler::{ResourceKind, WorkBudget, WorkScope},
+        test_aws::ScriptedHttp,
+        test_support::TestDir,
+    };
+
+    #[tokio::test]
+    async fn policy_changed_while_queued_prevents_sdk_dispatch() {
+        let dir = TestDir::new();
+        let http = ScriptedHttp::new(vec![]);
+        let ctx = http.context(
+            &dir,
+            "pipeline-runs",
+            json!({"pipeline_name":"synthetic-pipeline"}),
+        );
+        let scope = WorkScope::new(
+            "synthetic-authority".into(),
+            ctx.account_id.clone(),
+            ctx.region.clone(),
+            crate::process::ProcessCancellation::new(),
+            WorkBudget::for_widget("pipeline-runs"),
+        );
+        let mut permits = Vec::new();
+        for _ in 0..4 {
+            permits.push(
+                ctx.runtime
+                    .scheduler
+                    .acquire(&scope, "codepipeline", ResourceKind::Ordinary)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let request = fetch("pipeline-runs", &ctx);
+        tokio::pin!(request);
+        assert!(futures::poll!(&mut request).is_pending());
+        assert_eq!(ctx.runtime.scheduler.snapshot().queued, 1);
+        crate::aws::policy::write_text(
+            &dir.paths(),
+            "statements:\n - effect: Deny\n   action: ['codepipeline:ListPipelineExecutions']\n",
+        )
+        .unwrap();
+        drop(permits);
+        let output = request.await;
+        assert_eq!(http.calls(), 0);
+        assert_eq!(ctx.runtime.scheduler.snapshot().ordinary, 0);
+        assert!(output.to_string().contains("denied"));
+        http.assert_finished();
+    }
+    #[tokio::test]
+    async fn queued_cli_rechecks_exact_policy_before_any_process_dispatch() {
+        let dir = TestDir::new();
+        let http = ScriptedHttp::new(vec![]);
+        struct CountProcess(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl crate::process::ProcessRunner for CountProcess {
+            fn run(
+                &self,
+                _: crate::process::CliRequest,
+            ) -> futures::future::BoxFuture<'_, Result<crate::process::ProcessOutput, String>>
+            {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async {
+                    Ok(crate::process::ProcessOutput {
+                        stdout: b"[]".to_vec(),
+                        stderr: vec![],
+                        success: true,
+                    })
+                })
+            }
+        }
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut ctx = http.context(
+            &dir,
+            "aws-cli",
+            json!({"command":"aws cloudformation list-stacks"}),
+        );
+        ctx.runtime.process = std::sync::Arc::new(CountProcess(calls.clone()));
+        ctx.cli = Some(CliAccess {
+            credentials: aws_credential_types::Credentials::new(
+                "CB_SYNTHETIC_KEY",
+                "CB_SYNTHETIC_SECRET",
+                Some("CB_SYNTHETIC_TOKEN".into()),
+                Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000)),
+                "synthetic-test",
+            ),
+            cancellation: crate::process::ProcessCancellation::new(),
+        });
+        let scope = ctx.fallback_scope();
+        let first = ctx
+            .runtime
+            .scheduler
+            .acquire(&scope, "cli", ResourceKind::Cli)
+            .await
+            .unwrap();
+        let second = ctx
+            .runtime
+            .scheduler
+            .acquire(&scope, "cli", ResourceKind::Cli)
+            .await
+            .unwrap();
+        let request = fetch("aws-cli", &ctx);
+        tokio::pin!(request);
+        assert!(futures::poll!(&mut request).is_pending());
+        crate::aws::policy::write_text(
+            &dir.paths(),
+            "statements:\n - effect: Deny\n   action: ['cloudformation:ListStacks']\n",
+        )
+        .unwrap();
+        drop(first);
+        let output = request.await;
+        assert!(output.to_string().contains("denied"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(ctx.runtime.scheduler.snapshot().cli, 1);
+        drop(second);
+        assert_eq!(ctx.runtime.scheduler.snapshot().cli, 0);
+        http.assert_finished();
+    }
+    #[tokio::test]
+    async fn producer_result_exceeding_ipc_budget_is_withheld_as_incomplete() {
+        let dir = TestDir::new();
+        let marker = "SYNTHETIC_LARGE_RESULT".repeat(80);
+        let http = ScriptedHttp::new(vec![crate::test_aws::ExpectedRequest::json(
+            "CodePipeline_20150709.ListPipelineExecutions",
+            json!({}),
+            json!({"pipelineExecutionSummaries":[{"pipelineExecutionId":"synthetic-id","status":"Succeeded","statusSummary":marker}]}),
+        )]);
+        let mut ctx = http.context(
+            &dir,
+            "pipeline-runs",
+            json!({"pipeline_name":"synthetic-pipeline"}),
+        );
+        let mut scope = ctx.fallback_scope();
+        scope.budget.response_bytes = 128;
+        ctx.runtime = ctx.runtime.with_work(scope);
+        let result = fetch("pipeline-runs", &ctx).await;
+        assert_eq!(result["error_type"], "WorkResponseLimit");
+        assert_eq!(result["coverage"]["completeness"], "unknown");
+        assert!(!result.to_string().contains("SYNTHETIC_LARGE_RESULT"));
+        assert_eq!(http.calls(), 1);
+        http.assert_finished();
+    }
+    #[tokio::test]
+    async fn sdk_retry_attempts_remain_inside_shared_permits_for_fifty_pins() {
+        #[derive(Debug)]
+        struct TestSleep;
+        impl aws_sdk_codepipeline::config::AsyncSleep for TestSleep {
+            fn sleep(&self, duration: std::time::Duration) -> aws_sdk_codepipeline::config::Sleep {
+                aws_sdk_codepipeline::config::Sleep::new(tokio::time::sleep(duration))
+            }
+        }
+        let dir = TestDir::new();
+        crate::aws::policy::write_text(
+            &dir.paths(),
+            "statements:\n - effect: Allow\n   action: ['*']\n",
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+        for index in 0..50 {
+            let fields = json!({"pipelineName":format!("synthetic-{index}")});
+            expected.push(
+                crate::test_aws::ExpectedRequest::json(
+                    "CodePipeline_20150709.ListPipelineExecutions",
+                    fields.clone(),
+                    json!({"__type":"ServiceUnavailableException"}),
+                )
+                .status(503)
+                .delay(std::time::Duration::from_millis(2)),
+            );
+            expected.push(
+                crate::test_aws::ExpectedRequest::json(
+                    "CodePipeline_20150709.ListPipelineExecutions",
+                    fields,
+                    json!({"pipelineExecutionSummaries":[]}),
+                )
+                .delay(std::time::Duration::from_millis(2)),
+            );
+        }
+        let http = ScriptedHttp::new(expected).unordered();
+        let runtime = Runtime::for_test(dir.paths());
+        let mut contexts = Vec::new();
+        for index in 0..50 {
+            let mut ctx = http.context(
+                &dir,
+                "pipeline-runs",
+                json!({"pipeline_name":format!("synthetic-{index}")}),
+            );
+            ctx.runtime = runtime.clone();
+            ctx.sdk = ctx
+                .sdk
+                .into_builder()
+                .sleep_impl(TestSleep)
+                .retry_config(
+                    aws_config::retry::RetryConfig::standard()
+                        .with_max_attempts(2)
+                        .with_initial_backoff(std::time::Duration::ZERO),
+                )
+                .build();
+            contexts.push(ctx);
+        }
+        let results =
+            futures::future::join_all(contexts.iter().map(|ctx| fetch("pipeline-runs", ctx))).await;
+        assert!(results.iter().all(|result| result.get("error").is_none()));
+        http.assert_finished();
+        assert_eq!(http.calls(), 100);
+        assert!(http.snapshot().peak_active_http_attempts <= 4);
+        assert_eq!(runtime.scheduler.snapshot().logical_operations, 50);
+        assert_eq!(runtime.scheduler.snapshot().ordinary, 0);
     }
 }

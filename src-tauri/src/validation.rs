@@ -49,6 +49,11 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
             request_id(p)?;
             request_context(p)
         }
+        "request_cancel" => {
+            keys(p, &["request_id"])?;
+            request_id(p)?;
+            required_text(p, "request_id", 128, false).map(|_| ())
+        }
         "widget_fetch" => {
             keys(
                 p,

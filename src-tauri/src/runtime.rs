@@ -22,6 +22,7 @@ use crate::aws::config_file::{self, SsoProfileSelection, SsoProfileSnapshot};
 use crate::aws::AwsContext;
 use crate::paths::AppPaths;
 use crate::process::{NativeProcessRunner, ProcessRunner};
+use crate::scheduler::{Scheduler, WorkScope};
 
 pub trait Clock: Send + Sync {
     fn now_epoch(&self) -> f64;
@@ -62,7 +63,14 @@ fn require_live_aws() {
 fn safe_sdk_config(region: &str) -> SdkConfig {
     let mut builder = SdkConfig::builder()
         .behavior_version(BehaviorVersion::latest())
-        .region(Region::new(region.to_string()));
+        .region(Region::new(region.to_string()))
+        .retry_config(aws_config::retry::RetryConfig::standard().with_max_attempts(2))
+        .timeout_config(
+            aws_config::timeout::TimeoutConfig::builder()
+                .operation_attempt_timeout(std::time::Duration::from_secs(10))
+                .operation_timeout(std::time::Duration::from_secs(20))
+                .build(),
+        );
     builder.set_time_source(Some(Default::default()));
     builder.build()
 }
@@ -311,6 +319,40 @@ pub(crate) fn fixed_sdk_config(
         .build()
 }
 
+/// Re-read local policy without retaining paths or parser diagnostics in errors.
+/// Initialization is allowed for normal app work; cleanup never creates policy.
+pub(crate) fn read_current_policy(
+    paths: &AppPaths,
+    initialize_missing: bool,
+) -> Result<crate::aws::policy::Policy, String> {
+    static CURRENT_POLICY_READ: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    let _read = CURRENT_POLICY_READ.lock();
+    let path = crate::aws::policy::policy_path(paths);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() <= 2 * 1024 * 1024 => {}
+        Ok(_) => return Err("policy unavailable".into()),
+        Err(error) if initialize_missing && error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("policy unavailable".into()),
+    }
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if initialize_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            return crate::aws::policy::load(paths).map_err(|_| "policy unavailable".into());
+        }
+        Err(_) => return Err("policy unavailable".into()),
+    };
+    const LIMIT: u64 = 2 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    file.take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "policy unavailable".to_string())?;
+    if bytes.len() as u64 > LIMIT {
+        return Err("policy unavailable".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "policy unavailable".to_string())?;
+    crate::aws::policy::Policy::parse(text).map_err(|_| "policy unavailable".into())
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     pub paths: AppPaths,
@@ -318,6 +360,8 @@ pub struct Runtime {
     pub aws: Arc<dyn AwsBackend>,
     pub process: Arc<dyn ProcessRunner>,
     pub clock: Arc<dyn Clock>,
+    pub(crate) scheduler: Arc<Scheduler>,
+    pub(crate) work: Option<WorkScope>,
     audit_write_failed: Arc<AtomicBool>,
     audit_request_id: Option<String>,
 }
@@ -333,11 +377,19 @@ impl Default for Runtime {
             clock: Arc::new(SystemClock),
             audit_write_failed: Arc::new(AtomicBool::new(false)),
             audit_request_id: None,
+            scheduler: Arc::new(Scheduler::default()),
+            work: None,
         }
     }
 }
 
 impl Runtime {
+    pub(crate) fn with_work(&self, work: WorkScope) -> Self {
+        let mut scoped = self.clone();
+        scoped.work = Some(work);
+        scoped
+    }
+
     pub fn audit(&self, mut entry: Value) {
         if let Some(id) = &self.audit_request_id {
             entry["request_id"] = serde_json::json!(id);
@@ -371,6 +423,8 @@ impl Runtime {
             clock: Arc::new(FixedClock(1_700_000_000.0)),
             audit_write_failed: Arc::new(AtomicBool::new(false)),
             audit_request_id: None,
+            scheduler: Arc::new(Scheduler::default()),
+            work: None,
         }
     }
 }

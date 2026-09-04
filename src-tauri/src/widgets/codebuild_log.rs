@@ -4,10 +4,10 @@
 use serde_json::{json, Value};
 
 use super::handoff::{self, Source};
-use super::{coverage::Coverage, err_msg, WidgetCtx};
+use super::{budget::PageBudget, coverage::Coverage, err_msg, WidgetCtx};
 
 const PAGE_LIMIT: i32 = 10_000; // events per GetLogEvents call (API cap ~10k/1MB)
-const MAX_EVENTS: usize = 10_000; // stop after a whole page reaches this threshold
+const MAX_EVENTS: usize = 10_000;
 
 fn with_handoffs(mut result: Value) -> Value {
     let group = result["log_group"].as_str().unwrap_or("");
@@ -42,7 +42,14 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         return with_handoffs(denied);
     }
     let cb = aws_sdk_codebuild::Client::new(&ctx.sdk);
-    let builds = match cb.batch_get_builds().ids(&build_id).send().await {
+    let builds = match ctx
+        .send(
+            "codebuild",
+            "BatchGetBuilds",
+            cb.batch_get_builds().ids(&build_id).send(),
+        )
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             let mut coverage = Coverage::unknown(0);
@@ -123,6 +130,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let mut truncated = false;
     let mut pages = 0;
     let mut failure = None;
+    let mut budget = PageBudget::default();
     loop {
         let mut req = cw
             .get_log_events()
@@ -133,7 +141,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         if let Some(t) = &token {
             req = req.next_token(t);
         }
-        let resp = match req.send().await {
+        let resp = match ctx.send("logs", "GetLogEvents", req.send()).await {
             Ok(r) => r,
             Err(e) => {
                 failure = Some(err_msg(e));
@@ -142,26 +150,40 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             }
         };
         pages += 1;
-        for ev in resp.events() {
+        let next = resp
+            .next_forward_token()
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
+        // CloudWatch repeats the requested forward token at the observed end.
+        let observed_end = next.is_none() || next == token;
+        let continue_scan = budget.advance(if observed_end { None } else { next.as_deref() });
+        for (index, ev) in resp.events().iter().enumerate() {
             let ts = ev.timestamp().unwrap_or(0);
             let msg = ev.message().unwrap_or("").to_string();
             let level = level_for(&msg);
-            events.push(json!({"ts": ts, "msg": msg, "level": level}));
+            let row = json!({"ts": ts, "msg": msg, "level": level});
+            if !budget.retain(&row) {
+                truncated = true;
+                break;
+            }
+            events.push(row);
+            if events.len() >= MAX_EVENTS {
+                truncated = index + 1 < resp.events().len() || !observed_end;
+                break;
+            }
         }
-        let next = resp.next_forward_token().map(str::to_string);
-        if next.is_none() || next == token {
-            break; // reached the end of the stream
-        }
-        token = next;
-        if events.len() >= MAX_EVENTS {
-            truncated = true;
+        if !continue_scan || budget.stopped() || events.len() >= MAX_EVENTS {
             break;
         }
+        token = next;
     }
 
     let mut coverage = Coverage::complete(events.len());
     coverage.count("pages", pages);
+    coverage.limit("events", Some(MAX_EVENTS));
+    // Keep the prior additive key for consumers migrating from the threshold.
     coverage.limit("stop_after_events", Some(MAX_EVENTS));
+    budget.apply(&mut coverage, !events.is_empty());
     if failure.is_some() {
         coverage.failure(
             "log_page_failed",
@@ -170,7 +192,10 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         );
     } else if truncated {
         coverage.has_more(None);
-        coverage.limited("event_stop_threshold", "Reading stopped after the event threshold; the final page can exceed that threshold and more events may exist.");
+        coverage.limited(
+            "event_limit",
+            "Reading stopped at the local event or result byte limit; additional events may exist.",
+        );
     }
 
     let mut result = json!({"render": "log_stream", "build_id":build_id, "log_group": group, "log_stream":stream, "events": events});
@@ -243,7 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn whole_final_page_overshoot_is_reported_as_threshold_not_hard_cap() {
+    async fn final_page_respects_the_hard_event_cap() {
         let dir = TestDir::new();
         let events: Vec<_> = (0..9_999)
             .map(|i| json!({"timestamp":i,"message":"synthetic event"}))
@@ -267,8 +292,8 @@ mod tests {
         .await;
         script.assert_finished();
         assert_eq!(script.calls(), 3);
-        assert_eq!(result["events"].as_array().unwrap().len(), 10_002);
-        assert_eq!(result["coverage"]["counts"]["returned"], 10_002);
+        assert_eq!(result["events"].as_array().unwrap().len(), 10_000);
+        assert_eq!(result["coverage"]["counts"]["returned"], 10_000);
         assert_eq!(result["coverage"]["limits"]["stop_after_events"], 10_000);
         assert_eq!(result["coverage"]["completeness"], "limited");
         assert!(result["coverage"]["has_more"].is_null());

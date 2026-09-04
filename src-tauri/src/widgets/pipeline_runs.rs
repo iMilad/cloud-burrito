@@ -16,11 +16,16 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     if let Some(denied) = ctx.preflight("codepipeline", "ListPipelineExecutions") {
         return denied;
     }
-    let resp = match client
-        .list_pipeline_executions()
-        .pipeline_name(&pipeline_name)
-        .max_results(max_results)
-        .send()
+    let resp = match ctx
+        .send(
+            "codepipeline",
+            "ListPipelineExecutions",
+            client
+                .list_pipeline_executions()
+                .pipeline_name(&pipeline_name)
+                .max_results(max_results)
+                .send(),
+        )
         .await
     {
         Ok(r) => r,

@@ -51,18 +51,32 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    let started = match client
-        .start_query()
-        .log_group_name(&log_group)
-        .start_time(now - range)
-        .end_time(now)
-        .query_string(&query)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return json!({"ok": false, "error": err_msg(e)}),
+    let _query_permit = match ctx.query_permit().await {
+        Ok(permit) => permit,
+        Err(error) => return json!({"ok":false,"error":err_msg(error)}),
     };
+    let started =
+        match ctx
+            .send(
+                "logs",
+                "StartQuery",
+                client
+                    .start_query()
+                    .log_group_name(&log_group)
+                    .start_time(now - range)
+                    .end_time(now)
+                    .query_string(&query)
+                    .customize()
+                    .config_override(aws_sdk_cloudwatchlogs::config::Builder::new().retry_config(
+                        aws_config::retry::RetryConfig::standard().with_max_attempts(1),
+                    ))
+                    .send(),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return json!({"ok": false, "error": err_msg(e)}),
+        };
     let Some(query_id) = started.query_id().map(str::to_string) else {
         return unknown_query_failure(
             "AWS did not return a query identifier; the remote query state is unknown.",
@@ -71,7 +85,14 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
 
     let deadline = Instant::now() + POLL_BUDGET;
     loop {
-        let resp = match client.get_query_results().query_id(&query_id).send().await {
+        let resp = match ctx
+            .send(
+                "logs",
+                "GetQueryResults",
+                client.get_query_results().query_id(&query_id).send(),
+            )
+            .await
+        {
             Ok(r) => r,
             Err(e) => return unknown_query_failure(&err_msg(e)),
         };
@@ -153,7 +174,14 @@ async fn stop_query_best_effort(
     let outcome = if ctx.preflight("logs", "StopQuery").is_some() {
         QueryCleanup::Denied
     } else {
-        cleanup_result(client.stop_query().query_id(query_id).send().await)
+        cleanup_result(
+            ctx.send(
+                "logs",
+                "StopQuery",
+                client.stop_query().query_id(query_id).send(),
+            )
+            .await,
+        )
     };
     ctx.log("query cleanup", json!({"cleanup_status": outcome.status()}));
     outcome

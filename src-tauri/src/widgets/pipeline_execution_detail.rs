@@ -72,11 +72,16 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let filter = ActionExecutionFilter::builder()
         .pipeline_execution_id(&execution_id)
         .build();
-    let resp = match client
-        .list_action_executions()
-        .pipeline_name(&pipeline_name)
-        .filter(filter)
-        .send()
+    let resp = match ctx
+        .send(
+            "codepipeline",
+            "ListActionExecutions",
+            client
+                .list_action_executions()
+                .pipeline_name(&pipeline_name)
+                .filter(filter)
+                .send(),
+        )
         .await
     {
         Ok(r) => r,

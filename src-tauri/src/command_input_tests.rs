@@ -216,7 +216,7 @@ fn local_tauri_command_capability_and_csp_stay_narrow() {
     assert_eq!(capability["windows"], json!(["main"]));
     assert!(capability.get("remote").is_none());
     assert_ne!(capability["local"], false);
-    let expected = ["ping", "aws-set-account", "aws-list-profiles", "aws-list-pipelines", "aws-auth-status", "cli-availability", "widget-fetch", "widget-get-source", "settings-get", "settings-set", "dashboard-get", "dashboard-set", "audit-tail", "policy-get", "policy-set"];
+    let expected = ["ping", "aws-set-account", "aws-list-profiles", "aws-list-pipelines", "aws-auth-status", "cli-availability", "widget-fetch", "widget-get-source", "settings-get", "settings-set", "dashboard-get", "dashboard-set", "audit-tail", "policy-get", "policy-set", "request-cancel"];
     let permissions = capability["permissions"].as_array().unwrap();
     assert_eq!(permissions.len(), expected.len());
     for command in expected { assert!(permissions.contains(&json!(format!("allow-{command}")))); }

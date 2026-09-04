@@ -1,4 +1,4 @@
-//! CloudFormation Stacks — list every non-deleted stack, enrich the first 20
+//! CloudFormation Stacks — list a bounded non-deleted stack scan, enrich the first 20
 //! with a resource count (concurrently). The enrichment is best-effort and
 //! bounded so the widget never explodes into thousands of API calls.
 
@@ -8,10 +8,11 @@ use aws_sdk_cloudformation::types::StackStatus;
 use futures::future::join_all;
 use serde_json::{json, Value};
 
-use super::coverage::Coverage;
+use super::{budget::PageBudget, coverage::Coverage};
 use super::{dt_iso, err_msg, WidgetCtx};
 
 const ENRICH_LIMIT: usize = 20;
+const MAX_STACKS: usize = 1_000;
 
 fn include_stack_status(status: Option<&str>, has_explicit_filter: bool) -> bool {
     has_explicit_filter || status != Some("DELETE_COMPLETE")
@@ -33,6 +34,8 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let mut token: Option<String> = None;
     let mut pages = 0usize;
     let mut page_error = None;
+    let mut budget = PageBudget::default();
+    let mut result_limited = false;
     loop {
         if let Some(denied) = ctx.preflight("cloudformation", "ListStacks") {
             if pages == 0 {
@@ -47,7 +50,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         if let Some(next_token) = &token {
             req = req.next_token(next_token);
         }
-        let resp = match req.send().await {
+        let resp = match ctx.send("cloudformation", "ListStacks", req.send()).await {
             Ok(r) => r,
             Err(e) => {
                 page_error = Some(err_msg(e));
@@ -55,32 +58,40 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             }
         };
         pages += 1;
-        summaries.extend(
-            resp.stack_summaries()
-                .iter()
-                .filter(|summary| {
-                    include_stack_status(
-                        summary.stack_status().map(StackStatus::as_str),
-                        status_filters.is_some(),
-                    )
-                })
-                .cloned(),
-        );
+        for (index, summary) in resp.stack_summaries().iter().enumerate() {
+            if !include_stack_status(
+                summary.stack_status().map(StackStatus::as_str),
+                status_filters.is_some(),
+            ) || !summary
+                .stack_name()
+                .is_some_and(|name| name.starts_with(&name_prefix))
+            {
+                continue;
+            }
+            let projected = json!({
+                "stack": summary.stack_name().unwrap_or(""),
+                "status": summary.stack_status().map(StackStatus::as_str).unwrap_or(""),
+                "resources": 100,
+                "last_updated": dt_iso(summary.last_updated_time().or_else(|| summary.creation_time())),
+            });
+            if !budget.retain(&projected) {
+                break;
+            }
+            summaries.push(summary.clone());
+            if summaries.len() >= MAX_STACKS {
+                result_limited = index + 1 < resp.stack_summaries().len()
+                    || resp.next_token().is_some_and(|t| !t.is_empty());
+                break;
+            }
+        }
         token = resp
             .next_token()
             .filter(|value| !value.is_empty())
             .map(str::to_string);
-        if token.is_none() {
+        let continue_scan = budget.advance(token.as_deref());
+        if !continue_scan || budget.stopped() || summaries.len() >= MAX_STACKS {
             break;
         }
-    }
-
-    if !name_prefix.is_empty() {
-        summaries.retain(|s| {
-            s.stack_name()
-                .map(|n| n.starts_with(&name_prefix))
-                .unwrap_or(false)
-        });
     }
 
     // Enrich the first 20 stacks with their resource count, concurrently.
@@ -105,10 +116,12 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         let client = client.clone();
         let name = name.clone();
         async move {
-            let n = client
-                .describe_stack_resources()
-                .stack_name(&name)
-                .send()
+            let n = ctx
+                .send(
+                    "cloudformation",
+                    "DescribeStackResources",
+                    client.describe_stack_resources().stack_name(&name).send(),
+                )
                 .await
                 .map(|r| r.stack_resources().len())
                 .map_err(err_msg);
@@ -140,7 +153,15 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
 
     let mut listing = Coverage::complete(rows.len());
     listing.count("pages", pages);
-    listing.limit("results", None);
+    listing.limit("results", Some(MAX_STACKS));
+    budget.apply(&mut listing, !rows.is_empty());
+    if result_limited {
+        listing.has_more(None);
+        listing.limited(
+            "result_limit",
+            "The local stack result limit stopped this scan; additional matching stacks may exist.",
+        );
+    }
     if page_error.is_some() {
         listing.failure(
             "request_failed",

@@ -16,11 +16,13 @@ mod paths;
 mod process;
 mod request;
 mod runtime;
+mod scheduler;
 mod settings;
 mod state;
 mod storage;
 mod validation;
 mod widgets;
+mod work_registry;
 
 use state::AppState;
 
@@ -52,6 +54,7 @@ pub fn run() {
             commands::aws_auth_status,
             commands::cli_availability,
             commands::widget_fetch,
+            commands::request_cancel,
             commands::widget_get_source,
             commands::settings_get,
             commands::settings_set,

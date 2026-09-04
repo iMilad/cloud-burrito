@@ -49,6 +49,7 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
     function defaultResponse(call) {
       const { command, params, context } = call;
       switch (command) {
+        case "request_cancel": if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID"); return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
         case "ping": return { ok: true, version: "synthetic-test" };
         case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };
         case "settings_get": return settingsResponse("loaded");
@@ -203,6 +204,56 @@ const requestFor = (name, extra = {}) => ({ command: "widget_fetch", widget: nam
 const widgetCalls = (page, name) => page.evaluate((name) => window.__requestHarness.calls.filter(
   (call) => call.command === "widget_fetch" && call.params.widget === name
 ), name);
+
+const cancellationIds = page => page.evaluate(() => window.__requestHarness.calls
+  .filter(call => call.command === "request_cancel").map(call => call.params.request_id));
+
+test("explicit Cancel acknowledges locally and waits for the owned remote cleanup outcome", async ({ page }) => {
+  await boot(page, [tile("cfn-stacks")]);
+  const surface = widget(page, "cfn-stacks");
+  await hold(page, requestFor("cfn-stacks"));
+  await refresh(surface);
+  const pending = await next(page, requestFor("cfn-stacks"));
+  const before = (await widgetCalls(page, "cfn-stacks")).length;
+  await surface.getByRole("button", { name: "Cancel current request" }).click();
+  await expect(surface.locator(".request-cancel-status")).toHaveText("Cancelled locally. Remote cleanup is not yet confirmed.");
+  expect(await cancellationIds(page)).toContain(pending.params.request_id);
+  expect((await widgetCalls(page, "cfn-stacks")).length).toBe(before);
+  await reply(page, pending, { ok: false, error_type: "QueryCancelled", error: "Synthetic cancellation outcome",
+    cleanup: { status: "not_confirmed", remote_queries_may_still_run: true } }, { outcome: "cancelled" });
+  await expect(surface.locator(".result-cleanup")).toContainText("Remote stop was not confirmed.");
+  await expect(surface).toContainText("Remote queries may still be running.");
+  await expect(surface.getByRole("button", { name: "Cancel current request" })).toHaveCount(0);
+});
+
+test("refresh supersedes only the old subscriber and never renders its late result", async ({ page }) => {
+  await boot(page, [tile("cfn-stacks")]);
+  const surface = widget(page, "cfn-stacks");
+  await hold(page, requestFor("cfn-stacks"));
+  await refresh(surface);
+  const old = await next(page, requestFor("cfn-stacks"));
+  const before = (await widgetCalls(page, "cfn-stacks")).length;
+  await refresh(surface);
+  await expect.poll(() => cancellationIds(page)).toContain(old.params.request_id);
+  expect((await widgetCalls(page, "cfn-stacks")).length).toBe(before + 1);
+  await reply(page, old, { render: "table", columns: ["stack"], rows: [{ stack: "obsolete-cancelled-stack" }] });
+  await expect(surface).not.toContainText("obsolete-cancelled-stack");
+});
+
+test("closing a pending nested detail cancels that subscriber without refreshing its parent", async ({ page }) => {
+  await boot(page, [tile("cfn-stacks")]);
+  const surface = widget(page, "cfn-stacks");
+  const before = (await widgetCalls(page, "cfn-stacks")).length;
+  await hold(page, requestFor("cfn-stack-detail"));
+  const row = surface.locator("tr.expandable").first();
+  await row.focus(); await row.press("Enter");
+  const detail = await next(page, requestFor("cfn-stack-detail"));
+  await row.press("Enter");
+  await expect.poll(() => cancellationIds(page)).toContain(detail.params.request_id);
+  expect((await widgetCalls(page, "cfn-stacks")).length).toBe(before);
+  await reply(page, detail);
+  await expect(surface.locator(".row-detail")).toHaveCount(0);
+});
 
 test("a saved live CLI command waits for verification and reloads under the next account", async ({ page }) => {
   const command = "aws sts get-caller-identity";

@@ -38,6 +38,7 @@ async function boot(page, options = {}) {
       const params = payload?.params || {};
       fixture.calls.push({ command, params: structuredClone(params) });
       switch (command) {
+        case "request_cancel": if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID"); return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
         case "ping": return { version: "synthetic" };
         case "settings_get": return settings;
         case "settings_set": return { ...settings, ...params, _storage: { status: "saved" } };

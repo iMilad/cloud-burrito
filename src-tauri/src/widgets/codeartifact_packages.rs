@@ -10,7 +10,7 @@ use futures::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
-use super::coverage::Coverage;
+use super::{budget::PageBudget, coverage::Coverage};
 use super::{dt_iso, err_msg, WidgetCtx};
 
 const DEFAULT_DOMAIN: &str = "example-domain";
@@ -258,7 +258,10 @@ pub async fn fetch_version_history(ctx: &WidgetCtx) -> Value {
 
     let described = stream::iter(requests)
         .map(|(index, version, request)| async move {
-            let (row, failed) = match request.send().await {
+            let (row, failed) = match ctx
+                .send("codeartifact", "DescribePackageVersion", request.send())
+                .await
+            {
                 Ok(response) => (
                     json!({
                         "version": version,
@@ -391,6 +394,8 @@ async fn list_packages(
     let mut pages = 0usize;
     let mut error = None;
     let mut denied_page = false;
+    let mut budget = PageBudget::default();
+    let mut locally_omitted = false;
 
     while packages.len() < max_packages {
         if let Some(denied) = ctx.preflight("codeartifact", "ListPackages") {
@@ -417,7 +422,7 @@ async fn list_packages(
             req = req.next_token(token);
         }
 
-        let resp = match req.send().await {
+        let resp = match ctx.send("codeartifact", "ListPackages", req.send()).await {
             Ok(response) => response,
             Err(failure) => {
                 error = Some(err_msg(failure));
@@ -425,23 +430,28 @@ async fn list_packages(
             }
         };
         pages += 1;
-        packages.extend(
-            resp.packages()
-                .iter()
-                .filter_map(|summary| summary.package().map(str::to_string)),
-        );
-
         next_token = resp
             .next_token()
             .filter(|token| !token.is_empty())
             .map(str::to_string);
-        if next_token.is_none() {
+        let continue_scan = budget.advance(next_token.as_deref());
+        for package in resp
+            .packages()
+            .iter()
+            .filter_map(|summary| summary.package())
+        {
+            if packages.len() >= max_packages || !budget.retain(&json!(package)) {
+                locally_omitted = true;
+                break;
+            }
+            packages.push(package.to_string());
+        }
+        if !continue_scan || budget.stopped() {
             break;
         }
     }
 
-    let limited =
-        packages.len() > max_packages || (packages.len() >= max_packages && next_token.is_some());
+    let limited = locally_omitted || (packages.len() >= max_packages && next_token.is_some());
     packages.truncate(max_packages);
     let mut coverage = Coverage::complete(packages.len());
     coverage.count("pages", pages);
@@ -464,6 +474,7 @@ async fn list_packages(
             pages > 0,
         );
     }
+    budget.apply(&mut coverage, !packages.is_empty());
     Ok(PackageListing {
         packages,
         coverage,
@@ -496,7 +507,10 @@ async fn latest_package_row(
         versions_req = versions_req.domain_owner(domain_owner);
     }
 
-    let versions = match versions_req.send().await {
+    let versions = match ctx
+        .send("codeartifact", "ListPackageVersions", versions_req.send())
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             return Ok(PackageRow {
@@ -555,7 +569,14 @@ async fn latest_package_row(
         describe_req = describe_req.domain_owner(domain_owner);
     }
 
-    let described = match describe_req.send().await {
+    let described = match ctx
+        .send(
+            "codeartifact",
+            "DescribePackageVersion",
+            describe_req.send(),
+        )
+        .await
+    {
         Ok(v) => v,
         Err(e) => {
             return Ok(PackageRow {

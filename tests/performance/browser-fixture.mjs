@@ -121,6 +121,9 @@ export function installSyntheticBridge(options) {
       if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       let result;
       switch (command) {
+        case "request_cancel":
+          if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID");
+          result = { ok: true, cancelled_locally: true, cleanup_confirmed: false }; break;
         case "ping": result = { ok: true, version: "synthetic-benchmark" }; break;
         case "settings_get": result = settingsResponse("loaded"); break;
         case "settings_set": Object.assign(settings, params); result = settingsResponse("saved"); break;

@@ -23,6 +23,106 @@ use crate::test_support::TestDir;
 const ACCOUNT_A: &str = "acct-a-fixture";
 const ACCOUNT_B: &str = "acct-b-fixture";
 
+#[tokio::test]
+async fn fifty_identical_cold_pins_share_one_verified_context_and_one_worker() {
+    let fixture = Fixture::new();
+    fixture.aws.ready(
+        "demo-a",
+        "CB_SYNTHETIC_SHARED_PIN",
+        ACCOUNT_A,
+        "principal-a",
+        3000,
+    );
+    let finish = fixture.process.queue_output();
+    let requests: Vec<_> = (0..50)
+        .map(|index| {
+            let mut params = pinned("demo-a", ACCOUNT_A);
+            params["widget"] = json!("aws-cli");
+            params["inputs"] = json!({"command":"aws sts get-caller-identity"});
+            params["request_id"] = json!(format!("synthetic-pin-{index}"));
+            widget_fetch_impl(&fixture.state, params)
+        })
+        .collect();
+    let all = futures::future::join_all(requests);
+    tokio::pin!(all);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fixture.process.calls.load(Ordering::SeqCst) == 0 {
+            assert!(futures::poll!(&mut all).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 1);
+    finish
+        .send(Ok(process_output("synthetic shared result")))
+        .unwrap();
+    let results = all.await;
+    let mut context_ids = std::collections::HashSet::new();
+    for (index, result) in results.into_iter().enumerate() {
+        let result = result.unwrap();
+        assert_eq!(result["render"], "table");
+        assert_eq!(result["_request"]["id"], format!("synthetic-pin-{index}"));
+        context_ids.insert(
+            result["_request"]["context_id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    assert_eq!(context_ids.len(), 1);
+    assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 1);
+    assert!(fixture.state.connection.lock().pending_contexts.is_empty());
+}
+
+#[tokio::test]
+async fn cancellation_that_overtakes_widget_dispatch_prevents_provider_and_cli_work() {
+    let fixture = Fixture::new();
+    fixture.state.work.cancel("synthetic-already-cancelled");
+    let mut params = pinned("demo-a", ACCOUNT_A);
+    params["widget"] = json!("aws-cli");
+    params["inputs"] = json!({"command":"aws sts get-caller-identity"});
+    params["request_id"] = json!("synthetic-already-cancelled");
+    let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(result["error_type"], "Cancelled");
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+}
+
+#[test]
+fn pending_context_leases_bound_capacity_and_release_after_the_last_waiter_drops() {
+    let fixture = Fixture::new();
+    let params: Vec<_> = (0..129)
+        .map(|index| pinned(&format!("synthetic-cold-{index}"), ACCOUNT_A))
+        .collect();
+    let mut reservations: Vec<_> = params[..128]
+        .iter()
+        .map(|params| resolve_widget_ctx(&fixture.state, params).unwrap())
+        .collect();
+    assert_eq!(fixture.state.connection.lock().pending_contexts.len(), 128);
+    let overflow = resolve_widget_ctx(&fixture.state, &params[128]);
+    assert!(matches!(overflow, Err(ref error) if error["error_type"] == "QueueFull"));
+
+    // Existing waiters share a lease even at capacity. One dropped request
+    // cannot release another waiter's reservation or create a duplicate context.
+    let shared = resolve_widget_ctx(&fixture.state, &params[127]).unwrap();
+    assert_eq!(shared.context.id(), reservations[127].context.id());
+    drop(reservations.pop().unwrap());
+    assert_eq!(fixture.state.connection.lock().pending_contexts.len(), 128);
+    drop(shared);
+    assert_eq!(fixture.state.connection.lock().pending_contexts.len(), 127);
+    let replacement = resolve_widget_ctx(&fixture.state, &params[128]).unwrap();
+    assert_eq!(fixture.state.connection.lock().pending_contexts.len(), 128);
+    drop(replacement);
+    drop(reservations);
+    assert!(fixture.state.connection.lock().pending_contexts.is_empty());
+    // This exercises reservation/drop only; it must never resolve credentials.
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+}
+
 type Responses<T> = Mutex<HashMap<String, VecDeque<oneshot::Receiver<Result<T, String>>>>>;
 
 #[derive(Default)]
@@ -1225,7 +1325,14 @@ async fn invalidated_cli_waits_for_cancellation_and_runner_completion_before_ret
         let (mut cancelled, finish_process) = fixture.process.wait_for_cancellation();
         let pending = widget_fetch_impl(&fixture.state, cli_params());
         tokio::pin!(pending);
-        assert!(futures::poll!(&mut pending).is_pending());
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while fixture.process.calls.load(Ordering::SeqCst) == 0 {
+                assert!(futures::poll!(&mut pending).is_pending());
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned CLI worker did not reach the fake runner");
         assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 1);
         match change {
             "selection" => {
@@ -1323,7 +1430,14 @@ async fn cli_cleanup_failure_is_visible_even_after_the_context_is_superseded() {
             let (mut cancelled, finish) = fixture.process.wait_for_cancellation();
             let pending = widget_fetch_impl(&fixture.state, cli_params());
             tokio::pin!(pending);
-            assert!(futures::poll!(&mut pending).is_pending());
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while fixture.process.calls.load(Ordering::SeqCst) == 0 {
+                    assert!(futures::poll!(&mut pending).is_pending());
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("owned CLI worker did not reach the fake runner");
             fixture.aws.ready(
                 "demo-b",
                 "CB_SYNTHETIC_NEW_ACTIVE",
@@ -1377,7 +1491,14 @@ async fn unrelated_topbar_switch_does_not_cancel_a_pinned_cli_request() {
     let finish_process = fixture.process.queue_output();
     let pending = widget_fetch_impl(&fixture.state, pinned_cli("demo-b", ACCOUNT_B));
     tokio::pin!(pending);
-    assert!(futures::poll!(&mut pending).is_pending());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fixture.process.calls.load(Ordering::SeqCst) == 0 {
+            assert!(futures::poll!(&mut pending).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("pinned CLI worker did not reach the fake runner");
     fixture.aws.ready(
         "demo-a",
         "CB_SYNTHETIC_ACTIVE_A2",
@@ -1571,9 +1692,16 @@ async fn request_lifecycle_has_one_terminal_outcome_and_no_client_arguments_in_a
 async fn dropping_a_pending_command_records_logical_cancellation_once() {
     let fixture = Fixture::new();
     fixture.connect_a("CB_SYNTHETIC_DROP_AUDIT", 3000).await;
-    let finish = fixture.process.queue_output();
+    let (cancelled, finish) = fixture.process.wait_for_cancellation();
     let mut pending = Box::pin(widget_fetch_impl(&fixture.state, cli_params()));
-    assert!(futures::poll!(&mut pending).is_pending());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fixture.process.calls.load(Ordering::SeqCst) == 0 {
+            assert!(futures::poll!(&mut pending).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owned CLI worker did not reach the fake runner");
     let started = crate::audit::tail(&fixture.state.runtime.paths, 1000)
         .into_iter()
         .find(|e| {
@@ -1581,7 +1709,28 @@ async fn dropping_a_pending_command_records_logical_cancellation_once() {
         })
         .unwrap();
     drop(pending);
-    assert!(finish.is_closed());
+    tokio::time::timeout(Duration::from_secs(3), cancelled)
+        .await
+        .expect("dropping the last waiter did not cancel the worker")
+        .expect("fake runner dropped its cancellation observer");
+    assert!(fixture.process.requests.lock()[0]
+        .cancellation
+        .is_cancelled());
+    assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 0);
+    // The owned worker retains the runner until termination/reap completes,
+    // even after the UI request and its one logical audit envelope are dropped.
+    assert!(!finish.is_closed());
+    finish
+        .send(Ok(process_output("synthetic dropped request cleanup")))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while fixture.process.completed.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owned CLI worker did not retain its cleanup completion");
+    assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 1);
     let events = audit_events_for(&fixture, &started["request_id"]);
     assert_eq!(
         events

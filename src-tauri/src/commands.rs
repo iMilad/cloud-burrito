@@ -390,10 +390,12 @@ fn pinned_context_fields(scope: &Value) -> Option<(&str, &str, &str)> {
     Some((field("profile")?, field("account_id")?, field("region")?))
 }
 
+#[derive(Clone)]
 struct ResolvedContext {
     context: AwsContext,
     /// Pinned requests are independent of topbar attempts; settings still apply.
     inherited_attempt: Option<u64>,
+    _reservation: Option<std::sync::Arc<crate::state::ContextLease>>,
 }
 
 fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContext, Value> {
@@ -417,10 +419,12 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
             }
             let session = effective_session_constraint(&user_settings, None)
                 .map_err(|message| request_error("SsoSessionConflict", message))?;
-            let connection = state.connection.lock();
+            let mut connection = state.connection.lock();
+            let pending_key =
+                json!([profile, account, region, path, session, revision]).to_string();
             let cached = connection
                 .overrides
-                .values()
+                .values_mut()
                 .find(|cached| {
                     let ctx = &cached.context;
                     ctx.profile == profile
@@ -430,9 +434,31 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
                         && ctx.aws_config_path == path
                         && ctx.sso_session_name == session
                 })
-                .map(|cached| cached.context.clone());
-            let context = cached.unwrap_or_else(|| {
-                AwsContext::new(
+                .map(|cached| {
+                    cached.last_used = std::time::Instant::now();
+                    cached.context.clone()
+                });
+            let (context, reservation) = if let Some(context) = cached {
+                (context, None)
+            } else if let Some((context, lease)) = connection
+                .pending_contexts
+                .get(&pending_key)
+                .and_then(|pending| {
+                    pending
+                        .lease
+                        .upgrade()
+                        .map(|lease| (pending.context.clone(), lease))
+                })
+            {
+                (context, Some(lease))
+            } else {
+                if connection.pending_contexts.len() >= 128 {
+                    return Err(request_error(
+                        "QueueFull",
+                        "Too many account contexts are waiting for verification",
+                    ));
+                }
+                let context = AwsContext::new(
                     profile.into(),
                     account.into(),
                     region.into(),
@@ -440,11 +466,25 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
                     path,
                     state.runtime.clone(),
                 )
-                .with_settings_revision(revision)
-            });
+                .with_settings_revision(revision);
+                let lease = std::sync::Arc::new(crate::state::ContextLease {
+                    connection: std::sync::Arc::downgrade(&state.connection),
+                    key: pending_key.clone(),
+                    context_id: context.id(),
+                });
+                connection.pending_contexts.insert(
+                    pending_key,
+                    crate::state::PendingContext {
+                        context: context.clone(),
+                        lease: std::sync::Arc::downgrade(&lease),
+                    },
+                );
+                (context, Some(lease))
+            };
             return Ok(ResolvedContext {
                 context,
                 inherited_attempt: None,
+                _reservation: reservation,
             });
         }
         if mode != "inherit" {
@@ -465,6 +505,7 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
     Ok(ResolvedContext {
         context,
         inherited_attempt: Some(connection.attempt),
+        _reservation: None,
     })
 }
 
@@ -547,6 +588,19 @@ async fn verify_request_context_owned(
                 && old.account_id == ctx.account_id
                 && old.region == ctx.region)
         });
+        connection
+            .pending_contexts
+            .retain(|_, pending| pending.context.id() != resolved.context.id());
+        if connection.overrides.len() >= 64 {
+            if let Some(oldest) = connection
+                .overrides
+                .iter()
+                .min_by_key(|(_, cached)| cached.last_used)
+                .map(|(key, _)| key.clone())
+            {
+                connection.overrides.remove(&oldest);
+            }
+        }
         connection.overrides.insert(
             crate::state::PinnedKey {
                 snapshot: session.snapshot.clone(),
@@ -557,6 +611,7 @@ async fn verify_request_context_owned(
             },
             crate::state::CachedContext {
                 context: ctx.clone(),
+                last_used: std::time::Instant::now(),
             },
         );
     }
@@ -586,7 +641,19 @@ async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, Str
         Ok(request) => request,
         Err(error) => return Ok(error),
     };
-    let result = widget_fetch_request(state, params, &mut request).await;
+    let registration = match state.work.register(request.work_id()) {
+        Ok(registration) => registration,
+        Err(error) => return finish_request(request, Ok(error)),
+    };
+    let started = tokio::time::Instant::now();
+    let result = widget_fetch_request(
+        state,
+        params,
+        &mut request,
+        registration.cancellation.clone(),
+        started,
+    )
+    .await;
     finish_request(request, result)
 }
 
@@ -594,6 +661,8 @@ async fn widget_fetch_request(
     state: &AppState,
     params: Value,
     request: &mut RequestEnvelope,
+    cancellation: crate::process::ProcessCancellation,
+    started: tokio::time::Instant,
 ) -> Result<Value, String> {
     let name = params
         .get("widget")
@@ -610,6 +679,7 @@ async fn widget_fetch_request(
     }
 
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    let policy_revision = state.observe_policy(&policy);
     let inputs = params.get("inputs").cloned().unwrap_or_else(|| json!({}));
     if name == "aws-cli" {
         let command = inputs.get("command").and_then(Value::as_str).unwrap_or("");
@@ -648,10 +718,12 @@ async fn widget_fetch_request(
             return Ok(denied);
         }
     }
-    let session = match verify_request_context_owned(state, &resolved, &policy, Some(request)).await
-    {
-        Ok(session) => session,
-        Err(error) => return Ok(error),
+    let verification = verify_request_context_owned(state, &resolved, &policy, Some(request));
+    let session = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Ok(crate::work_registry::cancelled_result()),
+        _ = tokio::time::sleep_until(started + crate::scheduler::WorkBudget::for_widget(&name).deadline) => return Ok(request_error("WorkDeadline", "The request deadline was reached before verification completed")),
+        verified = verification => match verified { Ok(session) => session, Err(error) => return Ok(error) },
     };
     request.bind(&resolved.context, &session);
     let cli = if name == "aws-cli" {
@@ -671,50 +743,140 @@ async fn widget_fetch_request(
     } else {
         None
     };
-    let ctx = &resolved.context;
-    let wctx = widgets::WidgetCtx {
-        runtime: request.runtime(&state.runtime),
-        sdk: session.sdk.clone(),
-        account_id: session.identity.account_id.clone(),
-        region: ctx.region.clone(),
-        widget_name: name,
-        inputs,
-        policy,
-        cli,
-    };
-    let result = if let Some(cli) = &wctx.cli {
-        let work = widgets::fetch(&wctx.widget_name, &wctx);
-        tokio::pin!(work);
-        let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                biased;
-                _ = tick.tick() => {
-                    if let Err(error) = validate_request_context(state, &resolved, &session) {
-                        cli.cancellation.cancel();
-                        // The process owner confirms termination/reaping before
-                        // this command reports that the context was superseded.
-                        let cleanup = work.await;
-                        if retain_cli_cleanup_failure(&wctx, &cleanup) {
-                            return Ok(cleanup);
-                        }
-                        return Ok(error);
-                    }
-                }
-                result = &mut work => break result,
-            }
-        }
+    let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    if state.observe_policy(&current_policy) != policy_revision {
+        return Ok(request_error(
+            "PolicyChanged",
+            "Policy changed; refresh with the current permissions",
+        ));
+    }
+    let authority_key = json!([
+        resolved.context.id(),
+        session.provider_revision,
+        session.snapshot.settings_revision,
+        policy_revision,
+        session.identity.account_id,
+        session.identity.arn,
+        session.identity.user_id,
+        session.snapshot.profile,
+        session.snapshot.config_path,
+        session.snapshot.region
+    ])
+    .to_string();
+    let normalized_inputs = if name == "aws-cli" {
+        json!(
+            widgets::parse_cli_command(inputs["command"].as_str().unwrap_or_default())
+                .map(|command| command.argv)
+                .unwrap_or_default()
+        )
     } else {
-        widgets::fetch(&wctx.widget_name, &wctx).await
+        inputs.clone()
+    };
+    let key = json!([authority_key, name, normalized_inputs]).to_string();
+    let state_owned = state.clone();
+    let runtime = request.runtime(&state.runtime);
+    let result = state
+        .work
+        .coalesce(key, cancellation, move |job_cancellation| async move {
+            let mut scope = crate::scheduler::WorkScope::new(
+                authority_key,
+                session.identity.account_id.clone(),
+                resolved.context.region.clone(),
+                job_cancellation.clone(),
+                crate::scheduler::WorkBudget::for_widget(&name),
+            )
+            .with_recovery_authority_key(
+                json!([
+                    session.identity.account_id,
+                    session.identity.arn,
+                    session.identity.user_id,
+                    session.snapshot.profile,
+                    session.snapshot.config_path,
+                    session.snapshot.region
+                ])
+                .to_string(),
+            );
+            scope.deadline = started + scope.budget.deadline;
+            if inputs["mode"] == "enrich" {
+                scope = scope.with_priority(crate::scheduler::Priority::Background);
+            }
+            let cli = cli.map(|mut cli| {
+                cli.cancellation = job_cancellation;
+                cli
+            });
+            let wctx = widgets::WidgetCtx {
+                runtime: runtime.with_work(scope),
+                sdk: session.sdk.clone(),
+                account_id: session.identity.account_id.clone(),
+                region: resolved.context.region.clone(),
+                widget_name: name,
+                inputs,
+                policy,
+                cli,
+            };
+            run_widget_job(state_owned, resolved, session, wctx, policy_revision).await
+        })
+        .await;
+    Ok(result)
+}
+
+async fn run_widget_job(
+    state: AppState,
+    resolved: ResolvedContext,
+    session: std::sync::Arc<aws::context::VerifiedSession>,
+    wctx: widgets::WidgetCtx,
+    policy_revision: u64,
+) -> Value {
+    let work = widgets::fetch(&wctx.widget_name, &wctx);
+    tokio::pin!(work);
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let scope = wctx.runtime.work.as_ref().expect("production widget scope");
+    let result = loop {
+        tokio::select! {
+            biased;
+            _ = tick.tick() => {
+                let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+                if validate_request_context(&state, &resolved, &session).is_err()
+                    || state.observe_policy(&current_policy) != policy_revision
+                    || tokio::time::Instant::now() >= scope.deadline {
+                    scope.cancellation.cancel();
+                }
+            }
+            result = &mut work => break result,
+        }
     };
     if retain_cli_cleanup_failure(&wctx, &result) {
-        return Ok(result);
+        return result;
     }
-    if let Err(error) = validate_request_context(state, &resolved, &session) {
+    if let Err(mut error) = validate_request_context(&state, &resolved, &session) {
+        if let Some(cleanup) = result.get("cleanup") {
+            error["cleanup"] = cleanup.clone();
+        }
+        return error;
+    }
+    if scope.cancellation.is_cancelled() && result.get("cleanup").is_none() {
+        return crate::work_registry::cancelled_result();
+    }
+    let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    if state.observe_policy(&current_policy) != policy_revision {
+        return request_error(
+            "PolicyChanged",
+            "Policy changed while the request was running",
+        );
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn request_cancel(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
+    if let Some(error) = local_validation(&state, "request_cancel", &params) {
         return Ok(error);
     }
-    Ok(result)
+    state
+        .work
+        .cancel(params["request_id"].as_str().expect("validated request ID"));
+    Ok(json!({"ok":true,"cancelled_locally":true,"cleanup_confirmed":false}))
 }
 
 #[tauri::command]
@@ -864,7 +1026,18 @@ async fn aws_list_pipelines_impl(state: &AppState, params: Value) -> Result<Valu
         Ok(request) => request,
         Err(error) => return Ok(error),
     };
-    let result = aws_list_pipelines_request(state, params, &mut request).await;
+    let registration = match state.work.register(request.work_id()) {
+        Ok(registration) => registration,
+        Err(error) => return finish_request(request, Ok(error)),
+    };
+    let result = aws_list_pipelines_request(
+        state,
+        params,
+        &mut request,
+        registration.cancellation.clone(),
+        tokio::time::Instant::now(),
+    )
+    .await;
     finish_request(request, result)
 }
 
@@ -872,6 +1045,8 @@ async fn aws_list_pipelines_request(
     state: &AppState,
     params: Value,
     request: &mut RequestEnvelope,
+    cancellation: crate::process::ProcessCancellation,
+    started: tokio::time::Instant,
 ) -> Result<Value, String> {
     let resolved = match resolve_widget_ctx(state, &params) {
         Ok(context) => context,
@@ -879,6 +1054,7 @@ async fn aws_list_pipelines_request(
     };
     let ctx = &resolved.context;
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    let policy_revision = state.observe_policy(&policy);
     if let Err((action, reason)) = audit_aws_call(
         &request.runtime(&state.runtime),
         &policy,
@@ -892,13 +1068,70 @@ async fn aws_list_pipelines_request(
             &format!("Request blocked: {action}: {reason}"),
         ));
     }
-    let session = match verify_request_context_owned(state, &resolved, &policy, Some(request)).await
-    {
-        Ok(session) => session,
-        Err(error) => return Ok(error),
+    let verification = verify_request_context_owned(state, &resolved, &policy, Some(request));
+    let session = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Ok(crate::work_registry::cancelled_result()),
+        _ = tokio::time::sleep_until(started + std::time::Duration::from_secs(30)) => return Ok(request_error("WorkDeadline", "Pipeline discovery reached its deadline")),
+        verified = verification => match verified { Ok(session) => session, Err(error) => return Ok(error) },
     };
     request.bind(&resolved.context, &session);
-    let result = list_pipelines_with_coverage(&session.sdk).await;
+    let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    if state.observe_policy(&current_policy) != policy_revision {
+        return Ok(request_error(
+            "PolicyChanged",
+            "Policy changed during verification",
+        ));
+    }
+    let mut scope = crate::scheduler::WorkScope::new(
+        json!([
+            resolved.context.id(),
+            session.provider_revision,
+            policy_revision
+        ])
+        .to_string(),
+        session.identity.account_id.clone(),
+        resolved.context.region.clone(),
+        cancellation.clone(),
+        crate::scheduler::WorkBudget::for_widget("pipeline-selector"),
+    );
+    scope.deadline = started + scope.budget.deadline;
+    let wctx = widgets::WidgetCtx {
+        runtime: request.runtime(&state.runtime).with_work(scope),
+        sdk: session.sdk.clone(),
+        account_id: session.identity.account_id.clone(),
+        region: resolved.context.region.clone(),
+        widget_name: "pipeline-selector".into(),
+        inputs: json!({}),
+        policy: policy.clone(),
+        cli: None,
+    };
+    let work = list_pipelines_scoped(&wctx);
+    tokio::pin!(work);
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let result = loop {
+        tokio::select! {
+            biased;
+            _ = tick.tick() => {
+                let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e|e.message);
+                if validate_request_context(state, &resolved, &session).is_err() || state.observe_policy(&current_policy) != policy_revision {
+                    cancellation.cancel();
+                }
+            }
+            result = &mut work => break result,
+        }
+    };
+    let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    if state.observe_policy(&current_policy) != policy_revision {
+        return Ok(request_error(
+            "PolicyChanged",
+            "Policy changed during discovery",
+        ));
+    }
+    if cancellation.is_cancelled() {
+        return Ok(crate::work_registry::cancelled_result());
+    }
     if let Err(error) = validate_request_context(state, &resolved, &session) {
         return Ok(error);
     }
@@ -908,21 +1141,47 @@ async fn aws_list_pipelines_request(
 /// The command supplies a verified, frozen SDK configuration and fences the
 /// result afterwards. This helper retains pages without expanding the existing
 /// 200-pipeline result budget.
+#[cfg(test)]
 async fn list_pipelines_with_coverage(sdk: &aws_config::SdkConfig) -> Value {
+    let dir = crate::test_support::TestDir::new();
+    let runtime = crate::runtime::Runtime::for_test(dir.paths());
+    let scope = crate::scheduler::WorkScope::new(
+        "synthetic-selector".into(),
+        "acct-fixture".into(),
+        "us-east-1".into(),
+        crate::process::ProcessCancellation::new(),
+        crate::scheduler::WorkBudget::for_widget("pipeline-selector"),
+    );
+    let wctx = widgets::WidgetCtx {
+        runtime: runtime.with_work(scope),
+        sdk: sdk.clone(),
+        account_id: "acct-fixture".into(),
+        region: "us-east-1".into(),
+        widget_name: "pipeline-selector".into(),
+        inputs: json!({}),
+        policy: aws::policy::Policy::parse("statements:\n  - effect: Allow\n    action: ['*']\n")
+            .map_err(|e| e.message),
+        cli: None,
+    };
+    list_pipelines_scoped(&wctx).await
+}
+
+async fn list_pipelines_scoped(wctx: &widgets::WidgetCtx) -> Value {
     const RESULT_LIMIT: usize = 200;
-    let client = aws_sdk_codepipeline::Client::new(sdk);
+    let client = aws_sdk_codepipeline::Client::new(&wctx.sdk);
 
     let mut pipelines: Vec<Value> = Vec::new();
     let mut token: Option<String> = None;
     let mut pages = 0usize;
     let mut limited = false;
     let mut error = None;
+    let mut budget = widgets::budget::PageBudget::default();
     loop {
         let mut req = client.list_pipelines();
         if let Some(t) = &token {
             req = req.next_token(t);
         }
-        let resp = match req.send().await {
+        let resp = match wctx.send("codepipeline", "ListPipelines", req.send()).await {
             Ok(r) => r,
             Err(e) => {
                 error = Some(widgets::err_msg(e));
@@ -934,10 +1193,15 @@ async fn list_pipelines_with_coverage(sdk: &aws_config::SdkConfig) -> Value {
             .next_token()
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        let continue_scan = budget.advance(token.as_deref());
         for (index, p) in resp.pipelines().iter().enumerate() {
             if let Some(name) = p.name() {
                 let updated = widgets::dt_iso(p.updated().or_else(|| p.created()));
-                pipelines.push(json!({"name": name, "updated": updated}));
+                let row = json!({"name": name, "updated": updated});
+                if !budget.retain(&row) {
+                    break;
+                }
+                pipelines.push(row);
                 if pipelines.len() >= RESULT_LIMIT {
                     limited = index + 1 < resp.pipelines().len() || token.is_some();
                     break;
@@ -947,7 +1211,7 @@ async fn list_pipelines_with_coverage(sdk: &aws_config::SdkConfig) -> Value {
         if pipelines.len() >= RESULT_LIMIT {
             break;
         }
-        if token.is_none() {
+        if !continue_scan || budget.stopped() {
             break;
         }
     }
@@ -967,6 +1231,7 @@ async fn list_pipelines_with_coverage(sdk: &aws_config::SdkConfig) -> Value {
             "Additional pipelines were not loaded after the 200-pipeline limit.",
         );
     }
+    budget.apply(&mut coverage, !pipelines.is_empty());
     let mut result = json!({"ok":true, "pipelines":pipelines});
     if let Some(error) = error {
         coverage.failure(
@@ -1126,7 +1391,10 @@ fn policy_set_impl(state: &AppState, params: Value) -> Value {
     }
     let text = params["text"].as_str().unwrap_or_default().to_string();
     let result = match aws::policy::write_text(&state.runtime.paths, &text) {
-        Ok(_) => policy_status(state, text),
+        Ok(_) => {
+            state.observe_policy(&aws::policy::load(&state.runtime.paths).map_err(|e| e.message));
+            policy_status(state, text)
+        }
         // Only the intentional local policy editor receives its candidate text.
         Err(e) => json!({"raw":text, "valid":false, "error":e.message, "actions":[],
             "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()}),

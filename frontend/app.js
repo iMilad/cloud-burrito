@@ -22,7 +22,10 @@
     }
     return node;
   };
-  const clear = (node) => { while (node.firstChild) node.removeChild(node.firstChild); };
+  const clear = (node) => {
+    cancelPendingWithin(node, false);
+    while (node.firstChild) node.removeChild(node.firstChild);
+  };
 
   // One modal surface owns keyboard focus. Closed panels stay inert throughout
   // their visual transition; the scrim has no delayed hide that can race reopen.
@@ -458,13 +461,50 @@
 
   // A request belongs to a particular mounted surface, its ancestor lifetime,
   // and (unless explicitly pinned) one selection attempt. Equality of account
-  // labels alone cannot distinguish A -> B -> A. Discarding a result here is
-  // logical cancellation; it does not stop a remote query or subprocess.
+  // labels alone cannot distinguish A -> B -> A. Detaching also asks the
+  // backend to cancel this subscriber; the acknowledgement is not proof that
+  // remote work has stopped. A mounted explicit cancel can receive cleanup.
   let nextOwnedRequestId = 0;
   let configurationGeneration = 0;
+  const ownedRequestPageId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const pendingOwnedRequests = new Set();
+  const MAX_PENDING_OWNED_REQUESTS = 256;
+
+  function cancelOwnedRequest(request) {
+    request.cancelRequested = true;
+    if (request.cancelPromise) return request.cancelPromise;
+    if (!pendingOwnedRequests.delete(request)) return Promise.resolve({ ok: true, cancelled_locally: true, cleanup_confirmed: false });
+    request.cancelPromise = tauriInvoke("request_cancel", { params: { request_id: request.id } });
+    return request.cancelPromise;
+  }
+
+  function cancelPendingWithin(node, includeOwner = true) {
+    if (!node) return;
+    for (const request of pendingOwnedRequests) {
+      for (let ancestor = includeOwner ? request.owner : request.owner.parentNode; ancestor; ancestor = ancestor.parentNode) {
+        if (ancestor !== node) continue;
+        // Removed owners cannot display an acknowledgement. Their response
+        // remains generation-guarded even if this control message fails.
+        cancelOwnedRequest(request).catch(() => {});
+        break;
+      }
+    }
+  }
+
+  async function invokeOwnedRequest(request, command, params) {
+    if (!request.current()) throw new Error("Request owner is no longer current.");
+    if (request.cancelRequested) return { ok: false, error_type: "Cancelled", error: "Request cancelled before dispatch.",
+      _request: { id: request.id, outcome: "cancelled", context_id: null, provider_revision: null,
+        settings_revision: null, profile: null, account_id: null, region: null } };
+    if (pendingOwnedRequests.size >= MAX_PENDING_OWNED_REQUESTS) throw new Error("Too many pending requests. Wait for a result or cancel a request, then retry.");
+    pendingOwnedRequests.add(request);
+    try { return await tauriInvoke(command, { params: { ...params, request_id: request.id } }); }
+    finally { pendingOwnedRequests.delete(request); }
+  }
 
   function invalidateRequests(node, preserveResult = false) {
     if (!node) return;
+    cancelPendingWithin(node);
     node._requestGeneration = (node._requestGeneration || 0) + 1;
     delete node._resultContext;
     if (!preserveResult) {
@@ -490,7 +530,7 @@
   function beginOwnedRequest(owner, contextOverride) {
     if (!owner) throw new Error("A request owner is required.");
     invalidateRequests(owner, true);
-    const id = `ui-${++nextOwnedRequestId}`;
+    const id = `ui-${ownedRequestPageId}-${++nextOwnedRequestId}`;
     const ancestors = [];
     for (let node = owner; node; node = node.parentNode) {
       ancestors.push([node, node._requestGeneration || 0]);
@@ -545,8 +585,8 @@
       if (!request.current()) throw new Error("Request owner is no longer current.");
       if (!available) throw new Error("AWS CLI is unavailable. Use Retry CLI check in this widget.");
     }
-    return tauriInvoke("widget_fetch", {
-      params: { widget: widgetName, inputs: inputs || {}, context: request.context, request_id: request.id },
+    return invokeOwnedRequest(request, "widget_fetch", {
+      widget: widgetName, inputs: inputs || {}, context: request.context,
     });
   }
 
@@ -646,6 +686,26 @@
     const context = view?.context || (spec?._request?.context_id ? spec._request : null);
     if (context) status.appendChild(el("div", { class: "result-context" }, `Profile: ${context.profile} · Verified account: ${context.account_id} · Region: ${context.region}`));
     if (state === "loading" && view) status.appendChild(el("div", {}, "Showing the previous result while refreshing."));
+    const activeRequest = host._activeResultRequest;
+    if (isTauri && state === "loading" && activeRequest?.current()) {
+      const cancelState = el("span", { class: "request-cancel-status", role: "status" });
+      const cancel = el("button", { type: "button", class: "btn btn-ghost small request-cancel", "aria-label": "Cancel current request" }, "Cancel");
+      cancel.addEventListener("click", async () => {
+        if (!activeRequest.current()) return;
+        cancel.disabled = true;
+        cancel.textContent = "Cancelling…";
+        cancelState.textContent = "Cancellation requested. Waiting for the operation outcome.";
+        try {
+          await cancelOwnedRequest(activeRequest);
+          if (!activeRequest.current() || !cancelState.isConnected) return;
+          cancelState.textContent = "Cancelled locally. Remote cleanup is not yet confirmed.";
+        } catch (_) {
+          if (!activeRequest.current() || !cancelState.isConnected) return;
+          cancelState.textContent = "Cancellation could not be confirmed. Waiting for the operation outcome.";
+        }
+      });
+      status.append(cancel, cancelState);
+    }
     if (state === "stale") {
       status.appendChild(el("div", {}, "Refresh did not complete. Retained evidence keeps its original timestamp."));
       status.appendChild(el("div", {}, `Refresh outcome: ${labels[resultState(spec || { ok: false })]}.`));
@@ -2632,7 +2692,7 @@
     const pins = pipelinePinsForWidget(widget);
     const existing = new Map(Array.from(list.children).map(card => [card.dataset.pinId, card]));
     existing.forEach((card, key) => {
-      if (!pins.some(pin => pipelinePinKey(pin) === key)) card.remove();
+      if (!pins.some(pin => pipelinePinKey(pin) === key)) { invalidateRequests(card); card.remove(); }
     });
     const emptyEl = $(".pipeline-pin-empty", widget);
     if (emptyEl) emptyEl.hidden = pins.length > 0;
@@ -3077,9 +3137,7 @@
     }
     try {
       if (!request.allowed) throw new Error("Select and verify an AWS account first.");
-      const res = await tauriInvoke("aws_list_pipelines", {
-        params: { context: request.context, request_id: request.id },
-      });
+      const res = await invokeOwnedRequest(request, "aws_list_pipelines", { context: request.context });
       if (!request.accept(res)) return;
       renderArrayResult(host, res, "pipelines", pipelines => {
         const selected = selectedPipelineName($(".pipeline-config", widget));
@@ -3218,6 +3276,7 @@
   function toggleRowDetail(tr, row, opts, colspan) {
     const next = tr.nextElementSibling;
     if (next && next.classList.contains("row-detail")) {
+      invalidateRequests(next);
       next.remove();
       tr.classList.remove("expanded");
       tr.setAttribute("aria-expanded", "false");
@@ -5249,7 +5308,7 @@
     // pin order both sorts and keeps state; stale cards are dropped.
     const existing = new Map(Array.from(list.children).map(c => [c.dataset.pinId, c]));
     existing.forEach((node, k) => {
-      if (!pins.some(p => cliPinKey(p) === k)) node.remove();
+      if (!pins.some(p => cliPinKey(p) === k)) { invalidateRequests(node); node.remove(); }
     });
     // Reorders persist by reading the card order back out of the DOM, so a
     // drop only moves the node — fetched results and expansion state survive.

@@ -9,7 +9,7 @@ use aws_sdk_cloudwatchlogs::types::OrderBy;
 use serde_json::{json, Value};
 
 use super::handoff::{self, Source};
-use super::{coverage::Coverage, err_msg, WidgetCtx};
+use super::{budget::PageBudget, coverage::Coverage, err_msg, WidgetCtx};
 
 const DEFAULT_TAIL_EVENTS: i32 = 200;
 const DEFAULT_STREAM_EVENTS: i32 = 500;
@@ -56,6 +56,7 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
     let mut pages = 0;
     let mut failure = None;
     let mut locally_omitted = false;
+    let mut budget = PageBudget::default();
     loop {
         let remaining = max_functions.saturating_sub(functions.len());
         if remaining == 0 {
@@ -66,7 +67,7 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
         if let Some(m) = &marker {
             req = req.marker(m);
         }
-        let resp = match req.send().await {
+        let resp = match ctx.send("lambda", "ListFunctions", req.send()).await {
             Ok(r) => r,
             Err(e) => {
                 failure = Some(err_msg(e));
@@ -74,6 +75,11 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
             }
         };
         pages += 1;
+        marker = resp
+            .next_marker()
+            .filter(|m| !m.is_empty())
+            .map(str::to_string);
+        let continue_scan = budget.advance(marker.as_deref());
         for (index, f) in resp.functions().iter().enumerate() {
             let name = f.function_name().unwrap_or("").to_string();
             if name.is_empty() {
@@ -113,7 +119,7 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
             } else {
                 handoff::logs(&log_group, None, source)
             };
-            functions.push(json!({
+            let row = json!({
                 "name": name,
                 "arn": f.function_arn().unwrap_or(""),
                 "last_modified": f.last_modified().unwrap_or(""),
@@ -127,17 +133,18 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
                 "timeout_seconds": f.timeout().unwrap_or(0),
                 "code_size": f.code_size(),
                 "architectures": architectures,
-            }));
+            });
+            if !budget.retain(&row) {
+                locally_omitted = true;
+                break;
+            }
+            functions.push(row);
             if functions.len() >= max_functions {
                 locally_omitted = index + 1 < resp.functions().len();
                 break;
             }
         }
-        marker = resp
-            .next_marker()
-            .filter(|m| !m.is_empty())
-            .map(str::to_string);
-        if marker.is_none() {
+        if !continue_scan || budget.stopped() {
             break;
         }
     }
@@ -149,11 +156,13 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
             .to_ascii_lowercase()
             .cmp(&b["name"].as_str().unwrap_or("").to_ascii_lowercase())
     });
-    let capped = locally_omitted || (functions.len() >= max_functions && marker.is_some());
+    let capped = locally_omitted
+        || budget.stopped()
+        || (functions.len() >= max_functions && marker.is_some());
     let mut coverage = Coverage::complete(functions.len());
     coverage.count("pages", pages);
     coverage.limit("results", Some(max_functions));
-    if capped {
+    if locally_omitted || (functions.len() >= max_functions && marker.is_some()) {
         coverage.has_more(Some(true));
         coverage.limited(
             "function_limit",
@@ -167,6 +176,7 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
             !functions.is_empty(),
         );
     }
+    budget.apply(&mut coverage, !functions.is_empty());
     let mut result = json!({
         "ok": failure.is_none(),
         "account_id": ctx.account_id,
@@ -193,13 +203,18 @@ pub(super) async fn fetch_streams(ctx: &WidgetCtx) -> Value {
         return denied;
     }
     let client = aws_sdk_cloudwatchlogs::Client::new(&ctx.sdk);
-    let resp = match client
-        .describe_log_streams()
-        .log_group_name(&log_group)
-        .order_by(OrderBy::LastEventTime)
-        .descending(true)
-        .limit(max_streams)
-        .send()
+    let resp = match ctx
+        .send(
+            "logs",
+            "DescribeLogStreams",
+            client
+                .describe_log_streams()
+                .log_group_name(&log_group)
+                .order_by(OrderBy::LastEventTime)
+                .descending(true)
+                .limit(max_streams)
+                .send(),
+        )
         .await
     {
         Ok(r) => r,
@@ -228,9 +243,12 @@ pub(super) async fn fetch_streams(ctx: &WidgetCtx) -> Value {
         }
     };
 
+    let mut budget = PageBudget::default();
+    budget.advance(None);
     let streams: Vec<Value> = resp
         .log_streams()
         .iter()
+        .take(max_streams as usize)
         .filter_map(|s| {
             let name = s.log_stream_name()?;
             Some(json!({
@@ -242,18 +260,22 @@ pub(super) async fn fetch_streams(ctx: &WidgetCtx) -> Value {
                 "creation_time": s.creation_time().unwrap_or(0),
             }))
         })
+        .take_while(|row| budget.retain(row))
         .collect();
 
     let mut coverage = Coverage::complete(streams.len());
     coverage.count("pages", 1);
     coverage.limit("results", Some(max_streams as usize));
-    if resp.next_token().is_some_and(|token| !token.is_empty()) {
+    if resp.next_token().is_some_and(|token| !token.is_empty())
+        || resp.log_streams().len() > streams.len()
+    {
         coverage.has_more(Some(true));
         coverage.limited(
             "single_stream_page",
             "Only the first log stream page was loaded.",
         );
     }
+    budget.apply(&mut coverage, !streams.is_empty());
     coverage.attach(json!({"ok": true, "log_group": log_group, "streams": streams}))
 }
 
@@ -274,13 +296,18 @@ pub(super) async fn fetch_stream_events(ctx: &WidgetCtx) -> Value {
         return denied;
     }
     let client = aws_sdk_cloudwatchlogs::Client::new(&ctx.sdk);
-    let resp = match client
-        .get_log_events()
-        .log_group_name(&log_group)
-        .log_stream_name(&log_stream)
-        .start_from_head(false)
-        .limit(limit)
-        .send()
+    let resp = match ctx
+        .send(
+            "logs",
+            "GetLogEvents",
+            client
+                .get_log_events()
+                .log_group_name(&log_group)
+                .log_stream_name(&log_stream)
+                .start_from_head(false)
+                .limit(limit)
+                .send(),
+        )
         .await
     {
         Ok(r) => r,
@@ -303,15 +330,19 @@ pub(super) async fn fetch_stream_events(ctx: &WidgetCtx) -> Value {
         }
     };
 
+    let mut budget = PageBudget::default();
+    budget.advance(None);
     let events: Vec<Value> = resp
         .events()
         .iter()
+        .take(limit as usize)
         .map(|ev| {
             let ts = ev.timestamp().unwrap_or(0);
             let msg = ev.message().unwrap_or("").to_string();
             let level = level_for(&msg);
             json!({"ts": ts, "msg": msg, "level": level})
         })
+        .take_while(|row| budget.retain(row))
         .collect();
 
     // GetLogEvents supplies navigation tokens even at a stream boundary. A
@@ -323,6 +354,13 @@ pub(super) async fn fetch_stream_events(ctx: &WidgetCtx) -> Value {
         "single_event_page",
         "One log event page was loaded; complete stream coverage is unknown.",
     );
+    if resp.events().len() > events.len() {
+        coverage.limited(
+            "event_limit",
+            "The local event or result byte limit omitted returned events.",
+        );
+    }
+    budget.apply(&mut coverage, !events.is_empty());
     coverage.attach(json!({
         "render": "log_stream",
         "log_group": log_group,
@@ -357,7 +395,7 @@ async fn fetch_tail(ctx: &WidgetCtx) -> Value {
     if !filter.is_empty() {
         req = req.filter_pattern(&filter);
     }
-    let resp = match req.send().await {
+    let resp = match ctx.send("logs", "FilterLogEvents", req.send()).await {
         Ok(r) => r,
         Err(e) => {
             let mut coverage = Coverage::unknown(0);
@@ -390,12 +428,15 @@ async fn fetch_tail(ctx: &WidgetCtx) -> Value {
     events.sort_by_key(|event| std::cmp::Reverse(event.0));
     events.truncate(DEFAULT_TAIL_EVENTS as usize);
 
+    let mut budget = PageBudget::default();
+    budget.advance(None);
     let out: Vec<Value> = events
         .into_iter()
         .map(|(ts, msg)| {
             let level = level_for(&msg);
             json!({"ts": ts, "msg": msg, "level": level})
         })
+        .take_while(|row| budget.retain(row))
         .collect();
 
     let mut coverage = Coverage::complete(out.len());
@@ -408,6 +449,7 @@ async fn fetch_tail(ctx: &WidgetCtx) -> Value {
             "Only one page of events from the selected time window was loaded.",
         );
     }
+    budget.apply(&mut coverage, !out.is_empty());
     coverage.attach(json!({"render": "log_stream", "log_group": log_group, "events": out}))
 }
 

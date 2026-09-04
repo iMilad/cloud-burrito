@@ -17,6 +17,7 @@ const handlers = source.slice(start, resultHelpersStart) + source.slice(fetchInt
 
 function fixture() {
   const pending = [];
+  const cancellations = [];
   const rendered = [];
   const errors = [];
   const context = vm.createContext({
@@ -26,7 +27,13 @@ function fixture() {
     contextPayloadForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextOverrideFromElement: () => null,
     beginResultRequest: () => {},
-    tauriInvoke: (command, args) => new Promise((resolve, reject) => pending.push({ command, args, resolve, reject })),
+    tauriInvoke: (command, args) => {
+      if (command === 'request_cancel') {
+        cancellations.push(args.params.request_id);
+        return Promise.resolve({ ok: true, cancelled_locally: true, cleanup_confirmed: false });
+      }
+      return new Promise((resolve, reject) => pending.push({ command, args, resolve, reject }));
+    },
     dispatchRender: (node, result) => rendered.push({ node, result }),
     renderError: (node, error) => errors.push({ node, error }),
   });
@@ -36,7 +43,7 @@ function fixture() {
   const reply = (entry, label = 'fixture', fields = {}) => ({ render: 'table', columns: ['label'], rows: [{ label }],
     _request: { id: entry.args.params.request_id, context_id: 'context-fixture', provider_revision: 'provider-fixture',
       settings_revision: 'settings-fixture', profile: 'demo-fixture', account_id: 'acct-a-fixture', region: 'region-fixture', ...fields } });
-  return { context, pending, rendered, errors, node, reply,
+  return { context, pending, cancellations, rendered, errors, node, reply,
     run: owner => context.fetchWidgetInto(owner, 'cfn-stacks', {}) };
 }
 
@@ -142,4 +149,66 @@ test('unverified inherited requests settle without crossing the bridge', async (
   assert.equal(f.pending.length, 0);
   assert.equal(f.rendered.length, 0);
   assert.equal(f.errors.length, 1);
+});
+
+test('superseding an owner cancels only its outstanding subscriber before dispatching the next one', async () => {
+  const f = fixture(); const owner = f.node(); const sibling = f.node();
+  const old = f.run(owner); const independent = f.run(sibling); const fresh = f.run(owner);
+  assert.deepEqual(f.cancellations, [f.pending[0].args.params.request_id]);
+  assert.equal(f.pending.length, 3);
+  assert.equal(vm.runInContext('pendingOwnedRequests.size', f.context), 2);
+  f.pending.forEach(entry => entry.resolve(f.reply(entry)));
+  await Promise.all([old, independent, fresh]);
+  assert.equal(f.rendered.length, 2);
+  assert.equal(vm.runInContext('pendingOwnedRequests.size', f.context), 0);
+});
+
+test('explicit cancel keeps the mounted owner current so its cleanup outcome can arrive', async () => {
+  const f = fixture(); const owner = f.node(); const work = f.run(owner);
+  const request = owner._ownedRequest;
+  await f.context.cancelOwnedRequest(request);
+  await f.context.cancelOwnedRequest(request);
+  assert.deepEqual(f.cancellations, [request.id]);
+  assert.equal(request.current(), true);
+  assert.equal(vm.runInContext('pendingOwnedRequests.size', f.context), 0);
+  f.pending[0].resolve({ ...f.reply(f.pending[0]), ok: false, error_type: 'QueryCancelled',
+    cleanup: { status: 'not_confirmed', remote_queries_may_still_run: true } });
+  await work;
+  assert.equal(f.rendered.length, 1);
+  assert.equal(f.rendered[0].result.cleanup.status, 'not_confirmed');
+});
+
+test('cancellation before bridge registration prevents dispatch and returns an owned cancelled result', async () => {
+  const f = fixture(); const owner = f.node();
+  const request = f.context.beginOwnedRequest(owner);
+  await f.context.cancelOwnedRequest(request);
+  const result = await f.context.fetchWidgetData('cfn-stacks', {}, owner, null, request);
+  assert.equal(f.pending.length, 0);
+  assert.equal(f.cancellations.length, 0);
+  assert.equal(result._request.id, request.id);
+  assert.equal(result._request.outcome, 'cancelled');
+  assert.equal(request.accept(result), true);
+});
+
+test('the pending registry is bounded and removing a common ancestor recovers every slot', async () => {
+  const f = fixture(); const parent = f.node();
+  const work = Array.from({ length: 257 }, () => f.run(f.node(parent)));
+  assert.equal(f.pending.length, 256);
+  assert.equal(vm.runInContext('pendingOwnedRequests.size', f.context), 256);
+  f.context.invalidateRequests(parent);
+  assert.equal(f.cancellations.length, 256);
+  assert.equal(new Set(f.cancellations).size, 256);
+  assert.equal(vm.runInContext('pendingOwnedRequests.size', f.context), 0);
+  f.pending.forEach(entry => entry.resolve(f.reply(entry)));
+  await Promise.all(work);
+  assert.equal(f.rendered.length, 0);
+});
+
+test('request IDs include a page nonce and remain bounded ASCII across independent pages', () => {
+  const a = fixture(), b = fixture();
+  const first = a.context.beginOwnedRequest(a.node()).id;
+  const second = b.context.beginOwnedRequest(b.node()).id;
+  assert.notEqual(first, second);
+  assert.match(first, /^ui-[a-z0-9]+-[a-z0-9]+-1$/);
+  assert.ok(first.length <= 80);
 });

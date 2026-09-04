@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use aws_config::SdkConfig;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::Credentials;
+use futures::FutureExt;
 use parking_lot::Mutex;
 
 use super::config_file::SsoProfileSnapshot;
@@ -125,6 +126,14 @@ struct SessionState {
 }
 
 #[derive(Clone)]
+enum VerificationResult {
+    Complete(Result<Arc<VerifiedSession>, ContextError>),
+    Panicked,
+}
+
+type VerificationReceiver = tokio::sync::watch::Receiver<Option<VerificationResult>>;
+
+#[derive(Clone)]
 pub struct AwsContext {
     pub profile: String,
     pub account_id: String,
@@ -136,6 +145,7 @@ pub struct AwsContext {
     id: u64,
     state: Arc<Mutex<SessionState>>,
     verification: Arc<tokio::sync::Mutex<()>>,
+    verification_flight: Arc<Mutex<Option<VerificationReceiver>>>,
 }
 
 impl AwsContext {
@@ -158,6 +168,7 @@ impl AwsContext {
             id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
             state: Arc::new(Mutex::new(SessionState::default())),
             verification: Arc::new(tokio::sync::Mutex::new(())),
+            verification_flight: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -166,6 +177,7 @@ impl AwsContext {
         self.id = NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed);
         self.state = Arc::new(Mutex::new(SessionState::default()));
         self.verification = Arc::new(tokio::sync::Mutex::new(()));
+        self.verification_flight = Arc::new(Mutex::new(None));
         self
     }
 
@@ -189,10 +201,102 @@ impl AwsContext {
         })
     }
 
-    /// Callers authorize SSO and STS before entering this method. Refresh is
-    /// serialized per context; resource clients never refresh credentials.
+    /// Callers authorize SSO and STS before entering this method. One owned,
+    /// bounded worker verifies a context; cancelling a subscriber cannot abort
+    /// and restart another subscriber's credential/identity work.
     pub async fn verified_session(&self) -> Result<Arc<VerifiedSession>, ContextError> {
-        let _verification = self.verification.lock().await;
+        let mut receiver = {
+            let mut flight = self.verification_flight.lock();
+            if let Some(current) = flight
+                .as_ref()
+                .filter(|current| current.borrow().is_none() && current.has_changed().is_ok())
+            {
+                current.clone()
+            } else {
+                let (sender, receiver) = tokio::sync::watch::channel(None);
+                *flight = Some(receiver.clone());
+                let context = self.clone();
+                tokio::spawn(async move {
+                    let result = std::panic::AssertUnwindSafe(context.verified_session_once())
+                        .catch_unwind()
+                        .await;
+                    let result = match result {
+                        Ok(result) => VerificationResult::Complete(result),
+                        Err(_) => VerificationResult::Panicked,
+                    };
+                    let _ = sender.send_replace(Some(result));
+                });
+                receiver
+            }
+        };
+        loop {
+            let result = receiver.borrow_and_update().clone();
+            if let Some(result) = result {
+                return match result {
+                    VerificationResult::Complete(result) => {
+                        let session = result?;
+                        self.ensure_current(&session)?;
+                        Ok(session)
+                    }
+                    VerificationResult::Panicked => {
+                        #[cfg(test)]
+                        panic!("unexpected live AWS/provider or personal configuration access in shared identity verification");
+                        #[cfg(not(test))]
+                        Err(ContextError::new(
+                            "VerificationInterrupted",
+                            "Identity verification was interrupted; reconnect the selected account",
+                        ))
+                    }
+                };
+            }
+            receiver.changed().await.map_err(|_| {
+                ContextError::new(
+                    "VerificationInterrupted",
+                    "Identity verification was interrupted; reconnect the selected account",
+                )
+            })?;
+        }
+    }
+
+    async fn verification_policy(
+        &self,
+        service: &str,
+        operation: &str,
+    ) -> Result<(), ContextError> {
+        let paths = self.runtime.paths.clone();
+        let policy = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || crate::runtime::read_current_policy(&paths, false)),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| Err("policy unavailable".into()));
+        crate::aws::policy::gate(&policy, service, operation).map_err(|_| {
+            ContextError::new(
+                "PolicyDenied",
+                "Identity verification is blocked by the current local policy",
+            )
+        })
+    }
+
+    async fn verified_session_once(&self) -> Result<Arc<VerifiedSession>, ContextError> {
+        let verification_scope = crate::scheduler::WorkScope::new(
+            format!("verification-{}", self.id),
+            self.account_id.clone(),
+            self.region.clone(),
+            crate::process::ProcessCancellation::new(),
+            crate::scheduler::WorkBudget::for_widget("identity"),
+        );
+        let _verification =
+            tokio::time::timeout_at(verification_scope.deadline, self.verification.lock())
+                .await
+                .map_err(|_| {
+                    ContextError::new(
+                        "VerificationDeadline",
+                        "Identity verification reached its time limit; try connecting again",
+                    )
+                })?;
         let snapshot = self.fresh_snapshot()?;
         {
             let mut state = self.state.lock();
@@ -223,12 +327,31 @@ impl AwsContext {
             state.session = None;
         }
 
-        let credentials = self.runtime.aws.resolve_sso(&snapshot).await.map_err(|_| {
-            ContextError::new(
-                "CredentialsError",
-                "SSO credentials could not be loaded or refreshed; sign in again",
+        let credentials = self
+            .runtime
+            .scheduler
+            .run(
+                &verification_scope,
+                "sso",
+                crate::scheduler::ResourceKind::Ordinary,
+                async {
+                    self.verification_policy("sso", "GetRoleCredentials")
+                        .await?;
+                    self.runtime.aws.resolve_sso(&snapshot).await.map_err(|_| {
+                        ContextError::new(
+                            "CredentialsError",
+                            "SSO credentials could not be loaded or refreshed; sign in again",
+                        )
+                    })
+                },
             )
-        })?;
+            .await
+            .map_err(|_| {
+                ContextError::new(
+                    "VerificationDeadline",
+                    "Credential verification reached its local work limit; try connecting again",
+                )
+            })??;
         let expires_at = credentials.expiry().ok_or_else(|| {
             ContextError::new("CredentialsError", "SSO credentials must have an expiry")
         })?;
@@ -243,12 +366,11 @@ impl AwsContext {
             ));
         }
         let sdk = fixed_sdk_config(credentials, &snapshot.region, self.runtime.clock.clone());
-        let caller = self.runtime.aws.caller_identity(&sdk).await.map_err(|_| {
-            ContextError::new(
-                "IdentityVerificationFailed",
-                "AWS identity verification failed; check the selected SSO session and try again",
-            )
-        })?;
+        let caller=self.runtime.scheduler.run(&verification_scope,"sts",crate::scheduler::ResourceKind::Ordinary,async {
+            self.verification_policy("sts","GetCallerIdentity").await?;
+            self.runtime.aws.caller_identity(&sdk).await.map_err(|_|
+                ContextError::new("IdentityVerificationFailed","AWS identity verification failed; check the selected SSO session and try again"))
+        }).await.map_err(|_|ContextError::new("VerificationDeadline","Identity verification reached its local work limit; try connecting again"))??;
         let identity = VerifiedIdentity::from_output(caller)?;
         if identity.account_id != snapshot.account_id || identity.account_id != self.account_id {
             return Err(self.invalidate(
@@ -334,4 +456,149 @@ pub fn sso_login_required(err: &str) -> bool {
         || e.contains("unauthorized")
         || e.contains("forbidden")
         || e.contains("refresh the sso")
+}
+
+#[cfg(test)]
+mod shared_verification_tests {
+    use super::*;
+    use crate::{runtime::AwsBackend, test_support::TestDir};
+    use futures::future::BoxFuture;
+    use serde_json::{json, Value};
+    use std::sync::atomic::AtomicUsize;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[derive(Default)]
+    struct SharedBackend {
+        resolves: AtomicUsize,
+        callers: AtomicUsize,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    impl AwsBackend for SharedBackend {
+        fn inspect_config(&self, _: &str, _: Option<&str>) -> Value {
+            json!({"profiles":[]})
+        }
+        fn snapshot_sso(&self, ctx: &AwsContext) -> Result<SsoProfileSnapshot, String> {
+            Ok(SsoProfileSnapshot {
+                config_path: ctx.aws_config_path.clone().into(),
+                profile: ctx.profile.clone(),
+                account_id: ctx.account_id.clone(),
+                role_name: "SyntheticReadOnly".into(),
+                region: ctx.region.clone(),
+                sso_region: ctx.region.clone(),
+                start_url: "https://synthetic.example.invalid/start".into(),
+                session_name: None,
+                registration_scopes: None,
+                settings_revision: ctx.settings_revision,
+            })
+        }
+        fn resolve_sso<'a>(
+            &'a self,
+            _: &'a SsoProfileSnapshot,
+        ) -> BoxFuture<'a, Result<Credentials, String>> {
+            Box::pin(async move {
+                self.resolves.fetch_add(1, Ordering::SeqCst);
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(Credentials::new(
+                    "CB_SYNTHETIC_KEY",
+                    "CB_SYNTHETIC_SECRET",
+                    Some("CB_SYNTHETIC_TOKEN".into()),
+                    Some(UNIX_EPOCH + Duration::from_secs(1_800_000_000)),
+                    "shared-verification-test",
+                ))
+            })
+        }
+        fn caller_identity<'a>(
+            &'a self,
+            _: &'a SdkConfig,
+        ) -> BoxFuture<'a, Result<CallerIdentity, String>> {
+            Box::pin(async move {
+                self.callers.fetch_add(1, Ordering::SeqCst);
+                Ok(CallerIdentity::builder()
+                    .account("acct-shared-fixture")
+                    .arn("synthetic:principal:shared")
+                    .user_id("synthetic-shared-user")
+                    .build())
+            })
+        }
+    }
+    fn fixture() -> (TestDir, Arc<SharedBackend>, AwsContext) {
+        let dir = TestDir::new();
+        crate::aws::policy::load(&dir.paths()).unwrap();
+        let backend = Arc::new(SharedBackend::default());
+        let mut runtime = Runtime::for_test(dir.paths());
+        runtime.aws = backend.clone();
+        let context = AwsContext::new(
+            "synthetic-profile".into(),
+            "acct-shared-fixture".into(),
+            "us-east-1".into(),
+            None,
+            "synthetic-config.ini".into(),
+            runtime,
+        );
+        (dir, backend, context)
+    }
+    #[tokio::test]
+    async fn cancelled_subscriber_does_not_restart_shared_cold_verification() {
+        let (_dir, backend, context) = fixture();
+        let first = tokio::spawn({
+            let context = context.clone();
+            async move { context.verified_session().await }
+        });
+        backend.entered.notified().await;
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        // A new subscriber arriving after cancellation still joins the owned
+        // bounded worker, including its captured in-flight credential work.
+        let second = tokio::spawn({
+            let context = context.clone();
+            async move { context.verified_session().await }
+        });
+        tokio::task::yield_now().await;
+        backend.release.notify_one();
+        let session = second.await.unwrap().unwrap();
+        assert_eq!(session.identity.account_id, "acct-shared-fixture");
+        assert_eq!(backend.resolves.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.callers.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(
+            &session,
+            &context.verified_session().await.unwrap()
+        ));
+        assert_eq!(backend.resolves.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn context_invalidation_during_owned_verification_cannot_publish_a_session() {
+        let (_dir, backend, context) = fixture();
+        let request = tokio::spawn({
+            let context = context.clone();
+            async move { context.verified_session().await }
+        });
+        backend.entered.notified().await;
+        context.invalidate("SyntheticChange", "synthetic context changed");
+        backend.release.notify_one();
+        let failure = request.await.unwrap().unwrap_err();
+        assert_eq!(failure.error_type, "StaleContext");
+        assert!(context.state.lock().session.is_none());
+        assert_eq!(backend.resolves.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn policy_revocation_after_credentials_blocks_identity_dispatch() {
+        let (dir, backend, context) = fixture();
+        let request = tokio::spawn({
+            let context = context.clone();
+            async move { context.verified_session().await }
+        });
+        backend.entered.notified().await;
+        crate::aws::policy::write_text(
+            &dir.paths(),
+            "statements:\n - effect: Deny\n   action: ['sts:GetCallerIdentity']\n",
+        )
+        .unwrap();
+        backend.release.notify_one();
+        let failure = request.await.unwrap().unwrap_err();
+        assert_eq!(failure.error_type, "PolicyDenied");
+        assert_eq!(backend.callers.load(Ordering::SeqCst), 0);
+        assert!(context.state.lock().session.is_none());
+    }
 }

@@ -32,7 +32,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     if !pattern.is_empty() {
         req = req.log_group_name_prefix(&pattern);
     }
-    let resp = match req.send().await {
+    let resp = match ctx.send("logs", "DescribeLogGroups", req.send()).await {
         Ok(r) => r,
         Err(e) => {
             let mut coverage = Coverage::unknown(0);
@@ -71,7 +71,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         let client = client.clone();
         let g = g.clone();
         async move {
-            let total = cw_insights_count(&client, &g, start, now).await;
+            let total = cw_insights_count(ctx, &client, &g, start, now).await;
             (g, total)
         }
     });
@@ -240,19 +240,35 @@ fn errors_chart(
 
 /// Start an Insights query and poll until Complete, summing the `errors` column.
 async fn cw_insights_count(
+    ctx: &WidgetCtx,
     client: &Client,
     group: &str,
     start: i64,
     end: i64,
 ) -> Result<QueryCount, QueryFailure> {
-    let started = client
-        .start_query()
-        .log_group_name(group)
-        .start_time(start)
-        .end_time(end)
-        .query_string(INSIGHTS_QUERY)
-        .limit(QUERY_ROW_LIMIT as i32)
-        .send()
+    let _query_permit = ctx
+        .query_permit()
+        .await
+        .map_err(|_| QueryFailure::StartFailed)?;
+    let started = ctx
+        .send(
+            "logs",
+            "StartQuery",
+            client
+                .start_query()
+                .log_group_name(group)
+                .start_time(start)
+                .end_time(end)
+                .query_string(INSIGHTS_QUERY)
+                .limit(QUERY_ROW_LIMIT as i32)
+                .customize()
+                .config_override(
+                    aws_sdk_cloudwatchlogs::config::Builder::new().retry_config(
+                        aws_config::retry::RetryConfig::standard().with_max_attempts(1),
+                    ),
+                )
+                .send(),
+        )
         .await
         .map_err(|_| QueryFailure::StartFailed)?;
     let query_id = started
@@ -262,10 +278,12 @@ async fn cw_insights_count(
 
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let resp = client
-            .get_query_results()
-            .query_id(&query_id)
-            .send()
+        let resp = ctx
+            .send(
+                "logs",
+                "GetQueryResults",
+                client.get_query_results().query_id(&query_id).send(),
+            )
             .await
             .map_err(|_| QueryFailure::PollFailed)?;
         match resp.status() {

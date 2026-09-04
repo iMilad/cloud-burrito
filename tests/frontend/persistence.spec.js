@@ -48,6 +48,7 @@ async function boot(page, files = {}) {
       state.calls.push(command);
       persist();
       switch (command) {
+        case "request_cancel": if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID"); return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
         case "ping": return { version: "synthetic" };
         case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };
         case "settings_get": return load("settings");

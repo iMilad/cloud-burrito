@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use super::{coverage::Coverage, err_msg, log_tail, WidgetCtx};
+use super::{budget::PageBudget, coverage::Coverage, err_msg, log_tail, WidgetCtx};
 
 const MAX_GROUPS: usize = 1_000;
 
@@ -34,6 +34,7 @@ pub(super) async fn fetch_groups(ctx: &WidgetCtx) -> Value {
     let mut pages = 0;
     let mut failure = None;
     let mut locally_omitted = false;
+    let mut budget = PageBudget::default();
     loop {
         let remaining = max_groups.saturating_sub(groups.len());
         if remaining == 0 {
@@ -46,7 +47,7 @@ pub(super) async fn fetch_groups(ctx: &WidgetCtx) -> Value {
         if let Some(t) = &token {
             req = req.next_token(t);
         }
-        let resp = match req.send().await {
+        let resp = match ctx.send("logs", "DescribeLogGroups", req.send()).await {
             Ok(r) => r,
             Err(e) => {
                 failure = Some(err_msg(e));
@@ -54,28 +55,34 @@ pub(super) async fn fetch_groups(ctx: &WidgetCtx) -> Value {
             }
         };
         pages += 1;
+        token = resp
+            .next_token()
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
+        let continue_scan = budget.advance(token.as_deref());
         for (index, g) in resp.log_groups().iter().enumerate() {
             let name = g.log_group_name().unwrap_or("").to_string();
             if name.is_empty() {
                 continue;
             }
-            groups.push(json!({
+            let row = json!({
                 "name": name,
                 "arn": g.arn().unwrap_or(""),
                 "creation_time": g.creation_time().unwrap_or(0),
                 "retention_days": g.retention_in_days().unwrap_or(0),
                 "stored_bytes": g.stored_bytes().unwrap_or(0),
-            }));
+            });
+            if !budget.retain(&row) {
+                locally_omitted = true;
+                break;
+            }
+            groups.push(row);
             if groups.len() >= max_groups {
                 locally_omitted = index + 1 < resp.log_groups().len();
                 break;
             }
         }
-        token = resp
-            .next_token()
-            .filter(|t| !t.is_empty())
-            .map(str::to_string);
-        if token.is_none() {
+        if !continue_scan || budget.stopped() {
             break;
         }
     }
@@ -87,11 +94,12 @@ pub(super) async fn fetch_groups(ctx: &WidgetCtx) -> Value {
             .to_ascii_lowercase()
             .cmp(&b["name"].as_str().unwrap_or("").to_ascii_lowercase())
     });
-    let capped = locally_omitted || (groups.len() >= max_groups && token.is_some());
+    let capped =
+        locally_omitted || budget.stopped() || (groups.len() >= max_groups && token.is_some());
     let mut coverage = Coverage::complete(groups.len());
     coverage.count("pages", pages);
     coverage.limit("results", Some(max_groups));
-    if capped {
+    if locally_omitted || (groups.len() >= max_groups && token.is_some()) {
         coverage.has_more(Some(true));
         coverage.limited(
             "group_limit",
@@ -105,6 +113,7 @@ pub(super) async fn fetch_groups(ctx: &WidgetCtx) -> Value {
             !groups.is_empty(),
         );
     }
+    budget.apply(&mut coverage, !groups.is_empty());
     let mut result = json!({
         "ok": failure.is_none(),
         "account_id": ctx.account_id,
