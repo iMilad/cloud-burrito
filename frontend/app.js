@@ -375,13 +375,22 @@
   let nextOwnedRequestId = 0;
   let configurationGeneration = 0;
 
-  function invalidateRequests(node) {
+  function invalidateRequests(node, preserveResult = false) {
     if (!node) return;
     node._requestGeneration = (node._requestGeneration || 0) + 1;
     delete node._resultContext;
+    if (!preserveResult) {
+      delete node._resultView;
+      if (node._resultHost) {
+        delete node._resultHost._resultView;
+        if (node._resultHost !== node) clear(node._resultHost);
+      }
+    }
   }
 
   function requestFailureLabel(result) {
+    if (result?.partial || result?.status === "partial") return "Partial";
+    if (result?.truncated || result?.coverage?.completeness === "limited") return "Limited";
     const outcome = result?._request?.outcome;
     if (outcome === "denied" || result?.render === "permission_denied") return "Denied";
     if (outcome === "cancelled") return "Cancelled";
@@ -392,7 +401,7 @@
 
   function beginOwnedRequest(owner, contextOverride) {
     if (!owner) throw new Error("A request owner is required.");
-    invalidateRequests(owner);
+    invalidateRequests(owner, true);
     const id = `ui-${++nextOwnedRequestId}`;
     const ancestors = [];
     for (let node = owner; node; node = node.parentNode) {
@@ -407,7 +416,8 @@
       profile: topbarState.profile, account_id: topbarState.accountId, region: topbarState.region,
     };
     const request = {
-      id, context, allowed: (!isTauri || settingsStorageReady) && (independent || (discoveryReady && lastSetAccountResult?.ok === true)),
+      id, owner, context, freshnessContext: JSON.stringify([configuration, independent ? "pinned" : selection, expected]),
+      allowed: (!isTauri || settingsStorageReady) && (independent || (discoveryReady && lastSetAccountResult?.ok === true)),
       current() {
         return owner.isConnected && owner._ownedRequest === request
           && configuration === configurationGeneration
@@ -439,6 +449,7 @@
     if (!isTauri) return Promise.resolve(null);
     if (!request) throw new Error("An owned widget request is required.");
     if (!request.current()) return Promise.reject(new Error("Request owner is no longer current."));
+    beginResultRequest(request, widgetName, inputs || {});
     if (!request.allowed) return Promise.reject(new Error("Select and verify an AWS account first."));
     if (widgetName === "aws-cli") {
       const available = await checkCliAvailability();
@@ -448,6 +459,213 @@
     return tauriInvoke("widget_fetch", {
       params: { widget: widgetName, inputs: inputs || {}, context: request.context, request_id: request.id },
     });
+  }
+
+  function resultHostForRequest(request) {
+    const owner = request.owner;
+    if (owner.matches?.(".pipeline-pin-card")) return $(".pipeline-pin-result", owner) || owner;
+    if (owner.matches?.("input")) {
+      if (!owner._resultHost?.isConnected) {
+        owner._resultHost = el("span", { class: "result-input-status small" });
+        owner.after(owner._resultHost);
+      }
+      return owner._resultHost;
+    }
+    return owner;
+  }
+
+  function beginResultRequest(request, widgetName, inputs) {
+    const host = resultHostForRequest(request);
+    request.owner._resultHost = host;
+    request.resultHost = host;
+    request.resultKey = JSON.stringify([request.freshnessContext, widgetName, inputs]);
+    host._activeResultRequest = request;
+    const previous = host._resultView;
+    if (previous?.key !== request.resultKey) {
+      delete host._resultView;
+      clear(host);
+    }
+    if (host._resultView) {
+      clear(host);
+      host.append(...host._resultView.nodes);
+      host.hidden = false;
+      host._resultView.displayState = "loading";
+      delete host._resultView.displaySpec;
+      delete host._resultView.displayMessage;
+    }
+    host.hidden = false;
+    paintResultStatus(host, "loading", null, host._resultView);
+  }
+
+  function validCoverage(coverage, depth = 0) {
+    if (coverage === undefined) return true;
+    if (!coverage || typeof coverage !== "object" || Array.isArray(coverage) || depth > 3
+        || !["complete", "limited", "unknown"].includes(coverage.completeness)
+        || !(coverage.has_more === null || typeof coverage.has_more === "boolean")) return false;
+    for (const key of ["counts", "limits"]) {
+      const entries = coverage[key];
+      if (!entries || typeof entries !== "object" || Array.isArray(entries) || Object.keys(entries).length > 24) return false;
+      if (Object.entries(entries).some(([name, value]) => !/^[a-z][a-z0-9_]{0,63}$/.test(name)
+          || !(key === "limits" && value === null) && !(Number.isSafeInteger(value) && value >= 0))) return false;
+    }
+    if (!Array.isArray(coverage.reasons) || coverage.reasons.length > 32 || coverage.reasons.some(reason => !reason
+        || typeof reason.code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(reason.code)
+        || typeof reason.message !== "string" || reason.message.length > 500)) return false;
+    return coverage.sections === undefined || (coverage.sections && typeof coverage.sections === "object"
+      && !Array.isArray(coverage.sections) && Object.keys(coverage.sections).length <= 12
+      && Object.entries(coverage.sections).every(([name, section]) => /^[a-z][a-z0-9_]{0,63}$/.test(name) && validCoverage(section, depth + 1)));
+  }
+
+  function resultHasEvidence(spec) {
+    if (!spec || typeof spec !== "object") return false;
+    if (["rows", "resources", "events", "actions", "matches", "versions", "functions", "groups", "streams", "pipelines"].some(key => Array.isArray(spec[key]) && spec[key].length)) return true;
+    return spec.render === "raw_json" && spec.data !== undefined && spec.data !== null
+      && !spec.data?.error && (typeof spec.data !== "object" || Object.keys(spec.data).length > 0);
+  }
+
+  function resultFailure(spec) {
+    return !!(spec?.error || spec?.data?.error || spec?.ok === false || spec?.status === "failed" || spec?.render === "permission_denied"
+      || ["failed", "denied", "cancelled"].includes(spec?._request?.outcome));
+  }
+
+  function resultState(spec) {
+    if (spec?.partial === true || spec?.status === "partial" || (resultFailure(spec) && resultHasEvidence(spec))) return "partial";
+    if (spec?._request?.outcome === "cancelled" || ["Superseded", "Cancelled", "QueryCancelled"].includes(spec?.error_type || spec?.data?.error_type)) return "cancelled";
+    if (spec?.render === "permission_denied" || spec?._request?.outcome === "denied" || spec?.error_type === "PolicyDenied") return "denied";
+    if (spec?.error_type === "CredentialsExpired" || spec?.needs_sso_login) return "expired";
+    if (resultFailure(spec)) return "failed";
+    if (spec?.truncated || spec?.coverage?.completeness === "limited") return "limited";
+    return resultHasEvidence(spec) ? "success" : "empty";
+  }
+
+  function appendCoverage(status, coverage, label = "Coverage") {
+    if (!coverage) { status.appendChild(el("div", {}, `${label}: unknown.`)); return; }
+    const counts = Object.entries(coverage.counts).map(([key, value]) => `${displayName(key)}: ${value}`);
+    const limits = Object.entries(coverage.limits).map(([key, value]) => `${displayName(key)} limit: ${value === null ? "unknown" : value}`);
+    const more = coverage.has_more === true ? "Continuation or omitted results reported." : coverage.has_more === false ? "No continuation reported." : "More results: unknown.";
+    status.appendChild(el("div", {}, `${label}: ${coverage.completeness}. ${[...counts, ...limits, more].join(" · ")}`));
+    coverage.reasons.forEach(reason => status.appendChild(el("div", {}, reason.message)));
+    Object.entries(coverage.sections || {}).forEach(([name, section]) => appendCoverage(status, section, displayName(name)));
+  }
+
+  function paintResultStatus(host, state, spec, view, message) {
+    host.querySelectorAll(":scope > .result-status").forEach(node => node.remove());
+    const labels = { loading: "Loading", success: "Updated", empty: "Empty response", limited: "Limited result", partial: "Partial result", stale: "Stale evidence", denied: "Denied", expired: "Credentials expired", failed: "Failed", cancelled: "Cancelled" };
+    const status = el("div", { class: "result-status small", role: "status", "data-state": state },
+      el("strong", {}, labels[state] || "Result"));
+    if (view?.receivedAt) status.appendChild(el("time", { datetime: view.receivedAt, class: "result-received" }, `Received ${new Date(view.receivedAt).toLocaleString()}`));
+    const context = view?.context || (spec?._request?.context_id ? spec._request : null);
+    if (context) status.appendChild(el("div", { class: "result-context" }, `Profile: ${context.profile} · Verified account: ${context.account_id} · Region: ${context.region}`));
+    if (state === "loading" && view) status.appendChild(el("div", {}, "Showing the previous result while refreshing."));
+    if (state === "stale") {
+      status.appendChild(el("div", {}, "Refresh did not complete. Retained evidence keeps its original timestamp."));
+      status.appendChild(el("div", {}, `Refresh outcome: ${labels[resultState(spec || { ok: false })]}.`));
+    }
+    if (message) status.appendChild(el("div", { class: "result-failure" }, message));
+    if (view && ["loading", "stale"].includes(state)) {
+      status.appendChild(el("div", {}, `Retained result: ${labels[view.state] || "Updated"}.`));
+      appendCoverage(status, view.coverage, "Retained coverage");
+    }
+    if (spec && state !== "loading") appendCoverage(status, spec.coverage, state === "stale" ? "Refresh coverage" : "Coverage");
+    const cleanup = spec?.cleanup || spec?.data?.cleanup;
+    if (cleanup) {
+      const confirmed = cleanup.status === "stopped" && cleanup.remote_stop_confirmed === true;
+      const labels = { stopped: "Remote stop was not confirmed.", not_confirmed: "Remote stop was not confirmed.", denied: "Remote stop was denied.", failed: "Remote stop failed.", not_attempted: "Remote stop was not attempted." };
+      status.appendChild(el("div", { class: "result-cleanup" }, confirmed ? "Remote query stop confirmed." : labels[cleanup.status] || "Remote query status is unknown."));
+      if (!confirmed && cleanup.remote_queries_may_still_run === true) status.appendChild(el("div", {}, "Remote queries may still be running."));
+    } else if (state === "cancelled" || resultState(spec) === "cancelled") status.appendChild(el("div", { class: "result-cleanup" }, "The request is no longer awaited. This does not confirm that remote work stopped."));
+    host.prepend(status);
+  }
+
+  function failResult(host, request, message, spec) {
+    if (!request?.current()) return;
+    const previous = host._resultView?.key === request.resultKey ? host._resultView : null;
+    clear(host);
+    if (previous) host.append(...previous.nodes);
+    else host.appendChild(el("div", { class: "muted small" }, message));
+    host.hidden = false;
+    if (previous) {
+      previous.displayState = "stale";
+      previous.displaySpec = { coverage: spec?.coverage, error_type: spec?.error_type, _request: spec?._request, cleanup: spec?.cleanup || spec?.data?.cleanup, ok: false };
+      previous.displayMessage = message;
+    }
+    paintResultStatus(host, previous ? "stale" : resultState(spec || { ok: false }), spec, previous, message);
+  }
+
+  function renderWithResultState(host, spec, render) {
+    const request = host._activeResultRequest;
+    if (!request || !spec?._request || host._renderingResult) return render();
+    if (!request.current() || spec._request.id !== request.id) return;
+    if (!validCoverage(spec.coverage)) return failResult(host, request, "Response coverage metadata was invalid.");
+    if (!validResultShape(spec)) return failResult(host, request, "Response data shape was invalid.");
+    const previous = host._resultView?.key === request.resultKey ? host._resultView : null;
+    if (resultFailure(spec) && !resultHasEvidence(spec) && previous) {
+      return failResult(host, request, spec.error || spec.data?.error || spec.reason || "The refresh did not complete.", spec);
+    }
+    host._renderingResult = true;
+    try { render(); } finally { host._renderingResult = false; }
+    const state = resultState(spec);
+    const usable = !resultFailure(spec) || resultHasEvidence(spec);
+    const view = { key: request.resultKey, receivedAt: new Date().toISOString(), context: spec._request, state, coverage: spec.coverage,
+      nodes: Array.from(host.childNodes).filter(node => !node.classList?.contains("result-status")) };
+    if (usable) host._resultView = view;
+    else delete host._resultView;
+    host.hidden = false;
+    paintResultStatus(host, state, spec, usable ? view : null);
+  }
+
+  function validResultShape(spec) {
+    const required = { table: ["rows", "columns"], errors_chart: ["rows"], log_stream: ["events"],
+      reverse_lookup: ["matches"], execution_detail: ["actions"], stack_detail: ["resources", "events"],
+      codeartifact_version_history: ["versions"], raw_json: [], permission_denied: [] };
+    if (spec.render && !Object.hasOwn(required, spec.render)) return false;
+    const keys = spec.render ? required[spec.render] : ["functions", "groups", "streams", "pipelines"].filter(key => Object.hasOwn(spec, key));
+    if (!spec.render && !keys.length && !resultFailure(spec)) return false;
+    return keys.every(key => Array.isArray(spec[key]) && (key === "columns"
+      ? spec[key].every(value => typeof value === "string")
+      : spec[key].every(value => value && typeof value === "object" && !Array.isArray(value))));
+  }
+
+  function renderArrayResult(host, result, key, render) {
+    if (!resultFailure(result) && !Array.isArray(result[key])) return failResult(host, host._activeResultRequest, "Response data shape was invalid.");
+    if (result.render) return dispatchRender(host, result);
+    return renderWithResultState(host, result, () => {
+      if (!Array.isArray(result[key])) {
+        clear(host);
+        host.appendChild(el("div", { class: "muted small" }, result.error || "The request did not complete."));
+        return;
+      }
+      render(result[key]);
+      if (!result[key].length && resultFailure(result)) {
+        clear(host);
+        host.appendChild(el("div", { class: "muted small" }, "Results are unavailable or incomplete."));
+      }
+    });
+  }
+
+  // Local filtering and row selection change presentation, not receipt time.
+  function restoreResultStatus(host) {
+    const view = host._resultView;
+    if (!view || host._renderingResult) return;
+    view.nodes = Array.from(host.childNodes).filter(node => !node.classList?.contains("result-status"));
+    paintResultStatus(host, view.displayState || view.state, view.displaySpec || { coverage: view.coverage }, view, view.displayMessage);
+  }
+
+  function reuseResultBrowser(body) {
+    if (body._reloadResult && body.firstElementChild && body._browserGeneration === (body._requestGeneration || 0)) {
+      body._reloadResult();
+      return true;
+    }
+    return false;
+  }
+
+  function sectionEmptyMessage(spec, section, emptyMessage) {
+    const coverage = spec.coverage?.sections?.[section];
+    const denied = coverage?.reasons.some(reason => reason.code === "policy_denied");
+    const failed = coverage?.reasons.some(reason => reason.code === "request_failed");
+    if (denied) return `${displayName(section)} were denied; no data is available for this section.`;
+    if (failed || (!coverage && resultFailure(spec))) return `${displayName(section)} could not be loaded; this is not an empty result.`;
+    return emptyMessage;
   }
 
   async function fetchWidgetInto(host, widgetName, inputs, contextOverride) {
@@ -2070,6 +2288,7 @@
     } catch (err) {
       if (!request.current()) return;
       if (errorEl) errorEl.textContent = `Error: ${err}`;
+      failResult(rowsHost, request, String(err));
     }
   }
 
@@ -2242,13 +2461,13 @@
         ctx, request,
       );
       if (!request.accept(result)) return;
-      if (result && result.render === "table" && !requestFailureLabel(result)) {
+      if (result && result.render === "table" && (!resultFailure(result) || resultHasEvidence(result))) {
         const rows = Array.isArray(result.rows) ? result.rows : [];
         const latest = rows[0] || null;
         if (statusEl) {
-          const rawStatus = latest && latest.status ? latest.status : "No runs";
+          const rawStatus = requestFailureLabel(result) || (latest && latest.status ? latest.status : "No runs");
           statusEl.className = "badge " + (latest ? statusToBadge(rawStatus) : "badge-neutral") + " pipeline-pin-status";
-          statusEl.textContent = latest ? formatStatusLabel(rawStatus) : "No runs";
+          statusEl.textContent = requestFailureLabel(result) || (latest ? formatStatusLabel(rawStatus) : "No runs");
         }
         if (updatedEl && latest && latest.last_updated) {
           updatedEl.textContent = formatDisplayValue("last_updated", latest.last_updated).text;
@@ -2284,7 +2503,7 @@
       }
       if (resultHost) {
         resultHost.className = "pipeline-pin-result muted small";
-        resultHost.textContent = `Error: ${err}`;
+        failResult(resultHost, request, String(err));
       }
     }
   }
@@ -2508,68 +2727,57 @@
     const widget = target && target.closest ? target.closest(".widget") : target;
     if (!widget) return;
     const sel = $(".pipeline-name-select", widget);
-    if (!sel) return;
-    const hint = $(".pipeline-name-hint", widget);
     const input = $(".pipeline-name-search", widget);
-    while (sel.firstChild) sel.removeChild(sel.firstChild);
-    sel.disabled = true;
+    const hint = $(".pipeline-name-hint", widget);
+    if (!sel || !input) return;
     closePipelineCombo();
-    if (input) {
+    const request = beginOwnedRequest(input);
+    beginResultRequest(request, "pipeline-names", {});
+    const host = request.resultHost;
+    const retained = !!host._resultView;
+    if (!retained) {
+      clear(sel);
       input._pipelineNames = [];
-      input.disabled = true;
       input.value = "";
-      input.placeholder = "(loading pipelines...)";
+      input.disabled = true;
+      sel.disabled = true;
+      input.placeholder = "Loading pipeline names…";
     }
-    if (hint) hint.textContent = "";
-
-    const request = beginOwnedRequest(input || sel);
-    let res;
+    if (hint) {
+      clear(hint);
+      hint.appendChild(el("button", { type: "button", class: "exec-btn small pipeline-list-retry",
+        onclick: () => loadPipelineList(widget) }, "Retry pipeline list"));
+    }
     try {
       if (!request.allowed) throw new Error("Select and verify an AWS account first.");
-      res = await tauriInvoke("aws_list_pipelines", {
+      const res = await tauriInvoke("aws_list_pipelines", {
         params: { context: request.context, request_id: request.id },
       });
       if (!request.accept(res)) return;
-    } catch (e) {
+      renderArrayResult(host, res, "pipelines", pipelines => {
+        const selected = selectedPipelineName($(".pipeline-config", widget));
+        const ordered = pipelines.slice().sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")));
+        clear(sel);
+        ordered.forEach(pipeline => sel.appendChild(el("option", { value: pipeline.name }, pipeline.name)));
+        input._pipelineNames = ordered.map(pipeline => pipeline.name);
+        sel.disabled = input.disabled = ordered.length === 0;
+        sel.selectedIndex = -1;
+        input.value = "";
+        if (selected && input._pipelineNames.includes(selected)) {
+          addSelectedPipelineOption($(".pipeline-config", widget), selected);
+          input.value = selected;
+        }
+        input.placeholder = ordered.length ? "search pipelines (regex)..." : resultFailure(res)
+          ? "Pipeline names are unavailable or incomplete" : "No pipeline names returned";
+        clear(host);
+        host.appendChild(el("span", {}, `${ordered.length} pipeline names returned.`));
+      });
+      if (resultFailure(res) && !host._resultView) input.placeholder = "Pipeline names could not be loaded. Retry.";
+    } catch (_) {
       if (!request.current()) return;
-      if (input) input.placeholder = `(rpc error: ${e})`;
-      return;
+      failResult(host, request, "Pipeline names could not be loaded. Retry pipeline list.");
+      if (!retained) input.placeholder = "Pipeline names could not be loaded. Retry.";
     }
-
-    while (sel.firstChild) sel.removeChild(sel.firstChild);
-    if (!res || res.ok === false) {
-      if (input) input.placeholder = `(${(res && res.error) || "failed to list pipelines"})`;
-      return;
-    }
-    const pipelines = Array.isArray(res.pipelines) ? res.pipelines.slice() : [];
-    if (pipelines.length === 0) {
-      if (input) input.placeholder = "(no CodePipeline pipelines in this account/region)";
-      return;
-    }
-    let mostRecent = pipelines[0];
-    for (const p of pipelines) {
-      if ((p.updated || "") > (mostRecent.updated || "")) mostRecent = p;
-    }
-    const ordered = [mostRecent, ...pipelines.filter(p => p !== mostRecent)];
-    ordered.forEach((p) => {
-      const opt = document.createElement("option");
-      opt.value = p.name;
-      opt.textContent = p.name;
-      sel.appendChild(opt);
-    });
-    sel.selectedIndex = -1;
-    sel.disabled = false;
-    if (input) {
-      input._pipelineNames = ordered.map(p => p.name);
-      input.disabled = false;
-      input.value = "";
-      input.placeholder = "search pipelines (regex)...";
-    }
-    const runsRows = $(".pipeline-runs-rows", widget);
-    if (runsRows) { clear(runsRows); runsRows.hidden = true; }
-    const pErr = $(".pipeline-error", widget);
-    if (pErr) pErr.textContent = "";
-    if (hint) hint.textContent = `${pipelines.length} pipeline(s)`;
   }
 
   function loadPipelineListsForInheritedWidgets() {
@@ -2706,6 +2914,11 @@
   toggleRowDetail.nextId = 0;
 
   function renderTable(host, spec, opts) {
+    if (spec.render !== "table" && spec.render) return dispatchRender(host, spec);
+    return renderWithResultState(host, spec, () => renderTableContent(host, spec, opts));
+  }
+
+  function renderTableContent(host, spec, opts) {
     clear(host);
     if (spec.render !== "table") {
       host.appendChild(el("pre", { class: "raw-json" }, JSON.stringify(spec, null, 2)));
@@ -2716,6 +2929,7 @@
     }
     const columns = Array.isArray(spec.columns) ? spec.columns : [];
     const rows = Array.isArray(spec.rows) ? spec.rows : [];
+    if (!rows.length && resultFailure(spec)) return;
     const expandable = !!(opts && typeof opts.expand === "function");
     const tbody = el("tbody", {},
       ...rows.map(row => {
@@ -2883,7 +3097,7 @@
     });
 
     if (resources.length === 0) {
-      resourcePanel.appendChild(el("div", { class: "muted small stack-detail-empty" }, "No resources returned for this stack."));
+      resourcePanel.appendChild(el("div", { class: "muted small stack-detail-empty" }, sectionEmptyMessage(spec, "resources", "No resources returned for this stack.")));
     } else {
       resourcePanel.appendChild(el("table", { class: "events-table stack-resources-table" },
         el("colgroup", {},
@@ -2913,7 +3127,7 @@
       hidden: "hidden",
     });
     if (events.length === 0) {
-      eventPanel.appendChild(el("div", { class: "muted small stack-detail-empty" }, "No recent stack events returned."));
+      eventPanel.appendChild(el("div", { class: "muted small stack-detail-empty" }, sectionEmptyMessage(spec, "events", "No recent stack events returned.")));
     } else {
       eventPanel.appendChild(el("table", { class: "events-table stack-events-table" },
         el("colgroup", {},
@@ -2990,11 +3204,11 @@
     clear(host);
     if (spec && spec.error) {
       host.appendChild(el("div", { class: "muted small" }, "Error: " + spec.error));
-      return;
     }
     const actions = (spec && Array.isArray(spec.actions)) ? spec.actions : [];
     if (actions.length === 0) {
-      host.appendChild(el("div", { class: "muted small" }, "No action details returned for this execution."));
+      host.appendChild(el("div", { class: "muted small" }, resultFailure(spec)
+        ? "Action details are unavailable or incomplete." : "No action details returned for this execution."));
       return;
     }
     const list = el("div", { class: "exec-detail" });
@@ -3096,6 +3310,7 @@
   }
 
   function renderError(host, message) {
+    if (host._activeResultRequest) return failResult(host, host._activeResultRequest, message || "The request did not complete.");
     clear(host);
     host.appendChild(el("div", { class: "muted small" }, message || "No data returned."));
   }
@@ -3114,6 +3329,10 @@
   }
 
   function dispatchRender(host, spec) {
+    return renderWithResultState(host, spec, () => dispatchRenderContent(host, spec));
+  }
+
+  function dispatchRenderContent(host, spec) {
     if (!spec || typeof spec !== "object") {
       renderError(host, "No data returned.");
       return;
@@ -3142,7 +3361,8 @@
     if (spec.error) {
       host.appendChild(el("div", { class: "muted small" }, "Error: " + spec.error));
     }
-    const incomplete = spec.partial === true || spec.status === "partial" || spec.status === "failed" || !!spec.error;
+    const incomplete = spec.partial === true || spec.status === "partial" || spec.status === "failed" || !!spec.error
+      || spec.coverage?.completeness === "unknown";
     if (spec.counts && incomplete) {
       const count = (key) => Number.isSafeInteger(spec.counts[key]) && spec.counts[key] >= 0 ? spec.counts[key] : 0;
       host.appendChild(el("div", { class: "muted small" },
@@ -3167,7 +3387,7 @@
           el("div", { class: "bar-track" },
             el("div", { class: "bar-fill", style: `width: ${pct}%` }),
           ),
-          el("span", { class: "bar-count" }, String(errors)),
+          el("span", { class: "bar-count", title: row.count_is_lower_bound ? "At least this many errors were returned; the count is bounded." : undefined }, `${row.count_is_lower_bound ? "≥ " : ""}${errors}`),
       );
       rowEls.push(rowEl);
       wrap.appendChild(rowEl);
@@ -3211,7 +3431,9 @@
     }
     const events = Array.isArray(spec.events) ? spec.events : [];
     if (events.length === 0) {
-      host.appendChild(el("div", { class: "muted small" }, "No log events in the selected window."));
+      host.appendChild(el("div", { class: "muted small" }, resultFailure(spec) || spec.coverage?.completeness === "unknown"
+        ? "Log events are unavailable or incomplete; no returned events does not establish an empty log."
+        : "No log events returned in the selected window."));
       return;
     }
     // The host already has `.log-stream` CSS in the tile, but we still emit a
@@ -3235,14 +3457,13 @@
     const matches = Array.isArray(spec.matches) ? spec.matches : [];
     if (spec.error) {
       host.appendChild(el("div", { class: "muted small" }, "Error: " + spec.error));
-      return;
     }
     if (matches.length === 0) {
       const region = spec.region ? ` in ${spec.region}` : "";
       const scanned = typeof spec.scanned === "number"
         ? ` Searched ${spec.scanned} tagged resource${spec.scanned === 1 ? "" : "s"}${spec.capped ? "+ (capped)" : ""}.`
         : "";
-      host.appendChild(el("div", { class: "lookup-empty" }, `No matching resources found${region}.`));
+      host.appendChild(el("div", { class: "lookup-empty" }, resultFailure(spec) ? "Resource search is incomplete; no returned matches does not establish absence." : `No matching resources found${region}.`));
       host.appendChild(el("div", { class: "muted small" },
         "Only tagged resources in this widget's account and region can be searched. The Resource Groups Tagging API does not cover every AWS resource type." + scanned));
       return;
@@ -3283,6 +3504,7 @@
       const body = $(".log-tail-body", widget);
       if (!body) return;
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
+      if (reuseResultBrowser(body)) return;
       body.classList.remove("log-stream");
       body.classList.add("lambda-log-browser");
       invalidateRequests(body);
@@ -3359,7 +3581,8 @@
         const rows = filteredFunctions();
         if (rows.length === 0) {
           listHost.appendChild(el("div", { class: "lambda-empty muted small" },
-            state.functions.length ? "No matching functions." : "No Lambda functions in this account/region."));
+            state.functions.length ? "No matching functions." : "No Lambda functions returned."));
+          restoreResultStatus(listHost);
           return;
         }
         rows.forEach(fn => {
@@ -3376,6 +3599,7 @@
           row.addEventListener("click", () => selectLambda(fn));
           listHost.appendChild(row);
         });
+        restoreResultStatus(listHost);
       }
 
       function renderDetail() {
@@ -3473,19 +3697,18 @@
         try {
           const result = await fetchWidgetData("log-tail", { mode: "list", max_functions: 500 }, listHost, null, request);
           if (!request.accept(result)) return;
-          if (!result || result.ok === false || result.render) {
-            showBackendProblem(statusHost, result, result && result.error);
-            return;
-          }
-          state.functions = Array.isArray(result.functions) ? result.functions : [];
-          state.selected = null;
-          state.streams = [];
-          setStatus(`${state.functions.length} Lambda function${state.functions.length === 1 ? "" : "s"}`);
-          renderFunctionList();
-          renderDetail();
+          setStatus("");
+          renderArrayResult(listHost, result, "functions", functions => {
+            state.functions = functions;
+            state.selected = null;
+            state.streams = [];
+            renderFunctionList();
+            renderDetail();
+          });
         } catch (err) {
           if (!request.current()) return;
-          setStatus("Error: " + err);
+          setStatus("");
+          failResult(listHost, request, String(err));
         }
       }
 
@@ -3512,15 +3735,13 @@
             streamHost, null, request,
           );
           if (!request.accept(result)) return;
-          if (!result || result.ok === false || result.render) {
-            showBackendProblem(streamHost, result, result && result.error);
-            return;
-          }
-          state.streams = Array.isArray(result.streams) ? result.streams : [];
-          renderStreams();
+          renderArrayResult(streamHost, result, "streams", streams => {
+            state.streams = streams;
+            renderStreams();
+          });
         } catch (err) {
           if (!request.current()) return;
-          renderStreams("Error: " + err);
+          failResult(streamHost, request, String(err));
         }
       }
 
@@ -3541,14 +3762,15 @@
           dispatchRender(logHost, result);
         } catch (err) {
           if (!request.current()) return;
-          clear(logHost);
-          logHost.appendChild(el("div", { class: "muted small" }, "Error: " + err));
+          failResult(logHost, request, String(err));
         }
       }
 
       search.addEventListener("input", renderFunctionList);
       reloadBtn.addEventListener("click", loadFunctions);
       body.appendChild(layout);
+      body._browserGeneration = body._requestGeneration || 0;
+      body._reloadResult = loadFunctions;
       loadFunctions();
     });
   }
@@ -3588,6 +3810,7 @@
     return withWidgets("cloudwatch-logs", target, (widget) => {
       const body = $(".cw-logs-body", widget);
       if (!body) return;
+      if (reuseResultBrowser(body)) return;
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       invalidateRequests(body);
       clear(body);
@@ -3677,7 +3900,8 @@
           listHost.appendChild(el("div", { class: "lambda-empty muted small" },
             state.groups.length
               ? (state.capped ? "No loaded group matches — press Enter to search AWS." : "No matching log groups.")
-              : "No log groups in this account/region."));
+              : "No log groups returned."));
+          restoreResultStatus(listHost);
           return;
         }
         rows.forEach(group => {
@@ -3694,6 +3918,7 @@
           row.addEventListener("click", () => selectGroup(group));
           listHost.appendChild(row);
         });
+        restoreResultStatus(listHost);
       }
 
       function renderDetail() {
@@ -3788,22 +4013,19 @@
           if (pattern) inputs.name_pattern = pattern;
           const result = await fetchWidgetData("cloudwatch-logs", inputs, listHost, null, request);
           if (!request.accept(result)) return;
-          if (!result || result.ok === false || result.render) {
-            showBackendProblem(statusHost, result, result && result.error);
-            return;
-          }
-          state.groups = Array.isArray(result.groups) ? result.groups : [];
-          state.capped = result.capped === true;
-          state.selected = null;
-          state.streams = [];
-          const scope = pattern ? ` matching "${pattern}"` : "";
-          setStatus(`${state.groups.length} log group${state.groups.length === 1 ? "" : "s"}${scope}`
-            + (state.capped ? " (capped — press Enter in the search box to narrow server-side)" : ""));
-          renderGroupList();
-          renderDetail();
+          setStatus("");
+          renderArrayResult(listHost, result, "groups", groups => {
+            state.groups = groups;
+            state.capped = result.capped === true;
+            state.selected = null;
+            state.streams = [];
+            renderGroupList();
+            renderDetail();
+          });
         } catch (err) {
           if (!request.current()) return;
-          setStatus("Error: " + err);
+          setStatus("");
+          failResult(listHost, request, String(err));
         }
       }
 
@@ -3830,15 +4052,13 @@
             streamHost, null, request,
           );
           if (!request.accept(result)) return;
-          if (!result || result.ok === false || result.render) {
-            showBackendProblem(streamHost, result, result && result.error);
-            return;
-          }
-          state.streams = Array.isArray(result.streams) ? result.streams : [];
-          renderStreams();
+          renderArrayResult(streamHost, result, "streams", streams => {
+            state.streams = streams;
+            renderStreams();
+          });
         } catch (err) {
           if (!request.current()) return;
-          renderStreams("Error: " + err);
+          failResult(streamHost, request, String(err));
         }
       }
 
@@ -3859,8 +4079,7 @@
           dispatchRender(logHost, result);
         } catch (err) {
           if (!request.current()) return;
-          clear(logHost);
-          logHost.appendChild(el("div", { class: "muted small" }, "Error: " + err));
+          failResult(logHost, request, String(err));
         }
       }
 
@@ -3873,6 +4092,8 @@
       });
       reloadBtn.addEventListener("click", () => loadGroups(search.value.trim()));
       body.appendChild(layout);
+      body._browserGeneration = body._requestGeneration || 0;
+      body._reloadResult = () => loadGroups(search.value.trim());
       loadGroups("");
     });
   }
@@ -3961,6 +4182,10 @@
       const old = $(".lookup-input", widget);
       const results = $(".lookup-results", widget);
       if (!old || !results) return;
+      if (old._lookupResultGeneration === (results._requestGeneration || 0) && old.value.trim()) {
+        old.dispatchEvent(new Event("input"));
+        return;
+      }
       if (old._lookupDebounceTimer) clearTimeout(old._lookupDebounceTimer);
       invalidateRequests(results);
       const input = old.cloneNode(true);
@@ -3972,6 +4197,7 @@
       input.addEventListener("input", () => {
         if (input._lookupDebounceTimer) clearTimeout(input._lookupDebounceTimer);
         const request = beginOwnedRequest(results);
+        input._lookupResultGeneration = results._requestGeneration || 0;
         const q = input.value.trim();
         clear(results);
         if (!q) {
@@ -4233,7 +4459,8 @@
   }
 
   function renderCodeArtifactVersionError(row, cell, error, historyOptions) {
-    clear(cell);
+    if (cell._activeResultRequest) failResult(cell, cell._activeResultRequest, "Version history could not be loaded. Retry.");
+    else clear(cell);
     cell.removeAttribute("aria-busy");
     const retry = el("button", { class: "exec-btn small", type: "button" }, "Retry");
     retry.addEventListener("click", (event) => {
@@ -4255,10 +4482,6 @@
     }
     const request = beginOwnedRequest(cell, historyOptions.context);
     if (!request.current()) return;
-    if (Array.isArray(row._codeArtifactVersionHistory)) {
-      renderCodeArtifactVersionHistory(row, cell, row._codeArtifactVersionHistory);
-      return;
-    }
     clear(cell);
     cell.setAttribute("aria-busy", "true");
     cell.appendChild(el("div", { class: "muted small", role: "status" }, "Loading version dates…"));
@@ -4268,24 +4491,38 @@
       domain_owner: sourceInputs.domain_owner || "", package: String(row.package || ""),
       versions: localVersions.map(item => ({ version: item.version, published: item.published })),
     };
+    beginResultRequest(request, "codeartifact-package-version-history", detailInputs);
+    const cached = row._codeArtifactResultView;
+    if (request.allowed && cached?.key === request.resultKey) {
+      clear(cell);
+      cell.removeAttribute("aria-busy");
+      cell.append(...cached.nodes);
+      cell._resultView = cached;
+      cell._resultContext = cached.context;
+      paintResultStatus(cell, cached.displayState || cached.state,
+        cached.displaySpec || { coverage: cached.coverage }, cached, cached.displayMessage);
+      return;
+    }
     try {
       const result = await fetchWidgetData("codeartifact-package-version-history", detailInputs,
         cell, historyOptions.context, request);
       if (!request.accept(result)) return;
-      if (result.render === "permission_denied") {
-        cell.removeAttribute("aria-busy");
-        renderPermissionDenied(cell, result);
+      cell.removeAttribute("aria-busy");
+      if (result.render !== "codeartifact_version_history") {
+        dispatchRender(cell, result);
         return;
       }
-      if (result.render !== "codeartifact_version_history") throw new Error("unexpected response");
-      if (result.error) throw new Error(result.error);
-      const versions = codeArtifactVersions({ latest_version: row.latest_version,
-        last_published: row.last_published, versions: result.versions });
-      if (!versions.length) throw new Error("no versions returned");
-      // Cache only an accepted completion on this table's row object. Detached
-      // detail requests cannot populate the cache used by a reopened row.
-      row._codeArtifactVersionHistory = versions;
-      renderCodeArtifactVersionHistory(row, cell, versions);
+      renderWithResultState(cell, result, () => {
+        const versions = Array.isArray(result.versions) ? result.versions : [];
+        if (!versions.length) {
+          clear(cell);
+          cell.appendChild(el("div", { class: "muted small" }, resultFailure(result)
+            ? "Version history is unavailable or incomplete." : "No version history returned."));
+        } else renderCodeArtifactVersionHistory(row, cell, versions);
+      });
+      if (cell._resultView && validCoverage(result.coverage) && validResultShape(result) && !resultFailure(result)) {
+        row._codeArtifactResultView = cell._resultView;
+      }
     } catch (error) {
       if (request.current()) renderCodeArtifactVersionError(row, cell, String(error), historyOptions);
     }
@@ -4361,6 +4598,7 @@
           } catch (err) {
             if (!request.current()) return;
             errorEl.textContent = `Error: ${err}`;
+            failResult(rows, request, String(err));
           }
         });
       }
@@ -4430,7 +4668,7 @@
         errorEl.textContent = "";
         dispatchRender(rows, result);
         if (result.render === "table") {
-          const zero = Array.isArray(result.rows) && result.rows.length === 0 ? "0 rows" : "";
+          const zero = !resultFailure(result) && Array.isArray(result.rows) && result.rows.length === 0 ? "0 rows returned" : "";
           const stats = formatInsightsStats(result.stats);
           const footer = [zero, stats].filter(Boolean).join(" · ");
           if (footer) rows.appendChild(el("p", { class: "muted small" }, footer));
@@ -4439,10 +4677,12 @@
         rows.hidden = false;
       } else {
         errorEl.textContent = result.error || "No data returned.";
+        dispatchRender(rows, result);
       }
     } catch (err) {
       if (!request.current()) return;
       errorEl.textContent = `Error: ${err}`;
+      failResult(rows, request, String(err));
     }
   }
 
@@ -4474,14 +4714,20 @@
             const res = await fetchWidgetData("logs-insights", { mode: "groups", max_groups: 500 },
               groupInput, null, request);
             if (!request.accept(res)) return;
-            if (dl && res.ok && Array.isArray(res.groups)) {
-              clear(dl);
-              res.groups.forEach(g => dl.appendChild(el("option", { value: g.name })));
-            } else {
-              delete groupInput.dataset.loaded;
-            }
+            renderArrayResult(request.resultHost, res, "groups", groups => {
+              clear(request.resultHost);
+              if (dl) {
+                clear(dl);
+                groups.forEach(g => dl.appendChild(el("option", { value: g.name })));
+              }
+              request.resultHost.appendChild(el("span", {}, `${groups.length} log group suggestions returned.`));
+            });
+            if (resultFailure(res)) delete groupInput.dataset.loaded;
           } catch (_) {
-            if (request.current()) delete groupInput.dataset.loaded;
+            if (request.current()) {
+              delete groupInput.dataset.loaded;
+              failResult(request.resultHost, request, "Log group suggestions could not be loaded. Focus to retry.");
+            }
           }
         });
         form.addEventListener("submit", async (e) => {
@@ -4770,13 +5016,12 @@
     try {
       const result = await fetchWidgetData("aws-cli", { command: pin.command }, card, ctx, request);
       if (!request.accept(result)) return;
-      const stamp = new Date().toLocaleTimeString();
-      if (updatedEl) updatedEl.textContent = stamp;
-      if (result && !requestFailureLabel(result) && (result.render === "table" || result.render === "raw_json")) {
+      if (updatedEl && (!resultFailure(result) || resultHasEvidence(result))) updatedEl.textContent = new Date().toLocaleTimeString();
+      if (result && (!resultFailure(result) || resultHasEvidence(result)) && (result.render === "table" || result.render === "raw_json")) {
         if (statusEl) {
           const rowCount = result.render === "table" && Array.isArray(result.rows) ? result.rows.length : null;
           statusEl.className = "badge badge-success pipeline-pin-status";
-          statusEl.textContent = rowCount === null ? "OK" : `${rowCount} row${rowCount === 1 ? "" : "s"}`;
+          statusEl.textContent = requestFailureLabel(result) || (rowCount === null ? "OK" : `${rowCount} row${rowCount === 1 ? "" : "s"}`);
         }
         if (resultHost) {
           resultHost.className = "pipeline-pin-result";
@@ -4796,7 +5041,7 @@
           dispatchRender(resultHost, result);
         } else {
           resultHost.className = "pipeline-pin-result muted small";
-          resultHost.textContent = (result && result.error) || "No data returned.";
+          dispatchRender(resultHost, result);
         }
       }
     } catch (err) {
@@ -4807,7 +5052,7 @@
       }
       if (resultHost) {
         resultHost.className = "pipeline-pin-result muted small";
-        resultHost.textContent = `Error: ${err}`;
+        failResult(resultHost, request, String(err));
       }
     }
   }
@@ -4836,17 +5081,19 @@
       if (result.render) {
         errorEl.textContent = "";
         dispatchRender(rows, result);
-        if (result.render === "table" && Array.isArray(result.rows) && result.rows.length === 0) {
+        if (!resultFailure(result) && result.render === "table" && Array.isArray(result.rows) && result.rows.length === 0) {
           rows.appendChild(el("p", { class: "muted small" }, "0 rows"));
         }
         rows.hidden = false;
         if (result.render !== "permission_denied") persistTileInputs(form, { command });
       } else {
         errorEl.textContent = result.error || "No data returned.";
+        dispatchRender(rows, result);
       }
     } catch (err) {
       if (!request.current()) return;
       errorEl.textContent = `Error: ${err}`;
+      failResult(rows, request, String(err));
     }
   }
 

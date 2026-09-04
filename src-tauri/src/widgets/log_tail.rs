@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_sdk_cloudwatchlogs::types::OrderBy;
 use serde_json::{json, Value};
 
-use super::{err_msg, WidgetCtx};
+use super::{coverage::Coverage, err_msg, WidgetCtx};
 
 const DEFAULT_TAIL_EVENTS: i32 = 200;
 const DEFAULT_STREAM_EVENTS: i32 = 500;
@@ -52,6 +52,9 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
 
     let mut functions: Vec<Value> = Vec::new();
     let mut marker: Option<String> = None;
+    let mut pages = 0;
+    let mut failure = None;
+    let mut locally_omitted = false;
     loop {
         let remaining = max_functions.saturating_sub(functions.len());
         if remaining == 0 {
@@ -64,9 +67,13 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
         }
         let resp = match req.send().await {
             Ok(r) => r,
-            Err(e) => return json!({"ok": false, "error": err_msg(e)}),
+            Err(e) => {
+                failure = Some(err_msg(e));
+                break;
+            }
         };
-        for f in resp.functions() {
+        pages += 1;
+        for (index, f) in resp.functions().iter().enumerate() {
             let name = f.function_name().unwrap_or("").to_string();
             if name.is_empty() {
                 continue;
@@ -102,6 +109,7 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
                 "architectures": architectures,
             }));
             if functions.len() >= max_functions {
+                locally_omitted = index + 1 < resp.functions().len();
                 break;
             }
         }
@@ -121,14 +129,35 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
             .to_ascii_lowercase()
             .cmp(&b["name"].as_str().unwrap_or("").to_ascii_lowercase())
     });
-    let capped = functions.len() >= max_functions;
-    json!({
-        "ok": true,
+    let capped = locally_omitted || (functions.len() >= max_functions && marker.is_some());
+    let mut coverage = Coverage::complete(functions.len());
+    coverage.count("pages", pages);
+    coverage.limit("results", Some(max_functions));
+    if capped {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "function_limit",
+            "The requested function limit omitted further results.",
+        );
+    }
+    if failure.is_some() {
+        coverage.failure(
+            "function_page_failed",
+            "A function page could not be loaded; retained functions are incomplete.",
+            !functions.is_empty(),
+        );
+    }
+    let mut result = json!({
+        "ok": failure.is_none(),
         "account_id": ctx.account_id,
         "region": ctx.region,
         "functions": functions,
         "capped": capped,
-    })
+    });
+    if let Some(error) = failure {
+        result["error"] = json!(error);
+    }
+    coverage.attach(result)
 }
 
 pub(super) async fn fetch_streams(ctx: &WidgetCtx) -> Value {
@@ -162,12 +191,20 @@ pub(super) async fn fetch_streams(ctx: &WidgetCtx) -> Value {
                      has never been invoked, its log group does not exist yet)"
                 );
             }
-            return json!({
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("results", Some(max_streams as usize));
+            coverage.failure(
+                "stream_listing_failed",
+                "Log streams could not be loaded.",
+                false,
+            );
+            return coverage.attach(json!({
                 "ok": false,
                 "log_group": log_group,
                 "streams": [],
                 "error": error,
-            });
+            }));
         }
     };
 
@@ -187,7 +224,17 @@ pub(super) async fn fetch_streams(ctx: &WidgetCtx) -> Value {
         })
         .collect();
 
-    json!({"ok": true, "log_group": log_group, "streams": streams})
+    let mut coverage = Coverage::complete(streams.len());
+    coverage.count("pages", 1);
+    coverage.limit("results", Some(max_streams as usize));
+    if resp.next_token().is_some_and(|token| !token.is_empty()) {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "single_stream_page",
+            "Only the first log stream page was loaded.",
+        );
+    }
+    coverage.attach(json!({"ok": true, "log_group": log_group, "streams": streams}))
 }
 
 pub(super) async fn fetch_stream_events(ctx: &WidgetCtx) -> Value {
@@ -218,13 +265,21 @@ pub(super) async fn fetch_stream_events(ctx: &WidgetCtx) -> Value {
     {
         Ok(r) => r,
         Err(e) => {
-            return json!({
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("events", Some(limit as usize));
+            coverage.failure(
+                "event_page_failed",
+                "Log events could not be loaded.",
+                false,
+            );
+            return coverage.attach(json!({
                 "render": "log_stream",
                 "log_group": log_group,
                 "log_stream": log_stream,
                 "events": [],
                 "error": err_msg(e),
-            });
+            }));
         }
     };
 
@@ -239,12 +294,21 @@ pub(super) async fn fetch_stream_events(ctx: &WidgetCtx) -> Value {
         })
         .collect();
 
-    json!({
+    // GetLogEvents supplies navigation tokens even at a stream boundary. A
+    // single request cannot establish that this is the complete stream.
+    let mut coverage = Coverage::unknown(events.len());
+    coverage.count("pages", 1);
+    coverage.limit("events", Some(limit as usize));
+    coverage.unknown_reason(
+        "single_event_page",
+        "One log event page was loaded; complete stream coverage is unknown.",
+    );
+    coverage.attach(json!({
         "render": "log_stream",
         "log_group": log_group,
         "log_stream": log_stream,
         "events": events,
-    })
+    }))
 }
 
 async fn fetch_tail(ctx: &WidgetCtx) -> Value {
@@ -276,12 +340,20 @@ async fn fetch_tail(ctx: &WidgetCtx) -> Value {
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            return json!({
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("events", Some(DEFAULT_TAIL_EVENTS as usize));
+            coverage.failure(
+                "tail_page_failed",
+                "Log events for the selected window could not be loaded.",
+                false,
+            );
+            return coverage.attach(json!({
                 "render": "log_stream",
                 "log_group": log_group,
                 "events": [],
                 "error": err_msg(e),
-            });
+            }));
         }
     };
 
@@ -306,5 +378,101 @@ async fn fetch_tail(ctx: &WidgetCtx) -> Value {
         })
         .collect();
 
-    json!({"render": "log_stream", "log_group": log_group, "events": out})
+    let mut coverage = Coverage::complete(out.len());
+    coverage.count("pages", 1);
+    coverage.limit("events", Some(DEFAULT_TAIL_EVENTS as usize));
+    if resp.next_token().is_some_and(|token| !token.is_empty()) || resp.events().len() > out.len() {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "single_tail_page",
+            "Only one page of events from the selected time window was loaded.",
+        );
+    }
+    coverage.attach(json!({"render": "log_stream", "log_group": log_group, "events": out}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        test_aws::{ExpectedRequest, ScriptedHttp},
+        test_support::TestDir,
+    };
+
+    #[tokio::test]
+    async fn lambda_listing_failure_retains_functions_and_custom_log_group() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![
+            ExpectedRequest::rest(
+                "GET",
+                "/2015-03-31/functions",
+                json!({"Marker":null}),
+                json!({"Functions":[{"FunctionName":"synthetic-function", "LoggingConfig":{"LogGroup":"/synthetic/custom"}}], "NextMarker":"synthetic-next"}),
+            ),
+            ExpectedRequest::rest(
+                "GET",
+                "/2015-03-31/functions",
+                json!({"Marker":"synthetic-next"}),
+                json!({"Type":"User", "message":"SYNTHETIC_PRIVATE_FUNCTION_ERROR"}),
+            )
+            .status(403),
+        ]);
+        let result = fetch(&script.context(&dir, "log-tail", json!({"mode":"list"}))).await;
+        script.assert_finished();
+        assert_eq!(result["functions"][0]["name"], "synthetic-function");
+        assert_eq!(result["functions"][0]["log_group"], "/synthetic/custom");
+        assert_eq!(result["partial"], true);
+        assert_eq!(result["coverage"]["counts"]["returned"], 1);
+        assert!(!result
+            .to_string()
+            .contains("SYNTHETIC_PRIVATE_FUNCTION_ERROR"));
+    }
+
+    #[tokio::test]
+    async fn single_event_page_tokens_do_not_claim_more_events_or_complete_stream() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![ExpectedRequest::json(
+            "Logs_20140328.GetLogEvents",
+            json!({"logGroupName":"/synthetic/group", "logStreamName":"synthetic-stream", "startFromHead":false}),
+            json!({"events":[{"timestamp":2,"message":"synthetic event"}], "nextForwardToken":"synthetic-forward", "nextBackwardToken":"synthetic-backward"}),
+        )]);
+        let result = fetch(&script.context(&dir, "log-tail", json!({"mode":"events", "log_group":"/synthetic/group", "log_stream":"synthetic-stream"}))).await;
+        script.assert_finished();
+        assert_eq!(result["events"][0]["msg"], "synthetic event");
+        assert_eq!(result["coverage"]["completeness"], "unknown");
+        assert!(result["coverage"]["has_more"].is_null());
+        assert_eq!(crate::request::outcome(&result), "succeeded");
+    }
+
+    #[tokio::test]
+    async fn stream_and_filter_tokens_report_unvisited_pages_without_more_requests() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![
+            ExpectedRequest::json(
+                "Logs_20140328.DescribeLogStreams",
+                json!({"logGroupName":"/synthetic/group"}),
+                json!({"logStreams":[{"logStreamName":"synthetic-stream"}], "nextToken":"synthetic-more"}),
+            ),
+            ExpectedRequest::json(
+                "Logs_20140328.FilterLogEvents",
+                json!({"logGroupName":"/synthetic/group", "limit":200}),
+                json!({"events":[{"timestamp":1,"message":"synthetic filtered event"}], "nextToken":"synthetic-more"}),
+            ),
+        ]);
+        let streams = fetch(&script.context(
+            &dir,
+            "log-tail",
+            json!({"mode":"streams", "log_group":"/synthetic/group"}),
+        ))
+        .await;
+        let events =
+            fetch(&script.context(&dir, "log-tail", json!({"log_group":"/synthetic/group"}))).await;
+        script.assert_finished();
+        assert_eq!(streams["streams"][0]["name"], "synthetic-stream");
+        assert_eq!(events["events"][0]["msg"], "synthetic filtered event");
+        for result in [streams, events] {
+            assert_eq!(result["coverage"]["completeness"], "limited");
+            assert_eq!(result["coverage"]["has_more"], true);
+        }
+    }
 }

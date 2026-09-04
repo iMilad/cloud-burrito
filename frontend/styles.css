@@ -1407,6 +1407,24 @@ body.has-fullscreen-widget .topbar { z-index: 201; } /* keep topbar above the FS
 .connection-status[data-state="verified"] { border-color: var(--success); }
 .cli-availability { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; color: var(--text-secondary); }
 .cli-availability[hidden] { display: none; }
+.result-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 3px;
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.result-status > div { flex-basis: 100%; }
+.result-status[data-state="stale"], .result-status[data-state="partial"], .result-status[data-state="limited"] { border-left-color: var(--warning); }
+.result-status[data-state="failed"], .result-status[data-state="denied"], .result-status[data-state="expired"] { border-left-color: var(--error); }
+.result-status time { font-size: 11px; }
+.result-input-status { display: block; }
 .save-status {
   position: fixed;
   right: 18px;

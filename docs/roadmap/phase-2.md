@@ -1,6 +1,6 @@
 # P2 — Make the core dependable
 
-Status: **P2-01–03 complete locally; P2-04 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
+Status: **P2-01–04 complete locally; P2-05 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
 Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
 
@@ -86,6 +86,8 @@ Completed units are linked to their evidence below; subsequent units remain plan
 **Review unit:** one existing-panel flow and production-bridge scenarios, without introducing a separate onboarding framework.
 
 ### P2-04 — Make result state and freshness explicit
+
+**Complete locally:** [implementation and validation evidence](p2-04-evidence.md).
 
 **Scope:** core widget renderers and refresh handlers; CB-J02/CB-J03/CB-J05. Depends on P1 response/context contract.
 

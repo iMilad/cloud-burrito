@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use futures::future::join_all;
 use serde_json::{json, Map, Value};
 
+use super::coverage::Coverage;
 use super::{err_msg, WidgetCtx};
 
 const DEFAULT_MAX: i64 = 25;
@@ -94,6 +95,8 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let mut scanned: usize = 0;
     let mut pages: usize = 0;
     let mut capped = false;
+    let mut result_limited = false;
+    let mut page_error = None;
     if let Some(denied) = ctx.preflight("resourcegroupstaggingapi", "GetResources") {
         return denied;
     }
@@ -105,10 +108,16 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                return json!({"render": "raw_json", "data": {"error": err_msg(e), "query": query}});
+                page_error = Some(err_msg(e));
+                break;
             }
         };
-        for rec in resp.resource_tag_mapping_list() {
+        pages += 1;
+        token = resp
+            .pagination_token()
+            .filter(|token| !token.is_empty())
+            .map(str::to_string);
+        for (index, rec) in resp.resource_tag_mapping_list().iter().enumerate() {
             scanned += 1;
             let arn = rec.resource_arn().unwrap_or("").to_string();
             if arn.is_empty() {
@@ -122,15 +131,12 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                 }
                 matches_raw.push((arn, Value::Object(tags)));
                 if matches_raw.len() >= max_results {
+                    result_limited =
+                        index + 1 < resp.resource_tag_mapping_list().len() || token.is_some();
                     break 'pages;
                 }
             }
         }
-        pages += 1;
-        token = resp
-            .pagination_token()
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
         if token.is_none() {
             break;
         }
@@ -141,15 +147,22 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     }
 
     // Enrich the first few matches with their owning stack, concurrently.
-    let enrich: Vec<String> = matches_raw
+    let mut enrich: Vec<String> = matches_raw
         .iter()
         .take(STACK_BUDGET)
         .map(|(arn, _)| arn.clone())
         .collect();
-    if !enrich.is_empty() {
-        if let Some(denied) = ctx.preflight("cloudformation", "DescribeStackResources") {
-            return denied;
-        }
+    let mut enrichment_denied = false;
+    if page_error.is_some() {
+        enrich.clear();
+    }
+    if !enrich.is_empty()
+        && ctx
+            .preflight("cloudformation", "DescribeStackResources")
+            .is_some()
+    {
+        enrichment_denied = true;
+        enrich.clear();
     }
     let futs = enrich.iter().map(|arn| {
         let cfn = cfn.clone();
@@ -157,29 +170,34 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         async move {
             let pid = physical_id_from_arn(&arn);
             let stack = if pid.is_empty() {
-                None
+                Ok(None)
             } else {
                 cfn.describe_stack_resources()
                     .physical_resource_id(&pid)
                     .send()
                     .await
-                    .ok()
-                    .and_then(|r| {
+                    .map(|r| {
                         r.stack_resources()
                             .first()
                             .and_then(|sr| sr.stack_name())
                             .map(str::to_string)
                     })
+                    .map_err(err_msg)
             };
             (arn, stack)
         }
     });
-    let stack_by_arn: HashMap<String, Option<String>> = join_all(futs).await.into_iter().collect();
+    let stack_by_arn: HashMap<String, Result<Option<String>, String>> =
+        join_all(futs).await.into_iter().collect();
 
     let mut matches = Vec::new();
     for (i, (arn, tags)) in matches_raw.iter().enumerate() {
         let stack = if i < STACK_BUDGET {
-            stack_by_arn.get(arn).cloned().flatten()
+            stack_by_arn
+                .get(arn)
+                .and_then(|result| result.as_ref().ok())
+                .cloned()
+                .flatten()
         } else {
             None
         };
@@ -192,12 +210,78 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         }));
     }
 
-    json!({
+    let mut listing = Coverage::complete(matches.len());
+    listing.count("pages", pages);
+    listing.count("scanned", scanned);
+    listing.limit("results", Some(max_results));
+    listing.limit("pages", Some(MAX_PAGES));
+    if capped {
+        listing.has_more(Some(true));
+        listing.limited(
+            "page_limit",
+            "The resource scan stopped at its page limit; additional resources were not scanned.",
+        );
+    }
+    if result_limited {
+        listing.has_more(Some(true));
+        listing.limited(
+            "result_limit",
+            "The match limit was reached before all available resources were scanned.",
+        );
+    }
+    if page_error.is_some() {
+        listing.failure(
+            "request_failed",
+            "A resource-list page could not be loaded; earlier matches are retained.",
+            pages > 0,
+        );
+    }
+    let failed = stack_by_arn
+        .values()
+        .filter(|result| result.is_err())
+        .count();
+    let mut enrichment = Coverage::complete(stack_by_arn.len() - failed);
+    enrichment.count("attempted", enrich.len());
+    enrichment.count("failed", failed);
+    enrichment.count("skipped", matches.len().saturating_sub(enrich.len()));
+    enrichment.limit("matches", Some(STACK_BUDGET));
+    if failed > 0 {
+        enrichment.failure(
+            "enrichment_failed",
+            "Some stack associations could not be checked.",
+            true,
+        );
+    }
+    if enrichment_denied {
+        enrichment.failure(
+            "policy_denied",
+            "Stack association lookup was not permitted.",
+            !matches.is_empty(),
+        );
+    } else if page_error.is_some() {
+        enrichment.unknown_reason(
+            "not_attempted",
+            "Stack association lookup was not requested after the listing failed.",
+        );
+    } else if matches.len() > STACK_BUDGET {
+        enrichment.limited(
+            "enrichment_limit",
+            "Stack associations are checked only for the first five matches.",
+        );
+    }
+    let mut coverage = Coverage::complete(matches.len());
+    coverage.section("matches", listing);
+    coverage.section("enrichment", enrichment);
+    let mut result = json!({
         "render": "reverse_lookup",
         "query": query,
         "matches": matches,
         "region": ctx.region,
         "scanned": scanned,
         "capped": capped,
-    })
+    });
+    if let Some(error) = page_error {
+        result["error"] = json!(error);
+    }
+    coverage.attach(result)
 }

@@ -10,6 +10,7 @@ use futures::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+use super::coverage::Coverage;
 use super::{dt_iso, err_msg, WidgetCtx};
 
 const DEFAULT_DOMAIN: &str = "example-domain";
@@ -27,6 +28,28 @@ struct PackageRow {
     last_published: String,
     versions: Vec<String>,
     detail_failed: bool,
+    detail_denied: bool,
+    versions_limited: bool,
+}
+
+impl PackageRow {
+    fn without_details(package: String) -> Self {
+        Self {
+            package,
+            latest_version: String::new(),
+            last_published: String::new(),
+            versions: Vec::new(),
+            detail_failed: false,
+            detail_denied: false,
+            versions_limited: false,
+        }
+    }
+}
+
+struct PackageListing {
+    packages: Vec<String>,
+    coverage: Coverage,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +85,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
 
     let client = Client::new(&ctx.sdk);
 
-    let packages = match list_packages(
+    let listing = match list_packages(
         ctx,
         &client,
         &domain,
@@ -77,26 +100,77 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         Err(render) => return render,
     };
 
-    if packages.is_empty() {
-        return json!({
-            "render": "table",
-            "columns": ["package", "latest_version", "last_published"],
-            "rows": [],
-        });
+    let mut out: Vec<PackageRow> = Vec::with_capacity(listing.packages.len());
+    let mut enrichment_denied = false;
+    let mut attempted = 0usize;
+    for package in &listing.packages {
+        if listing.error.is_some() || enrichment_denied {
+            out.push(PackageRow::without_details(package.clone()));
+            continue;
+        }
+        match latest_package_row(
+            ctx,
+            &client,
+            &domain,
+            &repository,
+            package.clone(),
+            &domain_owner,
+        )
+        .await
+        {
+            Ok(row) => {
+                attempted += 1;
+                enrichment_denied = row.detail_denied;
+                out.push(row);
+            }
+            Err(_) => {
+                enrichment_denied = true;
+                out.push(PackageRow::without_details(package.clone()));
+            }
+        }
     }
-
-    let mut out: Vec<PackageRow> = Vec::with_capacity(packages.len());
-    for package in packages {
-        let row =
-            match latest_package_row(ctx, &client, &domain, &repository, package, &domain_owner)
-                .await
-            {
-                Ok(row) => row,
-                Err(render) => return render,
-            };
-        out.push(row);
+    let failed = out.iter().filter(|row| row.detail_failed).count();
+    let limited_versions = out.iter().filter(|row| row.versions_limited).count();
+    let mut enrichment = Coverage::complete(attempted - failed);
+    enrichment.count("attempted", attempted);
+    enrichment.count("failed", failed);
+    enrichment.count("skipped", out.len() - attempted);
+    enrichment.count("limited_version_lists", limited_versions);
+    enrichment.limit("versions_per_package", Some(RECENT_VERSION_LIMIT));
+    if failed > 0 {
+        enrichment.failure(
+            "enrichment_failed",
+            "Some package version details could not be loaded.",
+            true,
+        );
     }
-    package_table(out)
+    if enrichment_denied {
+        enrichment.failure(
+            "policy_denied",
+            "Additional package version details were not permitted.",
+            !out.is_empty(),
+        );
+    } else if listing.error.is_some() {
+        enrichment.unknown_reason(
+            "not_attempted",
+            "Version details were not requested after the package listing failed.",
+        );
+    }
+    if limited_versions > 0 {
+        enrichment.has_more(Some(true));
+        enrichment.limited(
+            "version_limit",
+            "Only the recent version snapshot is shown for packages with additional versions.",
+        );
+    }
+    let mut coverage = Coverage::complete(out.len());
+    coverage.section("packages", listing.coverage);
+    coverage.section("enrichment", enrichment);
+    let mut result = package_table(out);
+    if let Some(error) = listing.error {
+        result["error"] = json!(error);
+    }
+    coverage.attach(result)
 }
 
 fn package_table(rows: Vec<PackageRow>) -> Value {
@@ -217,14 +291,25 @@ pub async fn fetch_version_history(ctx: &WidgetCtx) -> Value {
 fn version_history(package: &str, mut rows: Vec<(usize, Value, bool)>) -> Value {
     rows.sort_by_key(|(index, _, _)| *index);
     let failed_count = rows.iter().filter(|(_, _, failed)| *failed).count();
-    with_partial_failure(
+    let mut coverage = Coverage::unknown(rows.len());
+    coverage.count("failed", failed_count);
+    coverage.limit("versions", Some(RECENT_VERSION_LIMIT));
+    coverage.unknown_reason("version_snapshot", "These dates describe the supplied recent-version snapshot, not the complete package history.");
+    if failed_count > 0 {
+        coverage.failure(
+            "enrichment_failed",
+            "Some version publication dates could not be loaded.",
+            true,
+        );
+    }
+    coverage.attach(with_partial_failure(
         json!({
             "render": "codeartifact_version_history",
             "package": package,
             "versions": rows.into_iter().map(|(_, row, _)| row).collect::<Vec<_>>(),
         }),
         failed_count,
-    )
+    ))
 }
 
 /// Failure is an explicit SDK outcome, never inferred from resource text.
@@ -300,13 +385,21 @@ async fn list_packages(
     package_prefix: &str,
     domain_owner: &str,
     max_packages: usize,
-) -> Result<Vec<String>, Value> {
+) -> Result<PackageListing, Value> {
     let mut packages = Vec::new();
     let mut next_token: Option<String> = None;
+    let mut pages = 0usize;
+    let mut error = None;
+    let mut denied_page = false;
 
     while packages.len() < max_packages {
         if let Some(denied) = ctx.preflight("codeartifact", "ListPackages") {
-            return Err(denied);
+            if pages == 0 {
+                return Err(denied);
+            }
+            denied_page = true;
+            error = Some("Additional package pages were not permitted.".to_string());
+            break;
         }
 
         let page_size = (max_packages - packages.len()).min(1000) as i32;
@@ -324,21 +417,58 @@ async fn list_packages(
             req = req.next_token(token);
         }
 
-        let resp = req.send().await.map_err(|e| table_with_error(err_msg(e)))?;
+        let resp = match req.send().await {
+            Ok(response) => response,
+            Err(failure) => {
+                error = Some(err_msg(failure));
+                break;
+            }
+        };
+        pages += 1;
         packages.extend(
             resp.packages()
                 .iter()
                 .filter_map(|summary| summary.package().map(str::to_string)),
         );
 
-        next_token = resp.next_token().map(str::to_string);
+        next_token = resp
+            .next_token()
+            .filter(|token| !token.is_empty())
+            .map(str::to_string);
         if next_token.is_none() {
             break;
         }
     }
 
+    let limited =
+        packages.len() > max_packages || (packages.len() >= max_packages && next_token.is_some());
     packages.truncate(max_packages);
-    Ok(packages)
+    let mut coverage = Coverage::complete(packages.len());
+    coverage.count("pages", pages);
+    coverage.limit("results", Some(max_packages));
+    if limited {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "result_limit",
+            "Additional matching packages were not loaded after the requested limit.",
+        );
+    }
+    if error.is_some() {
+        coverage.failure(
+            if denied_page {
+                "policy_denied"
+            } else {
+                "request_failed"
+            },
+            "A package-list page could not be loaded; earlier package names are retained.",
+            pages > 0,
+        );
+    }
+    Ok(PackageListing {
+        packages,
+        coverage,
+        error,
+    })
 }
 
 async fn latest_package_row(
@@ -375,12 +505,16 @@ async fn latest_package_row(
                 last_published: format!("error: {}", err_msg(e)),
                 versions: Vec::new(),
                 detail_failed: true,
+                detail_denied: false,
+                versions_limited: false,
             });
         }
     };
 
     let recent_versions =
         recent_version_strings(versions.versions(), versions.default_display_version());
+    let versions_limited = versions.versions().len() > RECENT_VERSION_LIMIT
+        || versions.next_token().is_some_and(|token| !token.is_empty());
     let latest_version = recent_versions.first().cloned().unwrap_or_default();
 
     if latest_version.is_empty() {
@@ -390,11 +524,24 @@ async fn latest_package_row(
             last_published: String::new(),
             versions: recent_versions,
             detail_failed: false,
+            detail_denied: false,
+            versions_limited,
         });
     }
 
-    if let Some(denied) = ctx.preflight("codeartifact", "DescribePackageVersion") {
-        return Err(denied);
+    if ctx
+        .preflight("codeartifact", "DescribePackageVersion")
+        .is_some()
+    {
+        return Ok(PackageRow {
+            package,
+            latest_version,
+            last_published: String::new(),
+            versions: recent_versions,
+            detail_failed: true,
+            detail_denied: true,
+            versions_limited,
+        });
     }
 
     let mut describe_req = client
@@ -417,6 +564,8 @@ async fn latest_package_row(
                 last_published: format!("error: {}", err_msg(e)),
                 versions: recent_versions,
                 detail_failed: true,
+                detail_denied: false,
+                versions_limited,
             });
         }
     };
@@ -427,6 +576,8 @@ async fn latest_package_row(
         last_published: dt_iso(described.package_version().and_then(|p| p.published_time())),
         versions: recent_versions,
         detail_failed: false,
+        detail_denied: false,
+        versions_limited,
     })
 }
 
@@ -452,15 +603,6 @@ fn recent_version_strings(
     }
 
     versions
-}
-
-fn table_with_error(error: String) -> Value {
-    json!({
-        "render": "table",
-        "columns": ["package", "latest_version", "last_published"],
-        "rows": [],
-        "error": error,
-    })
 }
 
 #[cfg(test)]
@@ -525,6 +667,8 @@ mod tests {
             last_published: "error: synthetic row text".into(),
             versions: vec!["1.0.0".into()],
             detail_failed: failed,
+            detail_denied: false,
+            versions_limited: false,
         };
         let successful = package_table(vec![row(false)]);
         assert_eq!(crate::request::outcome(&successful), "succeeded");

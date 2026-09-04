@@ -14,6 +14,7 @@ mod cfn_stacks;
 mod cloudwatch_logs;
 mod codeartifact_packages;
 mod codebuild_log;
+pub(crate) mod coverage;
 mod errors_by_stack;
 mod log_tail;
 mod logs_insights;

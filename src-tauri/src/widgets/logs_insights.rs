@@ -11,7 +11,7 @@ use aws_sdk_cloudwatchlogs::types::QueryStatus;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use serde_json::{json, Value};
 
-use super::{cloudwatch_logs, err_msg, WidgetCtx};
+use super::{cloudwatch_logs, coverage::Coverage, err_msg, WidgetCtx};
 
 /// Insights queries cost by data scanned — cap the window at 7 days.
 const MAX_RANGE_SECONDS: i64 = 7 * 86_400;
@@ -64,14 +64,16 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
         Err(e) => return json!({"ok": false, "error": err_msg(e)}),
     };
     let Some(query_id) = started.query_id().map(str::to_string) else {
-        return json!({"ok": false, "error": "no queryId returned"});
+        return unknown_query_failure(
+            "AWS did not return a query identifier; the remote query state is unknown.",
+        );
     };
 
     let deadline = Instant::now() + POLL_BUDGET;
     loop {
         let resp = match client.get_query_results().query_id(&query_id).send().await {
             Ok(r) => r,
-            Err(e) => return json!({"ok": false, "error": err_msg(e)}),
+            Err(e) => return unknown_query_failure(&err_msg(e)),
         };
         match resp.status() {
             Some(QueryStatus::Complete) => {
@@ -100,7 +102,17 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
                 }
                 out["account_id"] = json!(ctx.account_id);
                 out["region"] = json!(ctx.region);
-                return out;
+                let mut coverage = Coverage::complete(rows.len());
+                coverage.count("pages", 1);
+                coverage.limit("results", None);
+                if resp.next_token().is_some_and(|token| !token.is_empty()) {
+                    coverage.has_more(Some(true));
+                    coverage.limited(
+                        "query_result_page",
+                        "The query completed, but only the first result page was loaded.",
+                    );
+                }
+                return coverage.attach(out);
             }
             Some(QueryStatus::Failed) => {
                 return json!({"ok": false, "error_type": "QueryFailed", "error": "The query failed."})
@@ -120,6 +132,15 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
             }
         }
     }
+}
+
+fn unknown_query_failure(message: &str) -> Value {
+    let mut coverage = Coverage::unknown(0);
+    coverage.count("pages", 0);
+    coverage.limit("results", None);
+    coverage.failure("query_state_unknown", "Query results could not be confirmed; the remote query may still be running and no stop was attempted.", false);
+    coverage.attach(json!({"ok":false, "error":message,
+        "cleanup":{"status":"not_attempted", "remote_stop_confirmed":false, "remote_queries_may_still_run":true}}))
 }
 
 /// Attempt to stop a timed-out query. Startup requires the local cleanup
@@ -221,6 +242,10 @@ pub fn results_table(rows: &[Vec<(String, String)>]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        test_aws::{ExpectedRequest, ScriptedHttp},
+        test_support::TestDir,
+    };
 
     fn row(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -297,5 +322,63 @@ mod tests {
                 .contains("may still be running"));
             assert!(!result.to_string().contains("SYNTHETIC_PRIVATE"));
         }
+    }
+
+    #[tokio::test]
+    async fn completed_query_with_unread_result_page_retains_rows_and_reports_limit() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![
+            ExpectedRequest::json(
+                "Logs_20140328.StartQuery",
+                json!({"logGroupName":"/synthetic/query", "queryString":"fields @message"}),
+                json!({"queryId":"synthetic-query"}),
+            ),
+            ExpectedRequest::json(
+                "Logs_20140328.GetQueryResults",
+                json!({"queryId":"synthetic-query"}),
+                json!({"status":"Complete", "results":[[{"field":"@message","value":"synthetic evidence"}]],"nextToken":"synthetic-more"}),
+            ),
+        ]);
+        let result = fetch(&script.context(
+            &dir,
+            "logs-insights",
+            json!({"log_group":"/synthetic/query","query":"fields @message"}),
+        ))
+        .await;
+        script.assert_finished();
+        assert_eq!(result["rows"][0]["@message"], "synthetic evidence");
+        assert_eq!(result["coverage"]["completeness"], "limited");
+        assert_eq!(result["coverage"]["has_more"], true);
+        assert_eq!(crate::request::outcome(&result), "succeeded");
+    }
+
+    #[tokio::test]
+    async fn polling_failure_preserves_unknown_remote_state_without_an_extra_stop_request() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![
+            ExpectedRequest::json(
+                "Logs_20140328.StartQuery",
+                json!({}),
+                json!({"queryId":"synthetic-query"}),
+            ),
+            ExpectedRequest::json(
+                "Logs_20140328.GetQueryResults",
+                json!({"queryId":"synthetic-query"}),
+                json!({"__type":"AccessDeniedException","message":"SYNTHETIC_PRIVATE_QUERY_ERROR"}),
+            )
+            .status(400),
+        ]);
+        let result = fetch(&script.context(
+            &dir,
+            "logs-insights",
+            json!({"log_group":"/synthetic/query","query":"fields @message"}),
+        ))
+        .await;
+        script.assert_finished();
+        assert_eq!(script.calls(), 2);
+        assert_eq!(result["cleanup"]["status"], "not_attempted");
+        assert_eq!(result["cleanup"]["remote_stop_confirmed"], false);
+        assert_eq!(result["cleanup"]["remote_queries_may_still_run"], true);
+        assert!(!result.to_string().contains("SYNTHETIC_PRIVATE_QUERY_ERROR"));
     }
 }

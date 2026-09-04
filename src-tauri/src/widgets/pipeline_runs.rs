@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 
+use super::coverage::Coverage;
 use super::{dt_iso, err_msg, WidgetCtx};
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
@@ -24,7 +25,15 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     {
         Ok(r) => r,
         Err(e) => {
-            return json!({"render": "raw_json", "data": {"error": err_msg(e)}});
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("results", Some(max_results as usize));
+            coverage.failure(
+                "request_failed",
+                "Pipeline executions could not be loaded.",
+                false,
+            );
+            return coverage.attach(json!({"render": "raw_json", "data": {"error": err_msg(e)}}));
         }
     };
 
@@ -47,9 +56,16 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         })
         .collect();
 
-    json!({
+    let mut coverage = Coverage::complete(rows.len());
+    coverage.count("pages", 1);
+    coverage.limit("results", Some(max_results as usize));
+    if resp.next_token().is_some_and(|token| !token.is_empty()) {
+        coverage.has_more(Some(true));
+        coverage.limited("next_page", "Additional executions were not loaded.");
+    }
+    coverage.attach(json!({
         "render": "table",
         "columns": ["execution_id", "status", "last_updated", "trigger"],
         "rows": rows,
-    })
+    }))
 }

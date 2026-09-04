@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::aws::guard;
 use crate::process::CliRequest;
 
-use super::WidgetCtx;
+use super::{coverage::Coverage, WidgetCtx};
 
 /// Refuse to parse outputs bigger than this — use --query / --max-items.
 const MAX_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -95,13 +95,13 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
     }
     let trimmed = stdout.trim();
     let mut out = if trimmed.is_empty() {
-        json!({"render": "table", "columns": [], "rows": []})
+        cli_result_model(&json!([]), parsed)
     } else {
         match serde_json::from_str::<Value>(trimmed) {
             Ok(v) if value_contains_credentials(&v, &access.credentials) => {
                 return json!({"ok": false, "error": "CLI output contained authentication material and was not displayed"});
             }
-            Ok(v) => table_model(&v),
+            Ok(v) => cli_result_model(&v, parsed),
             Err(_) => return json!({"ok": false, "error": "AWS CLI output was not valid JSON"}),
         }
     };
@@ -109,6 +109,69 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
     out["account_id"] = json!(ctx.account_id);
     out["region"] = json!(ctx.region);
     out
+}
+
+fn cli_result_model(value: &Value, parsed: &ParsedCli) -> Value {
+    let (model, clipped_cells) = table_model(value);
+    // CLI pagination is delegated to the executable. Its output is not proof
+    // of complete AWS coverage, particularly after a JMESPath projection.
+    let mut coverage = match model["rows"].as_array() {
+        Some(rows) => Coverage::unknown(rows.len()),
+        None => Coverage::unmeasured(),
+    };
+    coverage.unknown_reason("cli_scope", "CLI output reflects the selected command and filters; complete resource coverage is not established.");
+    let has = |flag: &str| parsed.argv.iter().any(|argument| argument == flag);
+    if has("--query") {
+        coverage.unknown_reason(
+            "cli_projection",
+            "The selected query can omit results and pagination metadata.",
+        );
+    } else if parsed.service == "logs" && parsed.operation == "GetLogEvents" {
+        coverage.unknown_reason("stream_window", "A log-stream token does not establish whether more events exist outside this response.");
+    } else if ["NextToken", "nextToken", "PaginationToken"]
+        .iter()
+        .any(|key| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|token| !token.is_empty())
+        })
+    {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "continuation",
+            "The CLI returned a continuation marker; further results may exist.",
+        );
+    }
+    if has("--no-paginate") {
+        coverage.unknown_reason(
+            "cli_single_page",
+            "Automatic CLI pagination is disabled for this command.",
+        );
+    }
+    for (flag, key) in [
+        ("--max-items", "requested_items"),
+        ("--limit", "requested_limit"),
+        ("--max-results", "requested_results"),
+    ] {
+        if let Some(limit) = parsed
+            .argv
+            .windows(2)
+            .find(|pair| pair[0] == flag)
+            .and_then(|pair| pair[1].parse::<usize>().ok())
+        {
+            coverage.limit(key, Some(limit));
+        }
+    }
+    if clipped_cells > 0 {
+        coverage.count("clipped_cells", clipped_cells);
+        coverage.limit("nested_cell_characters", Some(MAX_CELL_CHARS));
+        coverage.limited(
+            "cell_display_limit",
+            "Long nested JSON cells are shortened for display; the displayed text is incomplete.",
+        );
+    }
+    coverage.attach(model)
 }
 
 fn contains_credentials(text: &str, credentials: &aws_credential_types::Credentials) -> bool {
@@ -653,9 +716,15 @@ const MAX_CELL_CHARS: usize = 120;
 
 /// Map arbitrary CLI JSON output onto the closed `table` render shape, falling
 /// back to `raw_json` when nothing tabular is recognizable.
-pub fn table_model(value: &Value) -> Value {
+fn table_model(value: &Value) -> (Value, usize) {
+    let mut clipped_cells = 0;
+    let model = table_content(value, &mut clipped_cells);
+    (model, clipped_cells)
+}
+
+fn table_content(value: &Value, clipped_cells: &mut usize) -> Value {
     match value {
-        Value::Array(items) => array_table(items).unwrap_or_else(|| raw_json(value)),
+        Value::Array(items) => array_table(items, clipped_cells).unwrap_or_else(|| raw_json(value)),
         Value::Object(map) => {
             // The CLI's usual top level: one array of results plus scalar
             // siblings (NextToken and friends). Unwrap to the array.
@@ -666,13 +735,13 @@ pub fn table_model(value: &Value) -> Value {
                 .collect();
             if array_keys.len() == 1 && map.values().all(|v| v.is_array() || is_scalar(v)) {
                 let items = map[array_keys[0]].as_array().expect("filtered on is_array");
-                return array_table(items).unwrap_or_else(|| raw_json(value));
+                return array_table(items, clipped_cells).unwrap_or_else(|| raw_json(value));
             }
             // Flat object of scalars (sts get-caller-identity) -> key/value.
             if !map.is_empty() && map.values().all(is_scalar) {
                 let rows: Vec<Value> = map
                     .iter()
-                    .map(|(k, v)| json!({"key": k, "value": cell(v)}))
+                    .map(|(k, v)| json!({"key": k, "value": cell(v, clipped_cells)}))
                     .collect();
                 return json!({"render": "table", "columns": ["key", "value"], "rows": rows});
             }
@@ -684,7 +753,7 @@ pub fn table_model(value: &Value) -> Value {
 
 /// Array of objects -> union columns; array of scalars -> one `value` column;
 /// empty -> empty table; mixed shapes -> None (caller falls back to raw JSON).
-fn array_table(items: &[Value]) -> Option<Value> {
+fn array_table(items: &[Value], clipped_cells: &mut usize) -> Option<Value> {
     if items.is_empty() {
         return Some(json!({"render": "table", "columns": [], "rows": []}));
     }
@@ -698,14 +767,17 @@ fn array_table(items: &[Value]) -> Option<Value> {
                 if !columns.contains(k) {
                     columns.push(k.clone());
                 }
-                row.insert(k.clone(), cell(v));
+                row.insert(k.clone(), cell(v, clipped_cells));
             }
             rows.push(Value::Object(row));
         }
         return Some(json!({"render": "table", "columns": columns, "rows": rows}));
     }
     if items.iter().all(is_scalar) {
-        let rows: Vec<Value> = items.iter().map(|v| json!({"value": cell(v)})).collect();
+        let rows: Vec<Value> = items
+            .iter()
+            .map(|v| json!({"value": cell(v, clipped_cells)}))
+            .collect();
         return Some(json!({"render": "table", "columns": ["value"], "rows": rows}));
     }
     None
@@ -716,12 +788,13 @@ fn is_scalar(v: &Value) -> bool {
 }
 
 /// Scalars pass through; nested structures become truncated JSON text.
-fn cell(v: &Value) -> Value {
+fn cell(v: &Value, clipped_cells: &mut usize) -> Value {
     if is_scalar(v) {
         return v.clone();
     }
     let s = serde_json::to_string(v).unwrap_or_default();
     if s.chars().count() > MAX_CELL_CHARS {
+        *clipped_cells += 1;
         let truncated: String = s.chars().take(MAX_CELL_CHARS).collect();
         Value::String(format!("{truncated}…"))
     } else {
@@ -861,6 +934,91 @@ mod tests {
         );
         assert_eq!(requests[0].region, "eu-west-1");
         assert_eq!(requests[0].credentials.access_key_id(), "CB_SYNTHETIC_KEY");
+    }
+
+    #[tokio::test]
+    async fn cli_continuation_and_clipped_cells_remain_visible_without_failing_the_read() {
+        let directory = TestDir::new();
+        let process = FakeProcessRunner::with_response(Ok(ProcessOutput {
+            stdout: serde_json::to_vec(&json!({"StackSummaries":[{
+                "StackName":"synthetic-stack", "Nested":{"description":"x".repeat(300)}
+            }], "NextToken":"synthetic-unvisited-continuation"}))
+            .unwrap(),
+            stderr: Vec::new(),
+            success: true,
+        }));
+        let mut ctx = fetch_context(&directory, process.clone(), allowed_fetch_policy());
+        ctx.inputs = json!({"command":"aws cloudformation list-stacks --max-items 1"});
+        let response = fetch(&ctx).await;
+        assert_eq!(response["rows"][0]["StackName"], "synthetic-stack");
+        assert_eq!(response["coverage"]["has_more"], true);
+        assert_eq!(response["coverage"]["completeness"], "limited");
+        assert_eq!(response["coverage"]["counts"]["clipped_cells"], 1);
+        assert_eq!(
+            response["coverage"]["limits"]["nested_cell_characters"],
+            MAX_CELL_CHARS
+        );
+        assert_eq!(response["coverage"]["limits"]["requested_items"], 1);
+        assert_eq!(response["truncated"], true);
+        assert_eq!(crate::request::outcome(&response), "succeeded");
+        assert!(!response
+            .to_string()
+            .contains("synthetic-unvisited-continuation"));
+        assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn projected_cli_output_does_not_claim_empty_or_token_fields_prove_completeness() {
+        for value in [
+            json!([]),
+            json!({"Items":[], "NextToken":"synthetic-projected-value"}),
+        ] {
+            let directory = TestDir::new();
+            let process = FakeProcessRunner::with_response(Ok(ProcessOutput {
+                stdout: serde_json::to_vec(&value).unwrap(),
+                stderr: Vec::new(),
+                success: true,
+            }));
+            let mut ctx = fetch_context(&directory, process.clone(), allowed_fetch_policy());
+            ctx.inputs = json!({"command":"aws cloudformation list-stacks --query StackSummaries"});
+            let response = fetch(&ctx).await;
+            assert!(response["rows"].as_array().unwrap().is_empty());
+            assert_eq!(response["coverage"]["completeness"], "unknown");
+            assert!(response["coverage"]["has_more"].is_null());
+            assert_eq!(crate::request::outcome(&response), "succeeded");
+            assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn single_cli_log_window_and_raw_json_do_not_invent_row_or_page_coverage() {
+        let directory = TestDir::new();
+        let process = FakeProcessRunner::with_response(Ok(ProcessOutput {
+            stdout: serde_json::to_vec(
+                &json!({"events":[],"nextForwardToken":"synthetic-boundary"}),
+            )
+            .unwrap(),
+            stderr: Vec::new(),
+            success: true,
+        }));
+        let policy = Policy::parse("statements:\n  - effect: Allow\n    action: [sso:GetRoleCredentials, logs:GetLogEvents]\n")
+            .map_err(|error| error.message);
+        let mut ctx = fetch_context(&directory, process.clone(), policy);
+        ctx.inputs = json!({"command":"aws logs get-log-events --log-group-name synthetic-group --log-stream-name synthetic-stream --limit 10"});
+        let response = fetch(&ctx).await;
+        assert_eq!(response["coverage"]["completeness"], "unknown");
+        assert!(response["coverage"]["has_more"].is_null());
+        assert_eq!(response["coverage"]["limits"]["requested_limit"], 10);
+        assert!(response["coverage"]["counts"].get("pages").is_none());
+        assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+
+        let parsed =
+            parse_cli_command("aws cloudformation list-stacks --query length(StackSummaries)")
+                .unwrap();
+        let response = cli_result_model(&json!(7), &parsed);
+        assert_eq!(response["render"], "raw_json");
+        assert_eq!(response["data"], 7);
+        assert!(response["coverage"]["counts"].get("returned").is_none());
     }
 
     #[tokio::test]
@@ -1252,7 +1410,7 @@ mod tests {
     #[test]
     fn array_of_objects_becomes_table_with_union_columns() {
         let v = json!([{"a": 1, "b": "x"}, {"b": "y", "c": true}]);
-        let t = table_model(&v);
+        let (t, _) = table_model(&v);
         assert_eq!(t["render"], "table");
         assert_eq!(t["columns"], json!(["a", "b", "c"]));
         assert_eq!(t["rows"][0]["a"], json!(1));
@@ -1261,7 +1419,7 @@ mod tests {
 
     #[test]
     fn single_key_wrapper_object_is_unwrapped() {
-        let t = table_model(&json!({"Reservations": [{"a": 1}]}));
+        let (t, _) = table_model(&json!({"Reservations": [{"a": 1}]}));
         assert_eq!(t["render"], "table");
         assert_eq!(t["columns"], json!(["a"]));
     }
@@ -1269,14 +1427,14 @@ mod tests {
     #[test]
     fn wrapper_with_scalar_siblings_unwraps_the_single_array() {
         // NextToken-style pagination keys must not defeat the table mapping.
-        let t = table_model(&json!({"Reservations": [{"a": 1}], "NextToken": "t"}));
+        let (t, _) = table_model(&json!({"Reservations": [{"a": 1}], "NextToken": "t"}));
         assert_eq!(t["render"], "table");
         assert_eq!(t["columns"], json!(["a"]));
     }
 
     #[test]
     fn array_of_scalars_becomes_single_value_column() {
-        let t = table_model(&json!(["x", "y"]));
+        let (t, _) = table_model(&json!(["x", "y"]));
         assert_eq!(t["render"], "table");
         assert_eq!(t["columns"], json!(["value"]));
         assert_eq!(t["rows"][0]["value"], "x");
@@ -1284,7 +1442,7 @@ mod tests {
 
     #[test]
     fn flat_object_becomes_key_value_rows() {
-        let t = table_model(&json!({"UserId": "AIDX", "Account": "acct-fixture"}));
+        let (t, _) = table_model(&json!({"UserId": "AIDX", "Account": "acct-fixture"}));
         assert_eq!(t["render"], "table");
         assert_eq!(t["columns"], json!(["key", "value"]));
         assert_eq!(t["rows"].as_array().unwrap().len(), 2);
@@ -1293,7 +1451,7 @@ mod tests {
     #[test]
     fn nested_cells_are_stringified_and_truncated() {
         let long = "x".repeat(300);
-        let t = table_model(&json!([{"nested": {"deep": long}}]));
+        let (t, _) = table_model(&json!([{"nested": {"deep": long}}]));
         let cell = t["rows"][0]["nested"].as_str().unwrap();
         assert!(cell.starts_with('{'));
         assert!(cell.chars().count() <= 121, "cell too long: {}", cell.len());
@@ -1301,10 +1459,10 @@ mod tests {
 
     #[test]
     fn empty_array_is_an_empty_table_and_scalars_fall_back_to_raw_json() {
-        let empty = table_model(&json!([]));
+        let (empty, _) = table_model(&json!([]));
         assert_eq!(empty["render"], "table");
         assert_eq!(empty["rows"], json!([]));
-        assert_eq!(table_model(&json!("just a string"))["render"], "raw_json");
-        assert_eq!(table_model(&json!({}))["render"], "raw_json");
+        assert_eq!(table_model(&json!("just a string")).0["render"], "raw_json");
+        assert_eq!(table_model(&json!({})).0["render"], "raw_json");
     }
 }

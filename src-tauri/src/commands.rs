@@ -898,10 +898,25 @@ async fn aws_list_pipelines_request(
         Err(error) => return Ok(error),
     };
     request.bind(&resolved.context, &session);
-    let client = aws_sdk_codepipeline::Client::new(&session.sdk);
+    let result = list_pipelines_with_coverage(&session.sdk).await;
+    if let Err(error) = validate_request_context(state, &resolved, &session) {
+        return Ok(error);
+    }
+    Ok(result)
+}
+
+/// The command supplies a verified, frozen SDK configuration and fences the
+/// result afterwards. This helper retains pages without expanding the existing
+/// 200-pipeline result budget.
+async fn list_pipelines_with_coverage(sdk: &aws_config::SdkConfig) -> Value {
+    const RESULT_LIMIT: usize = 200;
+    let client = aws_sdk_codepipeline::Client::new(sdk);
 
     let mut pipelines: Vec<Value> = Vec::new();
     let mut token: Option<String> = None;
+    let mut pages = 0usize;
+    let mut limited = false;
+    let mut error = None;
     loop {
         let mut req = client.list_pipelines();
         if let Some(t) = &token {
@@ -910,30 +925,28 @@ async fn aws_list_pipelines_request(
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                if let Err(error) = validate_request_context(state, &resolved, &session) {
-                    return Ok(error);
-                }
-                return Ok(
-                    json!({"ok": false, "error": widgets::err_msg(e), "error_type": "ClientError"}),
-                );
+                error = Some(widgets::err_msg(e));
+                break;
             }
         };
-        for p in resp.pipelines() {
-            if let Some(name) = p.name() {
-                let updated = widgets::dt_iso(p.updated().or_else(|| p.created()));
-                pipelines.push(json!({"name": name, "updated": updated}));
-                if pipelines.len() >= 200 {
-                    break;
-                }
-            }
-        }
-        if pipelines.len() >= 200 {
-            break;
-        }
+        pages += 1;
         token = resp
             .next_token()
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        for (index, p) in resp.pipelines().iter().enumerate() {
+            if let Some(name) = p.name() {
+                let updated = widgets::dt_iso(p.updated().or_else(|| p.created()));
+                pipelines.push(json!({"name": name, "updated": updated}));
+                if pipelines.len() >= RESULT_LIMIT {
+                    limited = index + 1 < resp.pipelines().len() || token.is_some();
+                    break;
+                }
+            }
+        }
+        if pipelines.len() >= RESULT_LIMIT {
+            break;
+        }
         if token.is_none() {
             break;
         }
@@ -944,10 +957,29 @@ async fn aws_list_pipelines_request(
             .unwrap_or("")
             .cmp(b["name"].as_str().unwrap_or(""))
     });
-    if let Err(error) = validate_request_context(state, &resolved, &session) {
-        return Ok(error);
+    let mut coverage = widgets::coverage::Coverage::complete(pipelines.len());
+    coverage.count("pages", pages);
+    coverage.limit("results", Some(RESULT_LIMIT));
+    if limited {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "result_limit",
+            "Additional pipelines were not loaded after the 200-pipeline limit.",
+        );
     }
-    Ok(json!({"ok": true, "pipelines": pipelines}))
+    let mut result = json!({"ok":true, "pipelines":pipelines});
+    if let Some(error) = error {
+        coverage.failure(
+            "request_failed",
+            "A pipeline-list page could not be loaded; earlier pipelines are retained.",
+            pages > 0,
+        );
+        result["error"] = json!(error);
+        if pages == 0 {
+            result["error_type"] = json!("ClientError");
+        }
+    }
+    coverage.attach(result)
 }
 
 #[tauri::command]
@@ -1105,6 +1137,81 @@ fn policy_set_impl(state: &AppState, params: Value) -> Value {
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod pipeline_coverage_tests {
+    use super::list_pipelines_with_coverage;
+    use crate::test_aws::{ExpectedRequest, ScriptedHttp};
+    use serde_json::{json, Value};
+
+    const TARGET: &str = "CodePipeline_20150709.ListPipelines";
+
+    #[tokio::test]
+    async fn pipeline_listing_keeps_sorted_earlier_pages_after_later_failure() {
+        let private = "CB_SYNTHETIC_PRIVATE_PIPELINE_DETAIL";
+        let http = ScriptedHttp::new(vec![
+            ExpectedRequest::json(
+                TARGET,
+                json!({"nextToken":null,"maxResults":null}),
+                json!({"pipelines":[{"name":"synthetic-z"},{"name":"synthetic-a"}],"nextToken":"synthetic-next"}),
+            ),
+            ExpectedRequest::json(
+                TARGET,
+                json!({"nextToken":"synthetic-next","maxResults":null}),
+                json!({"__type":"AccessDeniedException","message":private}),
+            )
+            .status(403),
+        ]);
+        let result = list_pipelines_with_coverage(&http.sdk_config()).await;
+        http.assert_finished();
+        assert_eq!(http.calls(), 2);
+        assert_eq!(result["pipelines"][0]["name"], "synthetic-a");
+        assert_eq!(result["pipelines"][1]["name"], "synthetic-z");
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["partial"], true);
+        assert_eq!(result["error_type"], "PartialFailure");
+        assert_eq!(result["coverage"]["counts"]["returned"], 2);
+        assert_eq!(result["coverage"]["counts"]["pages"], 1);
+        assert_eq!(result["coverage"]["has_more"], Value::Null);
+        assert_eq!(crate::request::outcome(&result), "failed");
+        assert!(!result.to_string().contains(private));
+    }
+
+    #[tokio::test]
+    async fn pipeline_listing_reports_mid_page_and_token_caps_without_an_extra_request() {
+        for (count, next, limited) in [
+            (200, None, false),
+            (201, None, true),
+            (200, Some("synthetic-next"), true),
+        ] {
+            let pipelines = (0..count)
+                .map(|index| json!({"name":format!("synthetic-pipeline-{index:03}")}))
+                .collect::<Vec<_>>();
+            let http = ScriptedHttp::new(vec![ExpectedRequest::json(
+                TARGET,
+                json!({"nextToken":null,"maxResults":null}),
+                json!({"pipelines":pipelines,"nextToken":next}),
+            )]);
+            let result = list_pipelines_with_coverage(&http.sdk_config()).await;
+            http.assert_finished();
+            assert_eq!(http.calls(), 1);
+            assert_eq!(result["pipelines"].as_array().unwrap().len(), 200);
+            assert_eq!(result["ok"], true);
+            assert_eq!(result["coverage"]["counts"]["pages"], 1);
+            assert_eq!(result["coverage"]["limits"]["results"], 200);
+            assert_eq!(result["coverage"]["has_more"], limited);
+            assert_eq!(
+                result["coverage"]["completeness"],
+                if limited { "limited" } else { "complete" }
+            );
+            assert_eq!(
+                result.get("truncated"),
+                limited.then_some(&Value::Bool(true))
+            );
+            assert_eq!(crate::request::outcome(&result), "succeeded");
+        }
+    }
+}
 
 #[cfg(test)]
 mod availability_tests {

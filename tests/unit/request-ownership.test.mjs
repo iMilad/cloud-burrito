@@ -8,8 +8,12 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../../frontend/app.js', import.meta.url), 'utf8');
 const start = source.indexOf('  let nextOwnedRequestId = 0;');
 const end = source.indexOf('  function clearWidgetResults(', start);
-assert(start >= 0 && end > start);
-const handlers = source.slice(start, end);
+const resultHelpersStart = source.indexOf('  function resultHostForRequest(', start);
+const fetchIntoStart = source.indexOf('  async function fetchWidgetInto(', resultHelpersStart);
+assert(start >= 0 && resultHelpersStart > start && fetchIntoStart > resultHelpersStart && end > fetchIntoStart);
+// Keep these cases focused on the real request-ownership code. Result DOM and
+// freshness decorators are exercised through the production browser bridge.
+const handlers = source.slice(start, resultHelpersStart) + source.slice(fetchIntoStart, end);
 
 function fixture() {
   const pending = [];
@@ -21,6 +25,7 @@ function fixture() {
     contextForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextPayloadForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextOverrideFromElement: () => null,
+    beginResultRequest: () => {},
     tauriInvoke: (command, args) => new Promise((resolve, reject) => pending.push({ command, args, resolve, reject })),
     dispatchRender: (node, result) => rendered.push({ node, result }),
     renderError: (node, error) => errors.push({ node, error }),

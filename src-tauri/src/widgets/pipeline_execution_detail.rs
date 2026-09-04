@@ -4,6 +4,7 @@
 use aws_sdk_codepipeline::types::ActionExecutionFilter;
 use serde_json::{json, Value};
 
+use super::coverage::Coverage;
 use super::{dt_iso, dt_secs, err_msg, WidgetCtx};
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
@@ -30,13 +31,21 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     {
         Ok(r) => r,
         Err(e) => {
-            return json!({
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("results", None);
+            coverage.failure(
+                "request_failed",
+                "Pipeline actions could not be loaded.",
+                false,
+            );
+            return coverage.attach(json!({
                 "render": "execution_detail",
                 "pipeline": pipeline_name,
                 "execution_id": execution_id,
                 "actions": [],
                 "error": err_msg(e),
-            });
+            }));
         }
     };
 
@@ -89,10 +98,17 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     actions.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let out: Vec<Value> = actions.into_iter().map(|(_, v)| v).collect();
 
-    json!({
+    let mut coverage = Coverage::complete(out.len());
+    coverage.count("pages", 1);
+    coverage.limit("results", None);
+    if resp.next_token().is_some_and(|token| !token.is_empty()) {
+        coverage.has_more(Some(true));
+        coverage.limited("next_page", "Additional pipeline actions were not loaded.");
+    }
+    coverage.attach(json!({
         "render": "execution_detail",
         "pipeline": pipeline_name,
         "execution_id": execution_id,
         "actions": out,
-    })
+    }))
 }

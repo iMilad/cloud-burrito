@@ -221,6 +221,18 @@ live AWS, installer and native-platform acceptance remain pending.
 The dashboard widgets are compiled into the binary, with drill-down views for
 stack details, pipeline execution details, and CodeBuild logs:
 
+Results identify their verified account/region and when the displayed evidence
+was received. A same-context refresh failure can retain earlier evidence
+with its original time and a stale label. Changing the inherited connection
+clears its old results while the new identity is verified.
+
+Coverage notices describe loaded pages, requested limits and failed subrequests.
+An empty limited result does not establish that no matching resource or event
+exists. Query cleanup reports confirmation separately from stopping the wait.
+CLI coverage can remain unknown after output projection; shortened nested JSON
+cells are marked. Existing CodeBuild log reads stop between whole pages after
+the event threshold, so their reported event count can exceed that threshold.
+
 | Widget | What it shows |
 | --- | --- |
 | `cfn-stacks` | Searchable non-deleted CloudFormation stacks with status, resource count, resources, and recent events |

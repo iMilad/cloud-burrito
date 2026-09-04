@@ -10,9 +10,10 @@ use aws_sdk_cloudwatchlogs::Client;
 use futures::future::join_all;
 use serde_json::{json, Value};
 
-use super::{err_msg, WidgetCtx};
+use super::{coverage::Coverage, err_msg, WidgetCtx};
 
 const MAX_GROUPS: usize = 20;
+const QUERY_ROW_LIMIT: usize = 100;
 const INSIGHTS_QUERY: &str = "fields @timestamp, @message\n| filter @message like /ERROR/\n| stats count() as errors by @logStream";
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
@@ -34,7 +35,17 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            return json!({"render": "errors_chart", "hours": hours, "rows": [], "error": err_msg(e)});
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("groups", Some(MAX_GROUPS));
+            coverage.failure(
+                "group_discovery_failed",
+                "Error-count log groups could not be discovered.",
+                false,
+            );
+            return coverage.attach(
+                json!({"render": "errors_chart", "hours": hours, "rows": [], "error": err_msg(e)}),
+            );
         }
     };
 
@@ -66,7 +77,18 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     });
     let results = join_all(futs).await;
 
-    let out = errors_chart(hours, results);
+    let mut discovery = Coverage::complete(group_names.len());
+    discovery.count("pages", 1);
+    discovery.count("scanned", groups.len());
+    discovery.limit("results", Some(MAX_GROUPS));
+    if resp.next_token().is_some_and(|token| !token.is_empty()) || groups.len() > MAX_GROUPS {
+        discovery.has_more(Some(true));
+        discovery.limited(
+            "group_discovery_limit",
+            "Only the first discovery page and up to 20 matching groups were queried.",
+        );
+    }
+    let out = errors_chart(hours, results, Some(discovery));
     if out["status"] != "complete" {
         ctx.log("query results incomplete", out["counts"].clone());
     }
@@ -84,19 +106,47 @@ enum QueryFailure {
     PollTimeout,
 }
 
-fn errors_chart(hours: i64, results: Vec<(String, Result<i64, QueryFailure>)>) -> Value {
+struct QueryCount {
+    total: i64,
+    rows: usize,
+    has_more: bool,
+}
+
+#[cfg(test)]
+impl From<i64> for QueryCount {
+    fn from(total: i64) -> Self {
+        Self {
+            total,
+            rows: usize::from(total > 0),
+            has_more: false,
+        }
+    }
+}
+
+fn errors_chart(
+    hours: i64,
+    results: Vec<(String, Result<QueryCount, QueryFailure>)>,
+    discovery: Option<Coverage>,
+) -> Value {
     let queried = results.len();
     let mut succeeded = 0usize;
     let mut failed = 0usize;
     let mut timed_out = 0usize;
     let mut remote_status_unknown = 0usize;
-    let mut rows: Vec<(String, i64)> = Vec::new();
+    let mut rows: Vec<(String, i64, bool)> = Vec::new();
+    let mut query_rows = 0;
+    let mut bounded_counts = 0;
+    let mut unvisited_query_pages = 0;
     for (group, result) in results {
         match result {
-            Ok(total) => {
+            Ok(count) => {
                 succeeded += 1;
-                if total > 0 {
-                    rows.push((group, total));
+                query_rows += count.rows;
+                let bounded = count.has_more || count.rows >= QUERY_ROW_LIMIT;
+                bounded_counts += usize::from(bounded);
+                unvisited_query_pages += usize::from(count.has_more);
+                if count.total > 0 {
+                    rows.push((group, count.total, bounded));
                 }
             }
             Err(error) => {
@@ -121,7 +171,13 @@ fn errors_chart(hours: i64, results: Vec<(String, Result<i64, QueryFailure>)>) -
     rows.sort_by_key(|row| std::cmp::Reverse(row.1));
     let out: Vec<Value> = rows
         .into_iter()
-        .map(|(stack, errors)| json!({"stack": stack, "errors": errors}))
+        .map(|(stack, errors, bounded)| {
+            let mut row = json!({"stack": stack, "errors": errors});
+            if bounded {
+                row["count_is_lower_bound"] = json!(true);
+            }
+            row
+        })
         .collect();
 
     let mut result = json!({
@@ -149,7 +205,37 @@ fn errors_chart(hours: i64, results: Vec<(String, Result<i64, QueryFailure>)>) -
         }
         result["error"] = json!(message);
     }
-    result
+    let mut coverage = Coverage::complete(result["rows"].as_array().map_or(0, Vec::len));
+    coverage.count("queried", queried);
+    coverage.count("succeeded", succeeded);
+    coverage.count("failed", failed);
+    coverage.count("query_result_rows", query_rows);
+    coverage.count("bounded_counts", bounded_counts);
+    coverage.limit("query_result_rows", Some(QUERY_ROW_LIMIT));
+    if unvisited_query_pages > 0 {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "query_result_pages",
+            "Some error counts include only the first query result page and are lower bounds.",
+        );
+    } else if bounded_counts > 0 {
+        coverage.has_more(None);
+        coverage.unknown_reason(
+            "query_row_limit",
+            "Some error counts reached the 100-row query limit; complete totals are unknown.",
+        );
+    }
+    if failed > 0 {
+        coverage.failure(
+            "query_results_failed",
+            "Some error-count queries did not produce confirmed results.",
+            succeeded > 0,
+        );
+    }
+    if let Some(discovery) = discovery {
+        coverage.section("discovery", discovery);
+    }
+    coverage.attach(result)
 }
 
 /// Start an Insights query and poll until Complete, summing the `errors` column.
@@ -158,14 +244,14 @@ async fn cw_insights_count(
     group: &str,
     start: i64,
     end: i64,
-) -> Result<i64, QueryFailure> {
+) -> Result<QueryCount, QueryFailure> {
     let started = client
         .start_query()
         .log_group_name(group)
         .start_time(start)
         .end_time(end)
         .query_string(INSIGHTS_QUERY)
-        .limit(100)
+        .limit(QUERY_ROW_LIMIT as i32)
         .send()
         .await
         .map_err(|_| QueryFailure::StartFailed)?;
@@ -194,7 +280,11 @@ async fn cw_insights_count(
                         }
                     }
                 }
-                return Ok(total);
+                return Ok(QueryCount {
+                    total,
+                    rows: resp.results().len(),
+                    has_more: resp.next_token().is_some_and(|token| !token.is_empty()),
+                });
             }
             Some(QueryStatus::Failed) => return Err(QueryFailure::Failed),
             Some(QueryStatus::Cancelled) => return Err(QueryFailure::Cancelled),
@@ -212,15 +302,19 @@ async fn cw_insights_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        test_aws::{ExpectedRequest, ScriptedHttp},
+        test_support::TestDir,
+    };
 
     #[test]
     fn partial_results_keep_resource_counts_and_exclude_failed_group_diagnostics() {
         let result = errors_chart(
             24,
             vec![
-                ("synthetic-resource-low".into(), Ok(2)),
-                ("synthetic-resource-high".into(), Ok(7)),
-                ("synthetic-resource-zero".into(), Ok(0)),
+                ("synthetic-resource-low".into(), Ok(2.into())),
+                ("synthetic-resource-high".into(), Ok(7.into())),
+                ("synthetic-resource-zero".into(), Ok(0.into())),
                 (
                     "SYNTHETIC_PRIVATE_GROUP_MARKER".into(),
                     Err(QueryFailure::StartFailed),
@@ -230,6 +324,7 @@ mod tests {
                     Err(QueryFailure::PollTimeout),
                 ),
             ],
+            None,
         );
         assert_eq!(result["status"], "partial");
         assert_eq!(result["partial"], true);
@@ -257,7 +352,7 @@ mod tests {
 
     #[test]
     fn complete_zero_results_and_total_failure_are_distinct() {
-        let zero = errors_chart(24, vec![("synthetic-zero".into(), Ok(0))]);
+        let zero = errors_chart(24, vec![("synthetic-zero".into(), Ok(0.into()))], None);
         assert_eq!(zero["status"], "complete");
         assert_eq!(zero["ok"], true);
         assert_eq!(zero["rows"], json!([]));
@@ -269,6 +364,7 @@ mod tests {
                 "SYNTHETIC_PRIVATE_GROUP_MARKER".into(),
                 Err(QueryFailure::Failed),
             )],
+            None,
         );
         assert_eq!(failed["status"], "failed");
         assert_eq!(failed["ok"], false);
@@ -289,9 +385,106 @@ mod tests {
                 ("synthetic-two".into(), Err(QueryFailure::PollFailed)),
                 ("synthetic-three".into(), Err(QueryFailure::MissingQueryId)),
             ],
+            None,
         );
         assert_eq!(result["counts"]["timed_out"], 1);
         assert_eq!(result["counts"]["remote_status_unknown"], 2);
         assert_eq!(result["cleanup"]["remote_queries_may_still_run"], true);
+    }
+
+    #[tokio::test]
+    async fn actual_discovery_page_limit_does_not_present_account_wide_totals() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![
+            ExpectedRequest::json(
+                "Logs_20140328.DescribeLogGroups",
+                json!({}),
+                json!({"logGroups":[{"logGroupName":"/synthetic/errors", "creationTime":1}],"nextToken":"synthetic-unread-groups"}),
+            ),
+            ExpectedRequest::json(
+                "Logs_20140328.StartQuery",
+                json!({"logGroupName":"/synthetic/errors", "limit":100}),
+                json!({"queryId":"synthetic-count"}),
+            ),
+            ExpectedRequest::json(
+                "Logs_20140328.GetQueryResults",
+                json!({"queryId":"synthetic-count"}),
+                json!({"status":"Complete", "results":[[{"field":"errors","value":"7"}]]}),
+            ),
+        ]);
+        let result = fetch(&script.context(&dir, "errors-by-stack", json!({}))).await;
+        script.assert_finished();
+        assert_eq!(
+            result["rows"],
+            json!([{"stack":"/synthetic/errors","errors":7}])
+        );
+        assert_eq!(result["coverage"]["completeness"], "limited");
+        assert_eq!(
+            result["coverage"]["sections"]["discovery"]["has_more"],
+            true
+        );
+        assert_eq!(result["counts"]["queried"], 1);
+        assert_eq!(crate::request::outcome(&result), "succeeded");
+    }
+
+    #[tokio::test]
+    async fn actual_query_row_threshold_marks_counts_as_lower_bounds() {
+        for more in [false, true] {
+            let dir = TestDir::new();
+            let records: Vec<_> = (0..QUERY_ROW_LIMIT)
+                .map(|_| json!([{"field":"errors","value":"1"}]))
+                .collect();
+            let mut response = json!({"status":"Complete","results":records});
+            if more {
+                response["nextToken"] = json!("synthetic-more-counts");
+            }
+            let script = ScriptedHttp::new(vec![
+                ExpectedRequest::json(
+                    "Logs_20140328.DescribeLogGroups",
+                    json!({}),
+                    json!({"logGroups":[{"logGroupName":"/synthetic/errors"}]}),
+                ),
+                ExpectedRequest::json(
+                    "Logs_20140328.StartQuery",
+                    json!({"limit":100}),
+                    json!({"queryId":"synthetic-count"}),
+                ),
+                ExpectedRequest::json(
+                    "Logs_20140328.GetQueryResults",
+                    json!({"queryId":"synthetic-count"}),
+                    response,
+                ),
+            ]);
+            let result = fetch(&script.context(&dir, "errors-by-stack", json!({}))).await;
+            script.assert_finished();
+            assert_eq!(result["rows"][0]["errors"], 100);
+            assert_eq!(result["rows"][0]["count_is_lower_bound"], true);
+            assert_eq!(result["coverage"]["counts"]["bounded_counts"], 1);
+            assert_eq!(
+                result["coverage"]["completeness"],
+                if more { "limited" } else { "unknown" }
+            );
+            assert_eq!(result["cleanup"]["status"], "not_attempted");
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_group_failure_keeps_successful_error_count_and_safe_failure_summary() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![
+            ExpectedRequest::json("Logs_20140328.DescribeLogGroups", json!({}), json!({"logGroups":[{"logGroupName":"/synthetic/good"},{"logGroupName":"/synthetic/bad"}]})),
+            ExpectedRequest::json("Logs_20140328.StartQuery", json!({"logGroupName":"/synthetic/good"}), json!({"queryId":"synthetic-good"})),
+            ExpectedRequest::json("Logs_20140328.StartQuery", json!({"logGroupName":"/synthetic/bad"}), json!({"__type":"AccessDeniedException","message":"SYNTHETIC_PRIVATE_COUNT_ERROR"})).status(400),
+            ExpectedRequest::json("Logs_20140328.GetQueryResults", json!({"queryId":"synthetic-good"}), json!({"status":"Complete","results":[[{"field":"errors","value":"3"}]]})),
+        ]).unordered();
+        let result = fetch(&script.context(&dir, "errors-by-stack", json!({}))).await;
+        script.assert_finished();
+        assert_eq!(
+            result["rows"],
+            json!([{"stack":"/synthetic/good","errors":3}])
+        );
+        assert_eq!(result["partial"], true);
+        assert_eq!(result["counts"]["failed"], 1);
+        assert!(!result.to_string().contains("SYNTHETIC_PRIVATE_COUNT_ERROR"));
     }
 }

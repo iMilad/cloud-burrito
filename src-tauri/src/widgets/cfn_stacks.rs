@@ -8,6 +8,7 @@ use aws_sdk_cloudformation::types::StackStatus;
 use futures::future::join_all;
 use serde_json::{json, Value};
 
+use super::coverage::Coverage;
 use super::{dt_iso, err_msg, WidgetCtx};
 
 const ENRICH_LIMIT: usize = 20;
@@ -30,9 +31,15 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let client = aws_sdk_cloudformation::Client::new(&ctx.sdk);
     let mut summaries = Vec::new();
     let mut token: Option<String> = None;
+    let mut pages = 0usize;
+    let mut page_error = None;
     loop {
         if let Some(denied) = ctx.preflight("cloudformation", "ListStacks") {
-            return denied;
+            if pages == 0 {
+                return denied;
+            }
+            page_error = Some("Additional stack pages were not permitted.".to_string());
+            break;
         }
         let mut req = client
             .list_stacks()
@@ -43,14 +50,11 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                return json!({
-                    "render": "table",
-                    "columns": ["stack", "status", "resources", "last_updated"],
-                    "rows": [],
-                    "error": err_msg(e),
-                });
+                page_error = Some(err_msg(e));
+                break;
             }
         };
+        pages += 1;
         summaries.extend(
             resp.stack_summaries()
                 .iter()
@@ -80,15 +84,22 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     }
 
     // Enrich the first 20 stacks with their resource count, concurrently.
-    let enrich_targets: Vec<String> = summaries
+    let mut enrich_targets: Vec<String> = summaries
         .iter()
         .take(ENRICH_LIMIT)
         .filter_map(|s| s.stack_name().map(str::to_string))
         .collect();
-    if !enrich_targets.is_empty() {
-        if let Some(denied) = ctx.preflight("cloudformation", "DescribeStackResources") {
-            return denied;
-        }
+    let mut enrichment_denied = false;
+    if page_error.is_some() {
+        enrich_targets.clear();
+    }
+    if !enrich_targets.is_empty()
+        && ctx
+            .preflight("cloudformation", "DescribeStackResources")
+            .is_some()
+    {
+        enrichment_denied = true;
+        enrich_targets.clear();
     }
     let count_futs = enrich_targets.iter().map(|name| {
         let client = client.clone();
@@ -99,19 +110,20 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                 .stack_name(&name)
                 .send()
                 .await
-                .ok()
-                .map(|r| r.stack_resources().len());
+                .map(|r| r.stack_resources().len())
+                .map_err(err_msg);
             (name, n)
         }
     });
-    let counts: HashMap<String, Option<usize>> = join_all(count_futs).await.into_iter().collect();
+    let counts: HashMap<String, Result<usize, String>> =
+        join_all(count_futs).await.into_iter().collect();
 
     let mut rows = Vec::new();
     for (i, s) in summaries.iter().enumerate() {
         let stack_name = s.stack_name().unwrap_or("").to_string();
         let resources: Value = if i < ENRICH_LIMIT {
             match counts.get(&stack_name) {
-                Some(Some(c)) => json!(c),
+                Some(Ok(c)) => json!(c),
                 _ => json!(""),
             }
         } else {
@@ -126,11 +138,68 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         }));
     }
 
-    json!({
+    let mut listing = Coverage::complete(rows.len());
+    listing.count("pages", pages);
+    listing.limit("results", None);
+    if page_error.is_some() {
+        listing.failure(
+            "request_failed",
+            "A stack-list page could not be loaded; earlier matching stacks are retained.",
+            pages > 0,
+        );
+    }
+    let failed = counts.values().filter(|result| result.is_err()).count();
+    let mut enrichment = Coverage::complete(counts.len() - failed);
+    enrichment.count("attempted", enrich_targets.len());
+    enrichment.count("failed", failed);
+    enrichment.count(
+        "skipped",
+        summaries.len().saturating_sub(enrich_targets.len()),
+    );
+    enrichment.limit("stacks", Some(ENRICH_LIMIT));
+    enrichment.limit("service_resources_per_stack", Some(100));
+    if failed > 0 {
+        enrichment.failure(
+            "enrichment_failed",
+            "Some stack resource counts could not be loaded.",
+            true,
+        );
+    }
+    if enrichment_denied {
+        enrichment.failure(
+            "policy_denied",
+            "Stack resource counts were not permitted.",
+            !rows.is_empty(),
+        );
+    } else if page_error.is_some() {
+        enrichment.unknown_reason(
+            "not_attempted",
+            "Resource-count enrichment was not requested after the listing failed.",
+        );
+    } else if summaries.len() > ENRICH_LIMIT {
+        enrichment.limited(
+            "enrichment_limit",
+            "Resource counts are requested only for the first 20 matching stacks.",
+        );
+    }
+    if counts
+        .values()
+        .any(|result| result.as_ref().is_ok_and(|count| *count >= 100))
+    {
+        enrichment.unknown_reason("service_limit", "A resource count reached the service limit; that stack may contain additional resources.");
+    }
+    let mut coverage = Coverage::complete(rows.len());
+    coverage.section("stacks", listing);
+    coverage.section("enrichment", enrichment);
+    let mut result = json!({
         "render": "table",
         "columns": ["stack", "status", "resources", "last_updated"],
         "rows": rows,
-    })
+    });
+    if let Some(error) = page_error {
+        result["error"] = json!(error);
+    }
+    coverage.attach(result)
 }
 
 #[cfg(test)]
