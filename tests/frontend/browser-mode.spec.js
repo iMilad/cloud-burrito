@@ -222,13 +222,29 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
   await page.addInitScript(() => {
     window.__codeArtifactInvocations = [];
     window.__codeArtifactHistoryInvocations = [];
+    let active = null;
+    const identity = {
+      profile: "demo-profile", account_id: "acct-fixture", region: "eu-west-1",
+    };
+    const withContext = (result, payload, verified = !!active) => ({
+      ...result,
+      _request: {
+        id: payload?.params?.request_id ?? null,
+        context_id: verified ? "synthetic-context" : null,
+        settings_revision: verified ? "1" : null,
+        provider_revision: verified ? "1" : null,
+        profile: verified ? active.profile : null,
+        account_id: verified ? active.account_id : null,
+        region: verified ? active.region : null,
+      },
+    });
     window.__TAURI__ = {
       core: {
         invoke: async (command, payload) => {
           if (command === "widget_fetch") {
             if (payload?.params?.widget === "codeartifact-packages") {
               window.__codeArtifactInvocations.push(payload);
-              return {
+              return withContext({
                 render: "table",
                 columns: ["package", "latest_version", "last_published"],
                 rows: [{
@@ -241,11 +257,11 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
                     "3.1.0.260615.074500+987fedc",
                   ],
                 }],
-              };
+              }, payload);
             }
             if (payload?.params?.widget === "codeartifact-package-version-history") {
               window.__codeArtifactHistoryInvocations.push(payload);
-              return {
+              return withContext({
                 render: "codeartifact_version_history",
                 package: "demo-package",
                 versions: [
@@ -253,18 +269,29 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
                   { version: "3.2.0.260701.101500+def5678", published: "2026-07-01T10:15:00Z" },
                   { version: "3.1.0.260615.074500+987fedc", published: "2026-06-15T07:45:00Z" },
                 ],
-              };
+              }, payload);
             }
-            return {};
+            return withContext({ render: "raw_json", data: {} }, payload);
           }
           if (command === "ping") return { version: "test" };
           if (command === "settings_get") {
-            return { default_profile: "default", default_region: "eu-west-1" };
+            return { default_profile: identity.profile, default_region: identity.region };
           }
           if (command === "dashboard_get") return { tiles: [] };
-          if (command === "aws_list_profiles") return { profiles: [], config_path: "" };
+          if (command === "aws_list_profiles") return {
+            profiles: [{ name: identity.profile, account_id: identity.account_id, region: identity.region }],
+            config_path: "/synthetic/aws/config",
+          };
+          if (command === "aws_set_account") {
+            active = { profile: payload.params.profile, account_id: payload.params.account_id, region: payload.params.region };
+            return withContext({ ok: true, ...active }, payload);
+          }
+          if (command === "aws_list_pipelines") return withContext({ ok: true, pipelines: [] }, payload);
           if (command === "aws_auth_status") {
-            return { has_context: false, logged_in: false, needs_sso_login: false };
+            return withContext({
+              has_context: !!active, logged_in: !!active, needs_sso_login: false,
+              connection_state: active ? "verified" : "unselected", ...active,
+            }, payload);
           }
           return {};
         },
@@ -272,6 +299,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
     };
   });
   await page.reload();
+  await expect(page.locator("#auth-status")).toHaveAttribute("data-state", "online");
 
   const widget = codeArtifactWidget(page);
   const domain = widget.locator(".codeartifact-domain");
@@ -296,6 +324,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
   expect(await page.evaluate(() => window.__codeArtifactInvocations[0])).toEqual({
     params: {
       widget: "codeartifact-packages",
+      request_id: expect.stringMatching(/^ui-\d+$/),
       inputs: {
         domain: "demo-domain",
         repository: "demo_repo",
@@ -317,6 +346,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
   expect(await page.evaluate(() => window.__codeArtifactHistoryInvocations[0])).toEqual({
     params: {
       widget: "codeartifact-package-version-history",
+      request_id: expect.stringMatching(/^ui-\d+$/),
       inputs: {
         domain: "demo-domain",
         repository: "demo_repo",

@@ -1,10 +1,12 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1-01 through P1-04 complete locally. P1-05 is next. Full P1 remains incomplete. P2–P4 remain planned; P0 device evidence remains open.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
+Status: **P1-01 through P1-05 complete locally. P1-06 is next. Full P1 remains incomplete. P2–P4 remain planned; P0 device evidence remains open.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
 
-Latest completed unit: P1-04 re-enables the constrained desktop CLI on the committed P1-01–03 baseline `a879851`. The full Rust library suite passes **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. See [P1-04 evidence](p1-04-evidence.md) and the [execution plan](execution-plan.md). The historical [P1-03 evidence](p1-03-evidence.md) records 97 Rust library tests and 5 Node tests; [P1-02](p1-02-evidence.md) and [P1-01 evidence](p1-01-evidence.md) retain their original results. Live AWS and native platform acceptance remain pending.
+Latest completed unit: [P1-05](p1-05-evidence.md) adds verified response envelopes and request ownership across production frontend tiles, pins, selectors and nested details. Its Rust, Node and synthetic browser checks pass locally.
 
-P1-03 adds explicit SSO snapshots, STS account/principal verification, frozen resource credentials, refresh/expiry checks, independent pinned contexts and configuration/auth-status guards. P1-04 hands those exact verified temporary credentials to an isolated CLI child, caps both output streams and supervises cancellation and direct-child cleanup. Cleanup failures survive a superseded context as the stable `CliCleanupFailed` UI/audit error. The P1-03 temporary CLI block is removed. Broader tile/detail ownership remains P1-05 work; process-tree and native OS behavior remain unverified.
+Previous completed unit: P1-04 re-enables the constrained desktop CLI on the committed P1-01–03 baseline `a879851`. The full Rust library suite passes **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. See [P1-04 evidence](p1-04-evidence.md) and the [execution plan](execution-plan.md). The historical [P1-03 evidence](p1-03-evidence.md) records 97 Rust library tests and 5 Node tests; [P1-02](p1-02-evidence.md) and [P1-01 evidence](p1-01-evidence.md) retain their original results. Live AWS and native platform acceptance remain pending.
+
+P1-03 adds explicit SSO snapshots, STS account/principal verification, frozen resource credentials, refresh/expiry checks, independent pinned contexts and configuration/auth-status guards. P1-04 hands those exact verified temporary credentials to an isolated CLI child, caps both output streams and supervises cancellation and direct-child cleanup. Cleanup failures survive a superseded context as the stable `CliCleanupFailed` UI/audit error. The P1-03 temporary CLI block is removed. Broader tile/detail ownership is now covered by P1-05; process-tree and native OS behavior remain unverified.
 
 Executable support includes native installers and a narrow Unix absolute-Python wrapper launched through its validated native interpreter with isolated Python mode. Shell, environment-relative and batch wrappers remain unsupported. AWS CLI v2 version and publisher trust remain local-installation requirements; no version probe was run. The execution deadline is not a guaranteed cleanup-return bound: waiting for OS-confirmed exit can take longer, and a nonempty isolated directory may remain.
 
@@ -21,7 +23,7 @@ Use **P0–P6** for work items and acceptance evidence. The presentation's five 
 | Phase | Outcome | Exit evidence | Planning / delivery |
 | --- | --- | --- | --- |
 | [P0 — Establish the truth](phase-0.md) | Scope, operation inventory, five journey contracts, baseline and early platform checks | First-party execution paths mapped; baseline and gaps recorded; Windows/Ubuntu build-and-launch attempts documented; initial support matrix frozen | Scope recorded / device and native evidence pending |
-| [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–04 complete locally / P1-05 next / P1-06 pending |
+| [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–05 complete locally / P1-06 next |
 | [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | Plan complete / implementation not started |
 | [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Startup, result latency, memory and request counts measured; published claims reproducible | Plan complete / implementation not started |
 | [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | Plan complete / implementation not started |
@@ -53,7 +55,7 @@ Deferred: Go/Wails rewrite, plugin SDK, full AI assistant, infrastructure mutati
 
 ## Start here
 
-1. Continue with P1-05 result ownership using the [P1-04 evidence](p1-04-evidence.md) and [execution plan](execution-plan.md).
+1. Continue with P1-06 command/rendering/audit boundaries using the [P1-05 evidence](p1-05-evidence.md) and [execution plan](execution-plan.md).
 2. Use the phase plans in order: [P1](phase-1.md) → [P2](phase-2.md) → [P3](phase-3.md) → [P4](phase-4.md).
 3. Keep evidence against the [journey contracts](phase-0.md) and [operation inventory](aws-operation-inventory.md).
 4. Resume [device checks](device-checks.md) when the laptops are available; final support and native acceptance remain conditional until then.

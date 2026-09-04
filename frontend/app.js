@@ -337,18 +337,126 @@
     document.querySelectorAll(".grid-stack-item").forEach(updateWidgetContextChip);
   }
 
-  // Every Tauri widget.fetch call goes through this helper so the per-tile
-  // context is automatically injected. Pass `tileEl` (any element
-  // inside the tile) and it'll find the owning .grid-stack-item.
-  function fetchWidgetData(widgetName, inputs, tileEl, contextOverride) {
-    if (!isTauri) return Promise.resolve(null);
-    const override = contextOverride || contextOverrideFromElement(tileEl);
-    return tauriInvoke("widget_fetch", {
-      params: {
-        widget: widgetName,
-        inputs: inputs || {},
-        context: override || contextPayloadForTile(tileEl),
+  // A request belongs to a particular mounted surface, its ancestor lifetime,
+  // and (unless explicitly pinned) one selection attempt. Equality of account
+  // labels alone cannot distinguish A -> B -> A. Discarding a result here is
+  // logical cancellation; it does not stop a remote query or subprocess.
+  let nextOwnedRequestId = 0;
+  let configurationGeneration = 0;
+
+  function invalidateRequests(node) {
+    if (!node) return;
+    node._requestGeneration = (node._requestGeneration || 0) + 1;
+    delete node._resultContext;
+  }
+
+  function beginOwnedRequest(owner, contextOverride) {
+    if (!owner) throw new Error("A request owner is required.");
+    invalidateRequests(owner);
+    const id = `ui-${++nextOwnedRequestId}`;
+    const ancestors = [];
+    for (let node = owner; node; node = node.parentNode) {
+      ancestors.push([node, node._requestGeneration || 0]);
+    }
+    const independent = !!owner.closest?.(".pipeline-pin-card")
+      || contextForTile(owner).mode === "pinned";
+    const selection = currentSelectionId;
+    const configuration = configurationGeneration;
+    const context = { ...(contextOverride || contextOverrideFromElement(owner) || contextPayloadForTile(owner)) };
+    const expected = context.mode === "pinned" ? context : {
+      profile: topbarState.profile, account_id: topbarState.accountId, region: topbarState.region,
+    };
+    const request = {
+      id, context, allowed: independent || lastSetAccountResult?.ok === true,
+      current() {
+        return owner.isConnected && owner._ownedRequest === request
+          && configuration === configurationGeneration
+          && (independent || selection === currentSelectionId)
+          && ancestors.every(([node, generation]) => (node._requestGeneration || 0) === generation);
       },
+      accept(result) {
+        if (!request.current()) return false;
+        const meta = result && result._request;
+        if (!meta || meta.id !== id) throw new Error("Response request identity did not match.");
+        const failed = result.render === "permission_denied"
+          || (result.render === "raw_json" && !!result.data?.error)
+          || (!result.render && (result.ok === false || !!result.error));
+        if (!failed && ["context_id", "provider_revision", "settings_revision"].some(key => typeof meta[key] !== "string" || !meta[key])) {
+          throw new Error("Response verified context was missing.");
+        }
+        if (meta.context_id !== null && ["profile", "account_id", "region"].some(key => meta[key] !== expected[key])) {
+          throw new Error("Response AWS context did not match.");
+        }
+        owner._resultContext = { ...meta };
+        return true;
+      },
+    };
+    owner._ownedRequest = request;
+    return request;
+  }
+
+  function fetchWidgetData(widgetName, inputs, owner, contextOverride, request) {
+    if (!isTauri) return Promise.resolve(null);
+    if (!request) throw new Error("An owned widget request is required.");
+    if (!request.current()) return Promise.reject(new Error("Request owner is no longer current."));
+    if (!request.allowed) return Promise.reject(new Error("Select and verify an AWS account first."));
+    return tauriInvoke("widget_fetch", {
+      params: { widget: widgetName, inputs: inputs || {}, context: request.context, request_id: request.id },
+    });
+  }
+
+  async function fetchWidgetInto(host, widgetName, inputs, contextOverride) {
+    const request = beginOwnedRequest(host, contextOverride);
+    try {
+      const result = await fetchWidgetData(widgetName, inputs, host, contextOverride, request);
+      if (request.accept(result)) dispatchRender(host, result);
+    } catch (error) {
+      if (request.current()) renderError(host, String(error));
+    }
+  }
+
+  function clearWidgetResults(widget) {
+    // Keep explicit pin cards mounted; their identity and request lifetime do
+    // not belong to the topbar. Form controls remain available for retry.
+    widget.querySelectorAll(".widget-data, .lookup-results, .log-tail-body, .cw-logs-body, .cfn-stacks-body, .errors-body").forEach(host => {
+      if (host.closest(".pipeline-pin-card")) return;
+      if (host.classList.contains("widget-data")) {
+        host._reloadAfterSelection = host._reloadAfterSelection || !host.hidden;
+      }
+      invalidateRequests(host);
+      clear(host);
+      if (host.classList.contains("widget-data")) host.hidden = true;
+    });
+    widget.querySelectorAll(".pipeline-error, .aws-cli-error, .logs-insights-error, .codeartifact-packages-error").forEach(node => { node.textContent = ""; });
+    widget.querySelectorAll("datalist, .pipeline-name-select").forEach(node => { invalidateRequests(node); clear(node); });
+    widget.querySelectorAll(".li-group").forEach(node => { invalidateRequests(node); delete node.dataset.loaded; });
+    widget.querySelectorAll(".pipeline-name-search").forEach(node => {
+      invalidateRequests(node);
+      node._pipelineNames = [];
+      node.value = "";
+      node.disabled = true;
+      node.placeholder = "(verify an account to list pipelines)";
+    });
+    const subtitle = $(".widget-sub", widget);
+    if (subtitle) subtitle.textContent = "";
+  }
+
+  function clearInheritedResults() {
+    closePipelineCombo();
+    document.querySelectorAll(".widget").forEach(widget => {
+      if (contextForTile(widget).mode !== "pinned") clearWidgetResults(widget);
+    });
+  }
+
+  function wireRequestInputs(form, owner, errorEl) {
+    if (form._requestInputsWired) return;
+    form._requestInputsWired = true;
+    form.addEventListener("input", () => {
+      owner._reloadAfterSelection = false;
+      invalidateRequests(owner);
+      clear(owner);
+      owner.hidden = true;
+      if (errorEl) errorEl.textContent = "";
     });
   }
 
@@ -420,13 +528,36 @@
     };
     const status = $("#settings-status");
     status.textContent = "Saving…";
+    const configuration = ++configurationGeneration;
+    ++currentSelectionId;
+    lastSetAccountResult = null;
+    lastAuthStatus = null;
+    document.querySelectorAll(".widget").forEach(widget => {
+      invalidateRequests(tileItemFor(widget));
+      clearWidgetResults(widget);
+      widget.querySelectorAll(".pipeline-pin-card").forEach(card => {
+        invalidateRequests(card);
+        delete card.dataset.loaded;
+        const result = $(".pipeline-pin-result", card);
+        if (result) { clear(result); result.textContent = "Refresh to verify the updated configuration."; }
+        const stamp = $(".pipeline-pin-updated", card);
+        if (stamp) stamp.textContent = "";
+        const badge = $(".pipeline-pin-status", card);
+        if (badge) { badge.className = "badge badge-neutral pipeline-pin-status"; badge.textContent = "Not refreshed"; }
+      });
+    });
+    setPillInFlight("auth: configuration changed — verify account …");
     try {
       cachedSettings = await tauriInvoke("settings_set", { params });
+      if (configuration !== configurationGeneration) return;
       status.textContent = "Saved.";
       // Re-apply to the Pipeline Runs config inputs so the user doesn't see
       // stale placeholders the next time they look at it.
       prefillPipelineConfig(cachedSettings);
+      applyTopbarSelection({ fromProfile: false });
+      refreshProfilesInBackground();
     } catch (err) {
+      if (configuration !== configurationGeneration) return;
       status.textContent = "Save failed: " + err;
     }
   }
@@ -950,6 +1081,7 @@
     if (!opt || !opt.value) return;
     const myId = ++currentSelectionId;
     lastSetAccountResult = null;
+    clearInheritedResults();
     lastAuthStatus = { has_context: false, logged_in: false, connection_state: "verifying" };
     if ($("#identity-panel")?.classList.contains("open")) renderIdentityPanel(lastAuthStatus);
 
@@ -993,6 +1125,7 @@
           account_id: accountId,
           region,
           sso_session_name: ssoSession || null,
+          request_id: `selection-${myId}`,
         },
       });
     } catch (e) {
@@ -1004,6 +1137,12 @@
       return;
     }
     if (myId !== currentSelectionId) return;  // newer selection won — discard
+    if (!res?._request || res._request.id !== `selection-${myId}`
+        || (res.ok && ["context_id", "provider_revision", "settings_revision"].some(key => typeof res._request[key] !== "string" || !res._request[key]))
+        || (res._request.context_id !== null && (res._request.profile !== profile
+          || res._request.account_id !== accountId || res._request.region !== region))) {
+      res = { ok: false, error: "Response AWS context did not match." };
+    }
 
     lastSetAccountResult = res;
     if (!res.ok) {
@@ -1018,7 +1157,9 @@
     // combobox reflects the account just picked), THEN reload all unpinned
     // widgets (so pipeline-runs picks up the new selection).
     if (res && res.ok) {
-      loadPipelineListsForInheritedWidgets().then(refreshAllUnpinnedWidgets);
+      loadPipelineListsForInheritedWidgets().then(() => {
+        if (myId === currentSelectionId && lastSetAccountResult?.ok) refreshAllUnpinnedWidgets();
+      });
     }
   }
 
@@ -1084,12 +1225,18 @@
     return true;
   }
 
+  let currentProfilesRequestId = 0;
   async function refreshProfilesInBackground() {
     if (!isTauri) return;
     const accSel = $("#account-select");
+    const requestId = ++currentProfilesRequestId;
+    const configuration = configurationGeneration;
+    const selection = currentSelectionId;
     let info;
     try {
       info = await tauriInvoke("aws_list_profiles");
+      if (requestId !== currentProfilesRequestId || configuration !== configurationGeneration
+          || selection !== currentSelectionId) return;
     } catch (e) {
       console.warn("background aws_list_profiles failed:", e);
       // Don't clobber cached UI on transient failure.
@@ -1249,6 +1396,15 @@
     }
     if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId
         || info.error_type === "Superseded") return;
+    const meta = info._request;
+    if (info.has_context && (!meta || ["context_id", "provider_revision", "settings_revision"].some(key => typeof meta[key] !== "string" || !meta[key]))) return;
+    if (meta?.context_id && (meta.profile !== topbarState.profile
+        || meta.account_id !== topbarState.accountId || meta.region !== topbarState.region)) return;
+    if (!info.has_context && lastSetAccountResult?.ok) {
+      lastSetAccountResult = { ok: false, needs_sso_login: !!info.needs_sso_login,
+        error: info.error || "AWS context is no longer verified." };
+      clearInheritedResults();
+    }
     // If aws_set_account just failed, prefer that immediate result while there
     // is no active context. It carries the concrete policy/credential reason.
     if (lastSetAccountResult && !lastSetAccountResult.ok && !info.has_context) {
@@ -1552,32 +1708,32 @@
       return;
     }
     addSelectedPipelineOption(form, pipelineName);
-    const fetchContext = effectivePinnedContextForTile(form) || contextPayloadForTile(form);
+    const fetchContext = contextPayloadForTile(form);
+    clear(rowsHost);
+    const request = beginOwnedRequest(rowsHost, fetchContext);
     if (errorEl) errorEl.textContent = "Loading...";
     try {
       const result = await fetchWidgetData(
         "pipeline-runs",
         { pipeline_name: pipelineName },
         form,
-        fetchContext,
+        fetchContext, request,
       );
+      if (!request.accept(result)) return;
       if (rowsHost) {
         rowsHost._widgetContextOverride = fetchContext;
         renderTable(rowsHost, result, {
           expand: (row, cell) => {
             cell._widgetContextOverride = fetchContext;
-            return fetchWidgetData(
-              "pipeline-execution-detail",
-              { pipeline_name: pipelineName, execution_id: row.execution_id },
-              form,
-              fetchContext,
-            ).then((res) => dispatchRender(cell, res));
+            return fetchWidgetInto(cell, "pipeline-execution-detail",
+              { pipeline_name: pipelineName, execution_id: row.execution_id }, fetchContext);
           },
         });
         rowsHost.hidden = false;
       }
       if (errorEl) errorEl.textContent = "";
     } catch (err) {
+      if (!request.current()) return;
       if (errorEl) errorEl.textContent = `Error: ${err}`;
     }
   }
@@ -1613,14 +1769,17 @@
 
   // Pin cards render collapsed so a reload shows a compact, scannable list.
   // Expansion state is session-only, keyed by pin id, so toggles survive the
-  // full list re-renders that pinning/refreshing trigger.
+  // list reconciliation that pinning/refreshing triggers.
   const pipelinePinExpandState = new Map();
 
   function renderPipelinePinList(widget) {
     const list = $(".pipeline-pin-list", widget);
     if (!list) return;
     const pins = pipelinePinsForWidget(widget);
-    clear(list);
+    const existing = new Map(Array.from(list.children).map(card => [card.dataset.pinId, card]));
+    existing.forEach((card, key) => {
+      if (!pins.some(pin => pipelinePinKey(pin) === key)) card.remove();
+    });
     const emptyEl = $(".pipeline-pin-empty", widget);
     if (emptyEl) emptyEl.hidden = pins.length > 0;
     const countEl = $(".pipeline-pin-count", widget);
@@ -1638,6 +1797,8 @@
     pins.forEach((pin) => {
       const key = pipelinePinKey(pin);
       pin.id = key;
+      const reused = existing.get(key);
+      if (reused) { list.appendChild(reused); return; }
       const handle = el("button", { class: "icon-btn pipeline-pin-handle", type: "button", title: "Drag to reorder" }, "≡");
       const toggle = el("button", { class: "icon-btn pipeline-pin-toggle", type: "button" }, "▸");
       const status = el("span", { class: "badge badge-neutral pipeline-pin-status" }, "Pinned");
@@ -1737,13 +1898,15 @@
       resultHost.textContent = "Loading...";
       resultHost._widgetContextOverride = ctx;
     }
+    const request = beginOwnedRequest(card, ctx);
     try {
       const result = await fetchWidgetData(
         "pipeline-runs",
         { pipeline_name: pin.pipeline_name },
         widget,
-        ctx,
+        ctx, request,
       );
+      if (!request.accept(result)) return;
       if (result && result.render === "table") {
         const rows = Array.isArray(result.rows) ? result.rows : [];
         const latest = rows[0] || null;
@@ -1762,12 +1925,8 @@
           renderTable(resultHost, result, {
             expand: (row, cell) => {
               cell._widgetContextOverride = ctx;
-              return fetchWidgetData(
-                "pipeline-execution-detail",
-                { pipeline_name: pin.pipeline_name, execution_id: row.execution_id },
-                widget,
-                ctx,
-              ).then((res) => dispatchRender(cell, res));
+              return fetchWidgetInto(cell, "pipeline-execution-detail",
+                { pipeline_name: pin.pipeline_name, execution_id: row.execution_id }, ctx);
             },
           });
         }
@@ -1783,6 +1942,7 @@
         dispatchRender(resultHost, result);
       }
     } catch (err) {
+      if (!request.current()) return;
       if (statusEl) {
         statusEl.className = "badge badge-error pipeline-pin-status";
         statusEl.textContent = "Error";
@@ -1803,6 +1963,7 @@
   function renderPipelineRunsOne(widget) {
     const form = $(".pipeline-config", widget);
     if (!form) return;
+    wireRequestInputs(form, $(".pipeline-runs-rows", widget), $(".pipeline-error", widget));
     wirePipelineCombo(form);
     updateWidgetContextChip(widget.closest(".grid-stack-item"));
     renderPipelinePinList(widget);
@@ -1906,6 +2067,7 @@
         envLightNodes(name).forEach((n) => li.appendChild(n));
         li.addEventListener("mousedown", (e) => {
           e.preventDefault();
+          if (!li.isConnected || !input.isConnected || comboOwnerInput !== input || input.disabled) return;
           choosePipeline(input, name);
         });
         comboListEl.appendChild(li);
@@ -2025,12 +2187,16 @@
     }
     if (hint) hint.textContent = "";
 
+    const request = beginOwnedRequest(input || sel);
     let res;
     try {
+      if (!request.allowed) throw new Error("Select and verify an AWS account first.");
       res = await tauriInvoke("aws_list_pipelines", {
-        params: { context: contextPayloadForTile(widget) },
+        params: { context: request.context, request_id: request.id },
       });
+      if (!request.accept(res)) return;
     } catch (e) {
+      if (!request.current()) return;
       if (input) input.placeholder = `(rpc error: ${e})`;
       return;
     }
@@ -2197,6 +2363,7 @@
     tr.setAttribute("aria-expanded", "true");
     tr.setAttribute("aria-controls", detailId);
     Promise.resolve(opts.expand(row, cell)).catch((e) => {
+      if (!cell.isConnected) return;
       clear(cell);
       cell.appendChild(el("div", { class: "muted small" }, "Error: " + e));
     });
@@ -2542,19 +2709,16 @@
   }
 
   function toggleActionLog(btn, logHost, buildId, detailHost) {
-    if (logHost.childNodes.length) { // already open -> collapse
+    if (!btn.isConnected) return;
+    if (logHost.childNodes.length) {
+      invalidateRequests(logHost);
       clear(logHost);
       btn.textContent = "View log";
       return;
     }
     btn.textContent = "Hide log";
     logHost.appendChild(el("div", { class: "muted small" }, "Loading log…"));
-    // The pipeline-runs tile context is on the detail cell's ancestor grid item.
-    const tile = detailHost && detailHost.closest ? detailHost.closest(".grid-stack-item") : null;
-    const override = contextOverrideFromElement(detailHost);
-    fetchWidgetData("codebuild-log", { build_id: buildId }, tile, override)
-      .then((res) => { clear(logHost); dispatchRender(logHost, res); })
-      .catch((e) => { clear(logHost); logHost.appendChild(el("div", { class: "muted small" }, "Error: " + e)); });
+    return fetchWidgetInto(logHost, "codebuild-log", { build_id: buildId }, contextOverrideFromElement(detailHost));
   }
 
   // ===== Render dispatcher =====
@@ -2755,6 +2919,7 @@
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       body.classList.remove("log-stream");
       body.classList.add("lambda-log-browser");
+      invalidateRequests(body);
       clear(body);
 
       const state = { functions: [], selected: null, streams: [] };
@@ -2848,6 +3013,8 @@
       }
 
       function renderDetail() {
+        invalidateRequests(streamHost);
+        invalidateRequests(logHost);
         clear(detailHost);
         clear(streamHost);
         clear(logHost);
@@ -2907,8 +3074,13 @@
           select.appendChild(el("option", { value: stream.name },
             `${stream.name} · ${timeLabel(stream.last_event_timestamp)}`));
         });
+        select.addEventListener("change", () => {
+          invalidateRequests(logHost);
+          clear(logHost);
+          logHost.hidden = true;
+        });
         const viewBtn = el("button", { class: "btn btn-primary", type: "button" }, "View log");
-        viewBtn.addEventListener("click", () => loadEvents(select.value));
+        viewBtn.addEventListener("click", () => { if (select.isConnected) loadEvents(select.value); });
         streamHost.appendChild(
           el("div", { class: "lambda-stream-controls" },
             el("label", {},
@@ -2927,8 +3099,14 @@
         clear(streamHost);
         clear(logHost);
         logHost.hidden = true;
+        invalidateRequests(streamHost);
+        invalidateRequests(logHost);
+        state.selected = null;
+        state.streams = [];
+        const request = beginOwnedRequest(listHost);
         try {
-          const result = await fetchWidgetData("log-tail", { mode: "list", max_functions: 500 }, body);
+          const result = await fetchWidgetData("log-tail", { mode: "list", max_functions: 500 }, listHost, null, request);
+          if (!request.accept(result)) return;
           if (!result || result.ok === false || result.render) {
             showBackendProblem(statusHost, result, result && result.error);
             return;
@@ -2940,6 +3118,7 @@
           renderFunctionList();
           renderDetail();
         } catch (err) {
+          if (!request.current()) return;
           setStatus("Error: " + err);
         }
       }
@@ -2954,15 +3133,19 @@
 
       async function loadStreams(fn) {
         if (!fn || !fn.log_group) return;
+        if (state.selected !== fn) return;
+        invalidateRequests(logHost);
         renderStreams("Loading streams...");
         clear(logHost);
         logHost.hidden = true;
+        const request = beginOwnedRequest(streamHost);
         try {
           const result = await fetchWidgetData(
             "log-tail",
             { mode: "streams", log_group: fn.log_group, max_streams: 50 },
-            body,
+            streamHost, null, request,
           );
+          if (!request.accept(result)) return;
           if (!result || result.ok === false || result.render) {
             showBackendProblem(streamHost, result, result && result.error);
             return;
@@ -2970,6 +3153,7 @@
           state.streams = Array.isArray(result.streams) ? result.streams : [];
           renderStreams();
         } catch (err) {
+          if (!request.current()) return;
           renderStreams("Error: " + err);
         }
       }
@@ -2980,14 +3164,17 @@
         clear(logHost);
         logHost.hidden = false;
         logHost.appendChild(el("div", { class: "muted small" }, "Loading log events..."));
+        const request = beginOwnedRequest(logHost);
         try {
           const result = await fetchWidgetData(
             "log-tail",
             { mode: "events", log_group: fn.log_group, log_stream: streamName, limit: 500 },
-            body,
+            logHost, null, request,
           );
+          if (!request.accept(result)) return;
           dispatchRender(logHost, result);
         } catch (err) {
+          if (!request.current()) return;
           clear(logHost);
           logHost.appendChild(el("div", { class: "muted small" }, "Error: " + err));
         }
@@ -3036,6 +3223,7 @@
       const body = $(".cw-logs-body", widget);
       if (!body) return;
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
+      invalidateRequests(body);
       clear(body);
       if (!isTauri) {
         body.appendChild(el("div", { class: "muted small" },
@@ -3143,6 +3331,8 @@
       }
 
       function renderDetail() {
+        invalidateRequests(streamHost);
+        invalidateRequests(logHost);
         clear(detailHost);
         clear(streamHost);
         clear(logHost);
@@ -3197,8 +3387,13 @@
           select.appendChild(el("option", { value: stream.name },
             `${stream.name} · ${timeLabel(stream.last_event_timestamp)}`));
         });
+        select.addEventListener("change", () => {
+          invalidateRequests(logHost);
+          clear(logHost);
+          logHost.hidden = true;
+        });
         const viewBtn = el("button", { class: "btn btn-primary", type: "button" }, "View log");
-        viewBtn.addEventListener("click", () => loadEvents(select.value));
+        viewBtn.addEventListener("click", () => { if (select.isConnected) loadEvents(select.value); });
         streamHost.appendChild(
           el("div", { class: "lambda-stream-controls" },
             el("label", {},
@@ -3217,10 +3412,16 @@
         clear(streamHost);
         clear(logHost);
         logHost.hidden = true;
+        invalidateRequests(streamHost);
+        invalidateRequests(logHost);
+        state.selected = null;
+        state.streams = [];
+        const request = beginOwnedRequest(listHost);
         try {
           const inputs = { mode: "groups", max_groups: 500 };
           if (pattern) inputs.name_pattern = pattern;
-          const result = await fetchWidgetData("cloudwatch-logs", inputs, body);
+          const result = await fetchWidgetData("cloudwatch-logs", inputs, listHost, null, request);
+          if (!request.accept(result)) return;
           if (!result || result.ok === false || result.render) {
             showBackendProblem(statusHost, result, result && result.error);
             return;
@@ -3235,6 +3436,7 @@
           renderGroupList();
           renderDetail();
         } catch (err) {
+          if (!request.current()) return;
           setStatus("Error: " + err);
         }
       }
@@ -3249,15 +3451,19 @@
 
       async function loadStreams(group) {
         if (!group || !group.name) return;
+        if (state.selected !== group) return;
+        invalidateRequests(logHost);
         renderStreams("Loading streams...");
         clear(logHost);
         logHost.hidden = true;
+        const request = beginOwnedRequest(streamHost);
         try {
           const result = await fetchWidgetData(
             "cloudwatch-logs",
             { mode: "streams", log_group: group.name, max_streams: 50 },
-            body,
+            streamHost, null, request,
           );
+          if (!request.accept(result)) return;
           if (!result || result.ok === false || result.render) {
             showBackendProblem(streamHost, result, result && result.error);
             return;
@@ -3265,6 +3471,7 @@
           state.streams = Array.isArray(result.streams) ? result.streams : [];
           renderStreams();
         } catch (err) {
+          if (!request.current()) return;
           renderStreams("Error: " + err);
         }
       }
@@ -3275,14 +3482,17 @@
         clear(logHost);
         logHost.hidden = false;
         logHost.appendChild(el("div", { class: "muted small" }, "Loading log events..."));
+        const request = beginOwnedRequest(logHost);
         try {
           const result = await fetchWidgetData(
             "cloudwatch-logs",
             { mode: "events", log_group: group.name, log_stream: streamName, limit: 500 },
-            body,
+            logHost, null, request,
           );
+          if (!request.accept(result)) return;
           dispatchRender(logHost, result);
         } catch (err) {
+          if (!request.current()) return;
           clear(logHost);
           logHost.appendChild(el("div", { class: "muted small" }, "Error: " + err));
         }
@@ -3314,21 +3524,23 @@
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       clear(body);
       body.appendChild(el("div", { class: "muted small" }, "Loading..."));
+      const request = beginOwnedRequest(body);
       try {
-        const result = await fetchWidgetData("cfn-stacks", {}, body);
+        const result = await fetchWidgetData("cfn-stacks", {}, body, null, request);
+        if (!request.accept(result)) return;
         if (result && result.render === "table") {
           renderTable(body, result, {
             alwaysFilter: true,
             filterPlaceholder: "Search stacks (name, status, or date)…",
             filterEmptyText: "No matching stacks.",
             expand: (row, cell) =>
-              fetchWidgetData("cfn-stack-detail", { stack_name: row.stack }, body)
-                .then((res) => dispatchRender(cell, res)),
+              fetchWidgetInto(cell, "cfn-stack-detail", { stack_name: row.stack }),
           });
         } else {
           dispatchRender(body, result);
         }
       } catch (e) {
+        if (!request.current()) return;
         renderError(body, "Failed to load: " + e);
       }
     });
@@ -3372,7 +3584,6 @@
 
   // ===== Resource reverse lookup =====
   let lookupDebounceTimer = null;
-  let lookupReqSeq = 0;
 
   function renderLookup(target) {
     if (isTauri) return renderLookupLiveBind(target);
@@ -3381,44 +3592,38 @@
 
   function renderLookupLiveBind(target) {
     return withWidgets("resource-lookup", target, (widget) => {
-      const input = $(".lookup-input", widget);
+      const old = $(".lookup-input", widget);
       const results = $(".lookup-results", widget);
-      if (!input || !results) return;
+      if (!old || !results) return;
+      if (old._lookupDebounceTimer) clearTimeout(old._lookupDebounceTimer);
+      invalidateRequests(results);
+      const input = old.cloneNode(true);
+      old.parentNode.replaceChild(input, old);
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       clear(results);
       results.appendChild(el("div", { class: "lookup-empty" },
         "Type a resource name, ARN, or partial id to find its owning stack."));
-      const onInput = () => {
+      input.addEventListener("input", () => {
         if (input._lookupDebounceTimer) clearTimeout(input._lookupDebounceTimer);
+        const request = beginOwnedRequest(results);
         const q = input.value.trim();
+        clear(results);
         if (!q) {
-          clear(results);
           results.appendChild(el("div", { class: "lookup-empty" },
             "Type a resource name, ARN, or partial id to find its owning stack."));
           return;
         }
         input._lookupDebounceTimer = setTimeout(async () => {
-          input._lookupReqSeq = (input._lookupReqSeq || 0) + 1;
-          const mySeq = input._lookupReqSeq;
-          clear(results);
+          if (!input.isConnected || !request.current()) return;
           results.appendChild(el("div", { class: "lookup-empty muted small" }, "Searching..."));
           try {
-            const result = await fetchWidgetData(
-              "resource-lookup",
-              { query: q },
-              results,
-            );
-            if (mySeq !== input._lookupReqSeq) return;
-            dispatchRender(results, result);
+            const result = await fetchWidgetData("resource-lookup", { query: q }, results, null, request);
+            if (request.accept(result)) dispatchRender(results, result);
           } catch (err) {
-            if (mySeq !== input._lookupReqSeq) return;
-            renderError(results, "Lookup failed: " + err);
+            if (request.current()) renderError(results, "Lookup failed: " + err);
           }
         }, 350);
-      };
-      const fresh = input.cloneNode(true);
-      input.parentNode.replaceChild(fresh, input);
-      fresh.addEventListener("input", onInput);
+      });
     });
   }
 
@@ -3477,10 +3682,13 @@
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       clear(body);
       body.appendChild(el("div", { class: "muted small" }, "Loading..."));
+      const request = beginOwnedRequest(body);
       try {
-        const result = await fetchWidgetData("errors-by-stack", {}, body);
+        const result = await fetchWidgetData("errors-by-stack", {}, body, null, request);
+        if (!request.accept(result)) return;
         dispatchRender(body, result);
       } catch (e) {
+        if (!request.current()) return;
         renderError(body, "Failed to load: " + e);
       }
     });
@@ -3673,73 +3881,47 @@
   }
 
   async function loadCodeArtifactVersionHistory(row, cell, historyOptions) {
+    if (!cell.isConnected) return;
     const localVersions = codeArtifactVersions(row);
     if (!isTauri || !historyOptions.form) {
       renderCodeArtifactVersionHistory(row, cell, localVersions);
       return;
     }
+    const request = beginOwnedRequest(cell, historyOptions.context);
+    if (!request.current()) return;
     if (Array.isArray(row._codeArtifactVersionHistory)) {
       renderCodeArtifactVersionHistory(row, cell, row._codeArtifactVersionHistory);
       return;
     }
-
     clear(cell);
     cell.setAttribute("aria-busy", "true");
     cell.appendChild(el("div", { class: "muted small", role: "status" }, "Loading version dates…"));
-
-    if (!row._codeArtifactVersionHistoryPromise) {
-      const sourceInputs = historyOptions.inputs || {};
-      const detailInputs = {
-        domain: sourceInputs.domain || "",
-        repository: sourceInputs.repository || "",
-        domain_owner: sourceInputs.domain_owner || "",
-        package: String(row.package || ""),
-        versions: localVersions.map(item => ({
-          version: item.version,
-          published: item.published,
-        })),
-      };
-      row._codeArtifactVersionHistoryPromise = fetchWidgetData(
-        "codeartifact-package-version-history",
-        detailInputs,
-        historyOptions.form,
-        historyOptions.context,
-      ).then((result) => {
-        if (result && result.render === "permission_denied") {
-          const denied = new Error("permission denied");
-          denied.render = result;
-          throw denied;
-        }
-        if (!result || result.render !== "codeartifact_version_history") {
-          throw new Error("unexpected response");
-        }
-        if (result.error) throw new Error(result.error);
-        const versions = codeArtifactVersions({
-          latest_version: row.latest_version,
-          last_published: row.last_published,
-          versions: result.versions,
-        });
-        if (versions.length === 0) throw new Error("no versions returned");
-        row._codeArtifactVersionHistory = versions;
-        delete row._codeArtifactVersionHistoryPromise;
-        return versions;
-      }).catch((error) => {
-        delete row._codeArtifactVersionHistoryPromise;
-        throw error;
-      });
-    }
-
+    const sourceInputs = historyOptions.inputs || {};
+    const detailInputs = {
+      domain: sourceInputs.domain || "", repository: sourceInputs.repository || "",
+      domain_owner: sourceInputs.domain_owner || "", package: String(row.package || ""),
+      versions: localVersions.map(item => ({ version: item.version, published: item.published })),
+    };
     try {
-      const versions = await row._codeArtifactVersionHistoryPromise;
-      if (cell.isConnected) renderCodeArtifactVersionHistory(row, cell, versions);
-    } catch (error) {
-      if (!cell.isConnected) return;
-      if (error && error.render) {
+      const result = await fetchWidgetData("codeartifact-package-version-history", detailInputs,
+        cell, historyOptions.context, request);
+      if (!request.accept(result)) return;
+      if (result.render === "permission_denied") {
         cell.removeAttribute("aria-busy");
-        renderPermissionDenied(cell, error.render);
-      } else {
-        renderCodeArtifactVersionError(row, cell, String(error), historyOptions);
+        renderPermissionDenied(cell, result);
+        return;
       }
+      if (result.render !== "codeartifact_version_history") throw new Error("unexpected response");
+      if (result.error) throw new Error(result.error);
+      const versions = codeArtifactVersions({ latest_version: row.latest_version,
+        last_published: row.last_published, versions: result.versions });
+      if (!versions.length) throw new Error("no versions returned");
+      // Cache only an accepted completion on this table's row object. Detached
+      // detail requests cannot populate the cache used by a reopened row.
+      row._codeArtifactVersionHistory = versions;
+      renderCodeArtifactVersionHistory(row, cell, versions);
+    } catch (error) {
+      if (request.current()) renderCodeArtifactVersionError(row, cell, String(error), historyOptions);
     }
   }
 
@@ -3766,6 +3948,7 @@
       const errorEl = $(".codeartifact-packages-error", widget);
       if (!form) return;
       const rows = $(".codeartifact-packages-rows", widget);
+      wireRequestInputs(form, rows, errorEl);
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
 
       if (!rows || rows.hidden) {
@@ -3788,15 +3971,18 @@
           }
           $(".codeartifact-max", form).value = String(inputs.max_packages);
           errorEl.textContent = "Loading...";
+          clear(rows);
+          const request = beginOwnedRequest(rows);
           try {
             const fetchInputs = { ...inputs };
-            const fetchContext = effectivePinnedContextForTile(form) || contextPayloadForTile(form);
+            const fetchContext = contextPayloadForTile(form);
             const result = await fetchWidgetData(
               "codeartifact-packages",
               fetchInputs,
               form,
-              fetchContext,
+              fetchContext, request,
             );
+            if (!request.accept(result)) return;
             if (result && result.error) errorEl.textContent = result.error;
             else errorEl.textContent = "";
             renderCodeArtifactPackagesTable(rows, result, {
@@ -3807,6 +3993,7 @@
             rows.hidden = false;
             persistCodeArtifactInputs(form, inputs);
           } catch (err) {
+            if (!request.current()) return;
             errorEl.textContent = `Error: ${err}`;
           }
         });
@@ -3866,10 +4053,12 @@
       return;
     }
     errorEl.textContent = "Running query…";
+    clear(rows);
+    const request = beginOwnedRequest(rows);
     try {
-      // Explicit context snapshot — see runCliCommand for the rationale.
-      const fetchContext = effectivePinnedContextForTile(form) || contextPayloadForTile(form);
-      const result = await fetchWidgetData("logs-insights", { mode: "query", ...inputs }, form, fetchContext);
+      const fetchContext = contextPayloadForTile(form);
+      const result = await fetchWidgetData("logs-insights", { mode: "query", ...inputs }, rows, fetchContext, request);
+      if (!request.accept(result)) return;
       if (!result) return;
       if (result.render) {
         errorEl.textContent = "";
@@ -3886,6 +4075,7 @@
         errorEl.textContent = result.error || "No data returned.";
       }
     } catch (err) {
+      if (!request.current()) return;
       errorEl.textContent = `Error: ${err}`;
     }
   }
@@ -3896,6 +4086,7 @@
       const errorEl = $(".logs-insights-error", widget);
       const rows = $(".logs-insights-rows", widget);
       if (!form || !rows) return;
+      wireRequestInputs(form, rows, errorEl);
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       if (!isTauri) {
         errorEl.textContent = "Live data requires the desktop app.";
@@ -3906,17 +4097,25 @@
 
       if (form.dataset.wired !== "1") {
         form.dataset.wired = "1";
-        // Lazy log-group autocomplete: one groups fetch on first focus.
+        // The input owns its autocomplete cache and its pending completion.
         const groupInput = $(".li-group", form);
         groupInput.addEventListener("focus", async () => {
           if (groupInput.dataset.loaded === "1") return;
+          const request = beginOwnedRequest(groupInput);
           groupInput.dataset.loaded = "1";
           const dl = $("datalist", form);
-          const groupsContext = effectivePinnedContextForTile(form) || contextPayloadForTile(form);
-          const res = await fetchWidgetData("logs-insights", { mode: "groups", max_groups: 500 }, form, groupsContext);
-          if (dl && res && res.ok && Array.isArray(res.groups)) {
-            clear(dl);
-            res.groups.forEach(g => dl.appendChild(el("option", { value: g.name })));
+          try {
+            const res = await fetchWidgetData("logs-insights", { mode: "groups", max_groups: 500 },
+              groupInput, null, request);
+            if (!request.accept(res)) return;
+            if (dl && res.ok && Array.isArray(res.groups)) {
+              clear(dl);
+              res.groups.forEach(g => dl.appendChild(el("option", { value: g.name })));
+            } else {
+              delete groupInput.dataset.loaded;
+            }
+          } catch (_) {
+            if (request.current()) delete groupInput.dataset.loaded;
           }
         });
         form.addEventListener("submit", async (e) => {
@@ -4201,8 +4400,10 @@
       resultHost.textContent = "Running...";
       resultHost._widgetContextOverride = ctx;
     }
+    const request = beginOwnedRequest(card, ctx);
     try {
-      const result = await fetchWidgetData("aws-cli", { command: pin.command }, widget, ctx);
+      const result = await fetchWidgetData("aws-cli", { command: pin.command }, card, ctx, request);
+      if (!request.accept(result)) return;
       const stamp = new Date().toLocaleTimeString();
       if (updatedEl) updatedEl.textContent = stamp;
       if (result && (result.render === "table" || result.render === "raw_json")) {
@@ -4233,6 +4434,7 @@
         }
       }
     } catch (err) {
+      if (!request.current()) return;
       if (statusEl) {
         statusEl.className = "badge badge-error pipeline-pin-status";
         statusEl.textContent = "Error";
@@ -4258,13 +4460,12 @@
       return;
     }
     errorEl.textContent = "Running…";
+    clear(rows);
+    const request = beginOwnedRequest(rows);
     try {
-      // Explicit context snapshot (same pattern as loadSelectedPipelineRuns):
-      // a pinned context resolves on the backend without waiting for
-      // aws_set_account, so a startup auto-run doesn't race the topbar's SSO
-      // verification and land on "No AWS account selected".
-      const fetchContext = effectivePinnedContextForTile(form) || contextPayloadForTile(form);
-      const result = await fetchWidgetData("aws-cli", { command }, form, fetchContext);
+      const fetchContext = contextPayloadForTile(form);
+      const result = await fetchWidgetData("aws-cli", { command }, rows, fetchContext, request);
+      if (!request.accept(result)) return;
       if (!result) return;
       if (result.render) {
         errorEl.textContent = "";
@@ -4278,6 +4479,7 @@
         errorEl.textContent = result.error || "No data returned.";
       }
     } catch (err) {
+      if (!request.current()) return;
       errorEl.textContent = `Error: ${err}`;
     }
   }
@@ -4288,6 +4490,7 @@
       const errorEl = $(".aws-cli-error", widget);
       const rows = $(".aws-cli-rows", widget);
       if (!form || !rows) return;
+      wireRequestInputs(form, rows, errorEl);
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       if (!isTauri) {
         errorEl.textContent = "Live data requires the desktop app.";
@@ -5200,22 +5403,22 @@ def fetch(ctx):
         const rows = $(".codeartifact-packages-rows", widget);
         const form = $(".codeartifact-packages-config", widget);
         const explicitlyRefreshed = options.explicit === true;
-        if (isTauri && form && (explicitlyRefreshed || (rows && !rows.hidden))) {
+        if (isTauri && form && (explicitlyRefreshed || (rows && (!rows.hidden || (options.afterSelection && rows._reloadAfterSelection))))) {
           requestCodeArtifactLoad(form);
         } else {
           renderCodeArtifactPackages(widget);
         }
       },
-      "logs-insights": (widget) => {
+      "logs-insights": (widget, options = {}) => {
         const rows = $(".logs-insights-rows", widget);
         const form = $(".logs-insights-config", widget);
-        if (isTauri && rows && !rows.hidden && form) {
+        if (isTauri && rows && form && (!rows.hidden || (options.afterSelection && rows._reloadAfterSelection))) {
           form.dispatchEvent(new Event("submit", { cancelable: true }));
         } else {
           renderLogsInsights(widget);
         }
       },
-      "aws-cli": (widget) => {
+      "aws-cli": (widget, options = {}) => {
         // Refresh follows the active tab: Pinned reruns every pin card under
         // its own saved context, Live reruns the current command (if loaded).
         if (activeCliTab(widget) === "pinned") {
@@ -5224,7 +5427,9 @@ def fetch(ctx):
         }
         const rows = $(".aws-cli-rows", widget);
         const form = $(".aws-cli-config", widget);
-        if (isTauri && rows && !rows.hidden && form) {
+        const savedCommand = tileConfig(widget).inputs?.command;
+        if (isTauri && rows && form && (!rows.hidden
+            || (options.afterSelection && (rows._reloadAfterSelection || savedCommand)))) {
           form.dispatchEvent(new Event("submit", { cancelable: true }));
         } else {
           renderAwsCli(widget);
@@ -5250,18 +5455,15 @@ def fetch(ctx):
       const tile = widget.closest(".grid-stack-item");
       const cfg = tile ? tileConfig(tile) : emptyConfig();
       if (cfg && cfg.context && cfg.context.mode === "pinned") return;
-      // Pinned-tab pipeline tiles only re-render: pins carry their own
-      // account/region context, so an account switch must not refetch them.
+      // Saved pin cards carry their own account/region context and stay mounted.
       if (id === "pipeline-runs" && activePipelineTab(widget) === "pinned") {
-        renderPipelineRuns(widget);
         return;
       }
       // Same for pinned-tab AWS CLI tiles.
       if (id === "aws-cli" && activeCliTab(widget) === "pinned") {
-        renderAwsCli(widget);
         return;
       }
-      fn(widget);
+      fn(widget, { afterSelection: true });
     });
   }
 
@@ -5354,6 +5556,7 @@ def fetch(ctx):
   }
 
   function closeWidgetConfigPanel() {
+    invalidateRequests($("#cfg-source-body"));
     const panel = $("#widget-config-panel");
     if (!panel) return;
     panel.classList.remove("open");
@@ -5447,14 +5650,19 @@ def fetch(ctx):
       return;
     }
     host.appendChild(el("p", { class: "muted small" }, "Loading source…"));
+    const tile = currentCfgTile;
+    const request = beginOwnedRequest(host);
+    const current = () => request.current() && currentCfgTile === tile && !!tile?.isConnected;
     let res;
     try {
       res = await tauriInvoke("widget_get_source", { params: { widget: widgetName } });
     } catch (e) {
+      if (!current()) return;
       clear(host);
       host.appendChild(el("p", { class: "muted small" }, "Failed to load: " + e));
       return;
     }
+    if (!current()) return;
     clear(host);
     if (!res || !res.ok) {
       host.appendChild(el("p", { class: "muted small" }, (res && res.error) || "Not found."));
@@ -5492,6 +5700,10 @@ def fetch(ctx):
     } else {
       currentCfgDraft.context = { ...INHERIT_CONTEXT };
     }
+    invalidateRequests(currentCfgTile);
+    clearWidgetResults($(".widget", currentCfgTile));
+    // Explicit reconfiguration also invalidates/removes the old pin surfaces.
+    currentCfgTile.querySelectorAll(".pipeline-pin-card").forEach(card => card.remove());
     writeTileConfig(currentCfgTile, currentCfgDraft);
     applyTileHeaderColor(currentCfgTile);
     updateWidgetContextChip(currentCfgTile);
@@ -5531,6 +5743,7 @@ def fetch(ctx):
         e.stopPropagation();
         const item = btn.closest(".grid-stack-item");
         if (!item) return;
+        invalidateRequests(item);
         if (grid) {
           grid.removeWidget(item, true);
         } else {

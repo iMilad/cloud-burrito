@@ -14,6 +14,7 @@ mod commands;
 mod dashboard;
 mod paths;
 mod process;
+mod request;
 mod runtime;
 mod settings;
 mod state;

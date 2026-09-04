@@ -1,10 +1,10 @@
-//! The Tauri command surface. Command names and request/response JSON shapes
-//! are identical to the original Python-sidecar RPC design, so the frontend is unchanged.
+//! The local Tauri command surface with additive request/context metadata.
 
 use serde_json::{json, Value};
 use tauri::State;
 
 use crate::aws::{self, AwsContext};
+use crate::request::RequestEnvelope;
 use crate::state::AppState;
 use crate::{dashboard, settings, widgets};
 
@@ -96,6 +96,19 @@ pub async fn aws_set_account(state: State<'_, AppState>, params: Value) -> Resul
 }
 
 async fn aws_set_account_impl(state: &AppState, params: Value) -> Result<Value, String> {
+    let mut request = match request_envelope(&params) {
+        Ok(request) => request,
+        Err(error) => return Ok(error),
+    };
+    let result = aws_set_account_request(state, params, &mut request).await;
+    finish_request(request, result)
+}
+
+async fn aws_set_account_request(
+    state: &AppState,
+    params: Value,
+    request: &mut RequestEnvelope,
+) -> Result<Value, String> {
     let user_settings = settings::load(&state.runtime.paths);
     let cfg_path = config_path_from_settings(&user_settings);
     let revision = state.observe_config_path(&cfg_path);
@@ -195,6 +208,7 @@ async fn aws_set_account_impl(state: &AppState, params: Value) -> Result<Value, 
     }
     connection.status = "verified";
     connection.active = Some(ctx.clone());
+    request.bind(&ctx, &session);
     connection.set_account_at = Some(state.runtime.clock.now_epoch());
     if let Some(last) = connection.last_attempt.as_mut() {
         last["sso_session"] = json!(session.snapshot.session_name);
@@ -220,6 +234,19 @@ fn needs_login(error: &aws::context::ContextError) -> bool {
 fn request_error(error_type: &str, message: &str) -> Value {
     json!({"ok": false, "error_type": error_type, "error": message,
         "render": "raw_json", "data": {"error": message}})
+}
+
+fn request_envelope(params: &Value) -> Result<RequestEnvelope, Value> {
+    RequestEnvelope::from_params(params).map_err(|message| {
+        RequestEnvelope::default().attach(request_error("InvalidRequest", message))
+    })
+}
+
+fn finish_request(
+    request: RequestEnvelope,
+    result: Result<Value, String>,
+) -> Result<Value, String> {
+    Ok(request.attach(result.unwrap_or_else(|message| request_error("RequestFailed", &message))))
 }
 
 fn superseded() -> Value {
@@ -451,6 +478,19 @@ fn retain_cli_cleanup_failure(ctx: &widgets::WidgetCtx, result: &Value) -> bool 
 }
 
 async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, String> {
+    let mut request = match request_envelope(&params) {
+        Ok(request) => request,
+        Err(error) => return Ok(error),
+    };
+    let result = widget_fetch_request(state, params, &mut request).await;
+    finish_request(request, result)
+}
+
+async fn widget_fetch_request(
+    state: &AppState,
+    params: Value,
+    request: &mut RequestEnvelope,
+) -> Result<Value, String> {
     let name = params
         .get("widget")
         .and_then(|v| v.as_str())
@@ -505,6 +545,7 @@ async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, Str
         Ok(session) => session,
         Err(error) => return Ok(error),
     };
+    request.bind(&resolved.context, &session);
     let cli = if name == "aws-cli" {
         let credentials = match session.cli_credentials().await {
             Ok(credentials) => credentials,
@@ -619,14 +660,31 @@ pub async fn aws_list_pipelines(
     state: State<'_, AppState>,
     params: Value,
 ) -> Result<Value, String> {
-    let resolved = match resolve_widget_ctx(&state, &params) {
+    aws_list_pipelines_impl(&state, params).await
+}
+
+async fn aws_list_pipelines_impl(state: &AppState, params: Value) -> Result<Value, String> {
+    let mut request = match request_envelope(&params) {
+        Ok(request) => request,
+        Err(error) => return Ok(error),
+    };
+    let result = aws_list_pipelines_request(state, params, &mut request).await;
+    finish_request(request, result)
+}
+
+async fn aws_list_pipelines_request(
+    state: &AppState,
+    params: Value,
+    request: &mut RequestEnvelope,
+) -> Result<Value, String> {
+    let resolved = match resolve_widget_ctx(state, &params) {
         Ok(context) => context,
         Err(error) => return Ok(error),
     };
     let ctx = &resolved.context;
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
     if let Err((action, reason)) = audit_aws_call(
-        &state,
+        state,
         &policy,
         "codepipeline",
         "ListPipelines",
@@ -638,10 +696,11 @@ pub async fn aws_list_pipelines(
             &format!("Request blocked: {action}: {reason}"),
         ));
     }
-    let session = match verify_request_context(&state, &resolved, &policy).await {
+    let session = match verify_request_context(state, &resolved, &policy).await {
         Ok(session) => session,
         Err(error) => return Ok(error),
     };
+    request.bind(&resolved.context, &session);
     let client = aws_sdk_codepipeline::Client::new(&session.sdk);
 
     let mut pipelines: Vec<Value> = Vec::new();
@@ -654,7 +713,7 @@ pub async fn aws_list_pipelines(
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                if let Err(error) = validate_request_context(&state, &resolved, &session) {
+                if let Err(error) = validate_request_context(state, &resolved, &session) {
                     return Ok(error);
                 }
                 return Ok(
@@ -688,7 +747,7 @@ pub async fn aws_list_pipelines(
             .unwrap_or("")
             .cmp(b["name"].as_str().unwrap_or(""))
     });
-    if let Err(error) = validate_request_context(&state, &resolved, &session) {
+    if let Err(error) = validate_request_context(state, &resolved, &session) {
         return Ok(error);
     }
     Ok(json!({"ok": true, "pipelines": pipelines}))
@@ -700,6 +759,15 @@ pub async fn aws_auth_status(state: State<'_, AppState>) -> Result<Value, String
 }
 
 async fn aws_auth_status_impl(state: &AppState) -> Result<Value, String> {
+    let mut request = RequestEnvelope::default();
+    let result = aws_auth_status_request(state, &mut request).await;
+    finish_request(request, result)
+}
+
+async fn aws_auth_status_request(
+    state: &AppState,
+    request: &mut RequestEnvelope,
+) -> Result<Value, String> {
     refresh_configuration_revision(state);
     let (last, set_at, status, attempt) = {
         let connection = state.connection.lock();
@@ -768,6 +836,7 @@ async fn aws_auth_status_impl(state: &AppState) -> Result<Value, String> {
         out["error_type"] = json!("Superseded");
         return Ok(out);
     }
+    request.bind(&resolved.context, &session);
     out["has_context"] = json!(true);
     out["logged_in"] = json!(true);
     out["connection_state"] = json!("verified");

@@ -1,6 +1,6 @@
 # P1 — Build the trust boundary
 
-Status: **P1 in progress. P1-01 through P1-04 complete locally; P1-05 is next; P1-06 not started. Native validation pending.**
+Status: **P1 in progress. P1-01 through P1-05 complete locally; P1-06 is next. Native validation pending.**
 
 Original source reference: `0.2.9` / `095d1ad`, reviewed 2026-09-03. [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md) record implementation now in local baseline `a879851`. [P1-04 evidence](p1-04-evidence.md) tracks the separate constrained-CLI change. Remaining work is planned; this document does not certify the current app. Read the [operation inventory](aws-operation-inventory.md) and [journey contracts](phase-0.md) alongside it.
 
@@ -84,6 +84,8 @@ The SDK's default credential chain can discover credentials beyond a profile lab
 
 ### P1-05 — Bind every result to the request that produced it
 
+**Complete locally, 2026-09-04.** Captured response metadata and frontend owner/selection/configuration generations now cover tiles, pins, selectors, caches and nested details. See [P1-05 evidence](p1-05-evidence.md) for deterministic source and browser checks.
+
 **Depends on:** P1-03 and the constrained runner contract. **Touchpoints:** `commands.rs`, `state.rs`, [app.js](../../frontend/app.js), nested widget fetch routes.
 
 - Carry context revision and request ID through a small response envelope, adapting existing render models rather than rewriting the frontend.
@@ -107,7 +109,7 @@ Tauri capabilities govern which windows/webviews may reach commands and permissi
 
 ## Planned acceptance evidence
 
-P1-02's operation/argument denial cases and P1-03's identity, connection-ordering, configuration/refresh and auth-poll cases pass locally; their historical evidence is unchanged. P1-04 handoff/environment/cleanup checks also pass, including preservation of cleanup failure after context invalidation; see [its evidence](p1-04-evidence.md). Broader tile ownership, rendering/audit and native-runtime contracts remain open. The table retains the phase-wide acceptance contract, including already covered cases.
+P1-02's operation/argument denial cases and P1-03's identity, connection-ordering, configuration/refresh and auth-poll cases pass locally; their historical evidence is unchanged. P1-04 handoff/environment/cleanup checks also pass, including preservation of cleanup failure after context invalidation; see [its evidence](p1-04-evidence.md). P1-05 tile/detail/selector ownership cases now pass through the production frontend with a synthetic bridge. Rendering/audit and native-runtime contracts remain open. The table retains the phase-wide acceptance contract, including already covered cases.
 
 | Case | Required observable result | Contract |
 | --- | --- | --- |
@@ -126,4 +128,4 @@ P1-02's operation/argument denial cases and P1-03's identity, connection-orderin
 
 P1 is complete only after the implementation exists, the deterministic cases pass through production boundaries, and a focused security review covers the changed paths. Preserve native process/provider checks in the validation ledger until real OS evidence exists; do not describe a synthetic pass as full platform verification.
 
-P2 receives verified context/result/error contracts. P3 receives cancellation ownership, process byte limits and cache identity rules. P4 receives executable/environment/storage portability requirements. **P1-01–04 are complete locally. P1-05 is next:** bind every tile/detail/selector result to its owner. Full P1 remains incomplete; P1-06 command/rendering/audit work and deferred live/native validation stay open.
+P2 receives verified context/result/error contracts. P3 receives cancellation ownership, process byte limits and cache identity rules. P4 receives executable/environment/storage portability requirements. **P1-01–05 are complete locally. P1-06 is next:** close command, rendering and audit gaps. Full P1 remains incomplete until that separate unit passes; deferred live/native validation stays open.

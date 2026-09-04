@@ -388,9 +388,90 @@ async fn ping_and_unverified_auth_status_report_no_aws_work() {
     assert_eq!(auth["logged_in"], false);
     assert_eq!(auth["has_context"], false);
     assert_eq!(auth["connection_state"], "disconnected");
+    assert!(auth["_request"]["context_id"].is_null());
     assert!(resolve_widget_ctx(&fixture.state, &json!({})).is_err());
     fixture.aws.assert_no_resolution();
     fixture.no_process();
+}
+
+#[tokio::test]
+async fn request_ids_are_validated_before_provider_work_and_failures_keep_no_identity() {
+    let fixture = Fixture::new();
+    for id in [
+        json!("bad\nidentifier"),
+        json!("x".repeat(129)),
+        json!(7),
+        json!(""),
+    ] {
+        let params = json!({"request_id": id, "widget": "aws-cli", "inputs": {"command": "aws sts get-caller-identity"}});
+        for result in [
+            widget_fetch_impl(&fixture.state, params.clone())
+                .await
+                .unwrap(),
+            aws_set_account_impl(&fixture.state, params.clone())
+                .await
+                .unwrap(),
+            aws_list_pipelines_impl(&fixture.state, params)
+                .await
+                .unwrap(),
+        ] {
+            assert_eq!(result["error_type"], "InvalidRequest");
+            assert!(result["_request"]["id"].is_null());
+            assert!(result["_request"]["account_id"].is_null());
+        }
+    }
+    let mut params = cli_params();
+    params["request_id"] = json!("tile.1:refresh-2");
+    let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(result["_request"]["id"], "tile.1:refresh-2");
+    assert!(result["_request"]["context_id"].is_null());
+    assert!(result["_request"]["profile"].is_null());
+    assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn connection_auth_and_widget_responses_share_the_verified_context_envelope() {
+    let fixture = Fixture::new();
+    fixture.aws.ready(
+        "demo-a",
+        "CB_SYNTHETIC_ENVELOPE",
+        ACCOUNT_A,
+        "principal-a",
+        3000,
+    );
+    let mut params = demo("demo-a", ACCOUNT_A);
+    params["request_id"] = json!("selection-1");
+    let connection = aws_set_account_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(connection["_request"]["id"], "selection-1");
+    assert_eq!(connection["_request"]["profile"], "demo-a");
+    assert_eq!(connection["_request"]["account_id"], ACCOUNT_A);
+    assert_eq!(connection["_request"]["region"], "us-east-1");
+    for key in ["context_id", "provider_revision", "settings_revision"] {
+        assert!(connection["_request"][key].is_string());
+    }
+    let auth = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert!(auth["_request"]["id"].is_null());
+    fixture
+        .process
+        .ready(process_output("synthetic envelope response"));
+    let mut params = cli_params();
+    params["request_id"] = json!("tile-2");
+    let widget = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(widget["_request"]["id"], "tile-2");
+    for key in [
+        "context_id",
+        "provider_revision",
+        "settings_revision",
+        "profile",
+        "account_id",
+        "region",
+    ] {
+        assert_eq!(connection["_request"][key], auth["_request"][key]);
+        assert_eq!(connection["_request"][key], widget["_request"][key]);
+    }
+    assert_no_handoff_secrets(&fixture, &widget, &["CB_SYNTHETIC_ENVELOPE"]);
 }
 
 #[tokio::test]
@@ -1069,12 +1150,10 @@ async fn cli_after_refresh_receives_the_new_sts_verified_temporary_credentials()
     fixture
         .process
         .ready(process_output("synthetic first session"));
-    assert_eq!(
-        widget_fetch_impl(&fixture.state, cli_params())
-            .await
-            .unwrap()["render"],
-        "table"
-    );
+    let first = widget_fetch_impl(&fixture.state, cli_params())
+        .await
+        .unwrap();
+    assert_eq!(first["render"], "table");
     fixture.clock.0.store(2000, Ordering::SeqCst);
     fixture.aws.ready(
         "demo-a",
@@ -1090,6 +1169,14 @@ async fn cli_after_refresh_receives_the_new_sts_verified_temporary_credentials()
         .await
         .unwrap();
     assert_eq!(result["render"], "table");
+    assert_eq!(
+        result["_request"]["context_id"],
+        first["_request"]["context_id"]
+    );
+    assert_ne!(
+        result["_request"]["provider_revision"],
+        first["_request"]["provider_revision"]
+    );
     assert_eq!(
         fixture.aws.identity_keys.lock().as_slice(),
         ["CB_SYNTHETIC_CLI_A1", "CB_SYNTHETIC_CLI_A2"]
@@ -1236,6 +1323,8 @@ async fn cli_cleanup_failure_is_visible_even_after_the_context_is_superseded() {
                 .unwrap();
             let result = pending.await.unwrap();
             assert_eq!(result["error_type"], "CliCleanupFailed");
+            assert_eq!(result["_request"]["profile"], "demo-a");
+            assert_eq!(result["_request"]["account_id"], ACCOUNT_A);
             assert_eq!(fixture.state.current_ctx().unwrap().account_id, ACCOUNT_B);
         }
         let audit = crate::audit::tail(&fixture.state.runtime.paths, 50);
@@ -1288,6 +1377,9 @@ async fn unrelated_topbar_switch_does_not_cancel_a_pinned_cli_request() {
     let result = pending.await.unwrap();
     assert_eq!(result["render"], "table");
     assert_eq!(result["account_id"], ACCOUNT_B);
+    assert_eq!(result["_request"]["account_id"], ACCOUNT_B);
+    assert_eq!(result["_request"]["profile"], "demo-b");
+    assert_eq!(result["_request"]["region"], "us-east-1");
     assert_eq!(result["region"], "us-east-1");
     assert_eq!(fixture.state.current_ctx().unwrap().region, "eu-west-1");
     assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 1);
@@ -1360,10 +1452,9 @@ async fn verified_widget_input_errors_return_without_any_sdk_http_work() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        result,
-        json!({"ok": false, "error": "log_group is required"})
-    );
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"], "log_group is required");
+    assert_eq!(result["_request"]["account_id"], ACCOUNT_A);
     assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
     fixture.no_process();

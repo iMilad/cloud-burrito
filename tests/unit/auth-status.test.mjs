@@ -26,6 +26,8 @@ function fixture() {
   const context = vm.createContext({
     isTauri: true, currentSelectionId: 1, currentAuthStatusId: 0,
     lastSetAccountResult: null, lastAuthStatus: null,
+    topbarState: { profile: 'demo-fixture', accountId: 'acct-current-fixture', region: 'region-fixture' },
+    clearInheritedResults: () => rendered.push({ cleared: true }),
     $: (selector) => ({ '#auth-status': pill, '#identity-panel': panel, '#scrim': scrim })[selector] || null,
     formatRemaining: () => '', renderIdentityPanel: (info) => rendered.push(info),
     tauriInvoke: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
@@ -33,7 +35,9 @@ function fixture() {
   vm.runInContext(handler + openHandler, context);
   return { context, pill, label, pending, rendered, poll: () => context.refreshAuthStatus() };
 }
-const verified = (account) => ({ has_context: true, logged_in: true, account_id: account, connection_state: 'verified' });
+const verified = (account) => ({ has_context: true, logged_in: true, account_id: account, connection_state: 'verified',
+  _request: { id: null, context_id: 'context-fixture', provider_revision: 'provider-fixture', settings_revision: 'settings-fixture',
+    profile: 'demo-fixture', account_id: account, region: 'region-fixture' } });
 
 test('opening identity panel cannot revive a cached account after its refresh is discarded', async () => {
   const f = fixture();
@@ -88,9 +92,22 @@ test('current expired refresh is shown as a failure, and verifying stays visible
   await work;
   assert.equal(f.pill.dataset.state, 'offline');
   assert.match(f.label.textContent, /expired/);
+  assert.equal(f.context.lastSetAccountResult.ok, false);
+  assert.deepEqual(f.rendered, [{ cleared: true }]);
   const next = f.poll();
   f.pending[1].resolve({ has_context: false, logged_in: false, connection_state: 'verifying' });
   await next;
   assert.equal(f.pill.dataset.state, 'checking');
   assert.match(f.label.textContent, /verifying/);
+});
+
+test('auth status rejects a different verified identity or missing verification metadata', async () => {
+  for (const result of [verified('acct-other-fixture'), { ...verified('acct-current-fixture'), _request: null }]) {
+    const f = fixture();
+    const work = f.poll();
+    f.pending[0].resolve(result);
+    await work;
+    assert.equal(f.context.lastAuthStatus, null);
+    assert.equal(f.pill.dataset.state, 'checking');
+  }
 });
