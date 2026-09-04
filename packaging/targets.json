@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "matrix_revision": "p4-v1",
+  "product_name": "Cloud Burrito",
+  "identifier": "app.cloudburrito.desktop",
+  "binary_name": "cloud-burrito",
+  "source_policy": "one clean local commit; tracked build inputs only",
+  "distribution": "unsigned; no publisher identity; manual updates",
+  "data_policy": "preserve the per-user .cloud_burrito directory and all user-owned AWS files",
+  "validation_owner": "build: local maintainer; device: project owner in P5",
+  "targets": [
+    {
+      "id": "macos-aarch64",
+      "target": "aarch64-apple-darwin",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "binary_arch": "arm64",
+      "host_os": "Darwin",
+      "build_baseline": "macOS 15 or newer with recorded Xcode SDK",
+      "minimum_os": "macOS 13.0 (candidate floor; device validation pending)",
+      "runtime": "system WKWebView; no bundled webview",
+      "bundle_config": "src-tauri/tauri.macos.conf.json",
+      "bundle_targets": ["app", "dmg"],
+      "status": "planned",
+      "validated_os": [],
+      "artifacts": [
+        {"format": "dmg", "filename": "cloud-burrito_{version}_aarch64_unsigned.dmg"},
+        {"format": "app.zip", "filename": "cloud-burrito_{version}_aarch64_unsigned.app.zip"}
+      ]
+    },
+    {
+      "id": "macos-x86_64",
+      "target": "x86_64-apple-darwin",
+      "platform": "macos",
+      "architecture": "x86_64",
+      "binary_arch": "x86_64",
+      "host_os": "Darwin",
+      "build_baseline": "macOS 15 or newer with recorded Xcode SDK",
+      "minimum_os": "macOS 13.0 (candidate floor; device validation pending)",
+      "runtime": "system WKWebView; no bundled webview",
+      "bundle_config": "src-tauri/tauri.macos.conf.json",
+      "bundle_targets": ["app", "dmg"],
+      "status": "planned",
+      "validated_os": [],
+      "artifacts": [
+        {"format": "dmg", "filename": "cloud-burrito_{version}_x86_64_unsigned.dmg"},
+        {"format": "app.zip", "filename": "cloud-burrito_{version}_x86_64_unsigned.app.zip"}
+      ]
+    },
+    {
+      "id": "windows-x86_64",
+      "target": "x86_64-pc-windows-msvc",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "binary_arch": "AMD64",
+      "host_os": "Windows",
+      "build_baseline": "Windows 11 x64; Visual Studio 2022 C++ Build Tools and recorded SDK",
+      "minimum_os": "Windows 11 24H2 x64 (candidate floor; device validation pending)",
+      "runtime": "Evergreen WebView2; download bootstrapper only if missing; network may be required",
+      "bundle_config": "src-tauri/tauri.windows.conf.json",
+      "bundle_targets": ["nsis"],
+      "status": "planned",
+      "validated_os": [],
+      "artifacts": [
+        {"format": "nsis", "filename": "cloud-burrito_{version}_windows_x86_64_unsigned_setup.exe"}
+      ]
+    },
+    {
+      "id": "ubuntu-x86_64",
+      "target": "x86_64-unknown-linux-gnu",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "binary_arch": "x86-64",
+      "host_os": "Linux",
+      "build_baseline": "Ubuntu 22.04 x64; glibc 2.35; WebKitGTK 4.1",
+      "minimum_os": "Ubuntu 22.04 x64 (candidate baseline; newer releases require their own P5 evidence)",
+      "runtime": "GTK3/WebKitGTK 4.1 and generated Debian dependencies; AppImage host requirements remain explicit",
+      "bundle_config": "src-tauri/tauri.linux.conf.json",
+      "bundle_targets": ["deb", "appimage"],
+      "status": "planned",
+      "validated_os": [],
+      "artifacts": [
+        {"format": "deb", "filename": "cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.deb"},
+        {"format": "appimage", "filename": "cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.AppImage"}
+      ]
+    }
+  ]
+}

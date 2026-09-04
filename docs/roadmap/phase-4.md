@@ -1,12 +1,12 @@
 # P4 — Native artifacts from one source candidate
 
-**Planning complete. Implementation not started. Validation pending.**
+**P4-01 complete locally; P4-02 is next. Native artifact and device evidence remain pending.**
 
-This plan was source-reviewed on 2026-09-03 against v0.2.9 (`095d1ad`). It defines future work; it does not report a Windows/Linux build, installer, CI run, tag, or release. Rust/Tauri remains the application stack.
+The original plan was source-reviewed on 2026-09-03 against v0.2.9 (`095d1ad`). Implementation follows the completed P3 source at `e82dcb5`; each unit has a separate local commit and evidence. [P4-01](p4-01-evidence.md) defines the versioned candidate matrix. Rust/Tauri remains the application stack.
 
 P4 produces inspected native artifacts and the evidence needed for P5. P5 performs actual installation, first launch, upgrade, uninstall, and journey acceptance on declared devices. Outstanding [P0 device evidence](phase-0.md#platform-decision-still-open) remains a release prerequisite, not a blocker to finishing this plan. No device checks are requested during planning.
 
-## Current source baseline
+## Historical source baseline at planning
 
 | Area | Current evidence | Implication |
 | --- | --- | --- |
