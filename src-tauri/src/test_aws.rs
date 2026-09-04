@@ -19,6 +19,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use std::time::{Duration, Instant};
 
 /// Attempted boundary crossings, counted before a fence panics.
 #[derive(Debug, Default)]
@@ -101,6 +102,7 @@ pub(crate) struct ExpectedRequest {
     status: u16,
     content_type: &'static str,
     response: String,
+    delay: Duration,
 }
 
 impl std::fmt::Debug for ExpectedRequest {
@@ -119,6 +121,7 @@ impl ExpectedRequest {
             status: 200,
             content_type: "application/x-amz-json-1.1",
             response: response.to_string(),
+            delay: Duration::ZERO,
         }
     }
 
@@ -135,6 +138,7 @@ impl ExpectedRequest {
             status: 200,
             content_type: "text/xml",
             response: response_xml.into(),
+            delay: Duration::ZERO,
         }
     }
 
@@ -153,11 +157,17 @@ impl ExpectedRequest {
             status: 200,
             content_type: "application/json",
             response: response.to_string(),
+            delay: Duration::ZERO,
         }
     }
 
     pub(crate) fn status(mut self, status: u16) -> Self {
         self.status = status;
+        self
+    }
+
+    pub(crate) fn delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
         self
     }
 
@@ -270,6 +280,58 @@ pub(crate) struct ScriptedHttp {
     expected: Arc<parking_lot::Mutex<VecDeque<ExpectedRequest>>>,
     unordered: bool,
     calls: Arc<AtomicUsize>,
+    stats: Arc<TransportStats>,
+}
+
+#[derive(Debug, Default)]
+struct TransportStats {
+    active: AtomicUsize,
+    peak_active: AtomicUsize,
+    completed: AtomicUsize,
+    cancelled: AtomicUsize,
+    request_body_bytes: AtomicUsize,
+    response_body_bytes: AtomicUsize,
+    timing: parking_lot::Mutex<(Option<Instant>, Option<Duration>)>,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct TransportSnapshot {
+    pub actual_http_attempts: usize,
+    pub completed_http_attempts: usize,
+    pub dropped_http_attempts: usize,
+    pub active_http_attempts: usize,
+    pub peak_active_http_attempts: usize,
+    pub request_body_bytes: usize,
+    pub response_body_bytes: usize,
+    pub first_response_ms: Option<f64>,
+}
+
+struct AttemptGuard {
+    stats: Arc<TransportStats>,
+    completed: bool,
+}
+
+impl AttemptGuard {
+    fn complete(&mut self, response_bytes: usize) {
+        self.completed = true;
+        self.stats.completed.fetch_add(1, Ordering::SeqCst);
+        self.stats
+            .response_body_bytes
+            .fetch_add(response_bytes, Ordering::SeqCst);
+        let mut timing = self.stats.timing.lock();
+        if timing.1.is_none() {
+            timing.1 = timing.0.map(|started| started.elapsed());
+        }
+    }
+}
+
+impl Drop for AttemptGuard {
+    fn drop(&mut self) {
+        self.stats.active.fetch_sub(1, Ordering::SeqCst);
+        if !self.completed {
+            self.stats.cancelled.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }
 
 impl ScriptedHttp {
@@ -278,6 +340,7 @@ impl ScriptedHttp {
             expected: Arc::new(parking_lot::Mutex::new(expected.into())),
             unordered: false,
             calls: Arc::new(AtomicUsize::new(0)),
+            stats: Arc::new(TransportStats::default()),
         }
     }
 
@@ -340,6 +403,31 @@ impl ScriptedHttp {
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    /// Called after fixture/config construction, immediately before timing the
+    /// producer. Counters describe this synthetic transport, not SDK intent.
+    pub(crate) fn begin_measurement(&self) {
+        assert_eq!(self.calls(), 0, "measurement must precede HTTP work");
+        *self.stats.timing.lock() = (Some(Instant::now()), None);
+    }
+
+    pub(crate) fn snapshot(&self) -> TransportSnapshot {
+        TransportSnapshot {
+            actual_http_attempts: self.calls(),
+            completed_http_attempts: self.stats.completed.load(Ordering::SeqCst),
+            dropped_http_attempts: self.stats.cancelled.load(Ordering::SeqCst),
+            active_http_attempts: self.stats.active.load(Ordering::SeqCst),
+            peak_active_http_attempts: self.stats.peak_active.load(Ordering::SeqCst),
+            request_body_bytes: self.stats.request_body_bytes.load(Ordering::SeqCst),
+            response_body_bytes: self.stats.response_body_bytes.load(Ordering::SeqCst),
+            first_response_ms: self
+                .stats
+                .timing
+                .lock()
+                .1
+                .map(|elapsed| elapsed.as_secs_f64() * 1000.0),
+        }
+    }
 }
 
 impl HttpConnector for ScriptedHttp {
@@ -365,6 +453,19 @@ impl HttpConnector for ScriptedHttp {
         let expected = queue
             .remove(index)
             .expect("matched synthetic request exists");
+        drop(queue);
+        self.stats.request_body_bytes.fetch_add(
+            request.body().bytes().map_or(0, <[u8]>::len),
+            Ordering::SeqCst,
+        );
+        let active = self.stats.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.stats.peak_active.fetch_max(active, Ordering::SeqCst);
+        let mut guard = AttemptGuard {
+            stats: self.stats.clone(),
+            completed: false,
+        };
+        let response_bytes = expected.response.len();
+        let delay = expected.delay;
         let mut response = HttpResponse::new(
             expected
                 .status
@@ -375,7 +476,13 @@ impl HttpConnector for ScriptedHttp {
         response
             .headers_mut()
             .insert("content-type", expected.content_type);
-        HttpConnectorFuture::ready(Ok(response))
+        HttpConnectorFuture::new(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            guard.complete(response_bytes);
+            Ok(response)
+        })
     }
 }
 

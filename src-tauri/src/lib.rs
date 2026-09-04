@@ -25,6 +25,10 @@ mod widgets;
 use state::AppState;
 
 #[cfg(test)]
+mod benchmarks;
+#[cfg(test)]
+mod benchmarks_cli;
+#[cfg(test)]
 mod test_aws;
 #[cfg(test)]
 mod test_support;
