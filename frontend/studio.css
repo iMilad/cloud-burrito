@@ -1,5 +1,7 @@
 /* Studio is additive. Classic uses the original stylesheet and saved layout. */
-.studio-only, #studio-return, .studio-command-panel { display: none; }
+.studio-only, #studio-return, .studio-command-panel, .brand-mark-studio { display: none; }
+[data-design="studio"] .brand-mark-classic { display: none; }
+[data-design="studio"] .brand-mark-studio { display: block; }
 [data-design="classic"] #studio-return {
   position: fixed; z-index: 190; right: 22px; bottom: 20px; display: flex;
   align-items: center; gap: 16px; padding: 10px 16px; border: 1px solid var(--border-strong);
@@ -38,7 +40,7 @@ html[data-design="studio"][data-theme="dark"] {
   overflow-y: auto; overscroll-behavior: contain;
 }
 .studio-wordmark { display: flex; gap: 12px; align-items: center; margin: 0 10px 48px; color: #f1f1e7; text-decoration: none; }
-.studio-wordmark img { padding: 5px; background: #ff8251; border-radius: 12px; width: 40px; height: 40px; }
+.studio-wordmark img { padding: 0; background: transparent; border-radius: 12px; width: 40px; height: 40px; }
 .studio-wordmark > span { font-size: 18px; line-height: 1.05; letter-spacing: -.6px; }
 .studio-wordmark b { font-weight: 750; }
 .studio-rail-label { margin: 0 12px 13px; font-size: 9px; letter-spacing: .13em; font-weight: 650; color: #939f88; }

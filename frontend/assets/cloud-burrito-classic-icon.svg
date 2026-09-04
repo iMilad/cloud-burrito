@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title desc">
+  <title id="title">Cloud Burrito icon</title>
+  <desc id="desc">A pixel cloud mark on a navy rounded square with teal accent tiles.</desc>
+  <rect x="0" y="0" width="120" height="120" rx="27" fill="#0B1E3D"/>
+  <rect x="43" y="24" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="62" y="24" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="24" y="43" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="43" y="43" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="62" y="43" width="15" height="15" rx="3.5" fill="#19C2C2"/>
+  <rect x="81" y="43" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="5" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="24" y="62" width="15" height="15" rx="3.5" fill="#19C2C2"/>
+  <rect x="43" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="62" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="81" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="100" y="62" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="5" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="24" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="43" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="62" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+  <rect x="81" y="81" width="15" height="15" rx="3.5" fill="#19C2C2"/>
+  <rect x="100" y="81" width="15" height="15" rx="3.5" fill="#EAF2FF"/>
+</svg>
