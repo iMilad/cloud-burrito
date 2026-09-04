@@ -1,6 +1,6 @@
 # P5 candidate handoff
 
-**Preparation only. No complete candidate is available yet, and no device test has passed.** macOS builds/inspection are underway; native Windows and Ubuntu build hosts are unavailable in this task. The owner has three laptops, but their exact OS versions and CPU architectures have not been recorded. A macOS ARM64 build does not validate Intel hardware.
+**Handoff prepared; the complete candidate remains pending. No device test has passed.** Both macOS architecture pairs have passed build-time inspection; native Windows and Ubuntu build hosts are unavailable in this task. The owner has three laptops, but their exact OS versions and CPU architectures have not been recorded. A macOS ARM64 build does not validate Intel hardware.
 
 This handoff authorizes no installation, native app launch, runtime download, AWS access, release or publication. The examples below are instructions for a later explicitly authorized P5 session. Use [the P5 plan](../roadmap/phase-5.md) for the single acceptance checklist.
 
@@ -10,12 +10,12 @@ The [p4-v1 matrix](../../packaging/targets.json) requires four targets and seven
 
 | Target | Required files | Evidence at preparation |
 | --- | --- | --- |
-| macOS ARM64 | `cloud-burrito_{version}_aarch64_unsigned.dmg`, `cloud-burrito_{version}_aarch64_unsigned.app.zip` | Native build/inspection pending |
-| macOS Intel | `cloud-burrito_{version}_x86_64_unsigned.dmg`, `cloud-burrito_{version}_x86_64_unsigned.app.zip` | Native build/inspection pending |
+| macOS ARM64 | `cloud-burrito_{version}_aarch64_unsigned.dmg`, `cloud-burrito_{version}_aarch64_unsigned.app.zip` | Built and inspected; device execution pending |
+| macOS Intel | `cloud-burrito_{version}_x86_64_unsigned.dmg`, `cloud-burrito_{version}_x86_64_unsigned.app.zip` | Built and inspected; device execution pending |
 | Windows x64 | `cloud-burrito_{version}_windows_x86_64_unsigned_setup.exe` | Native build unavailable |
 | Ubuntu x64 | `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.deb`, `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.AppImage` | Native build unavailable |
 
-Before handoff, attach `candidate-manifest.json`, `SHA256SUMS`, and all four `build-manifest-<target-id>.json` files from the [candidate assembler](provenance.md). Record the exact source commit, version and artifact hash in every device result. All seven files must share the same accepted source/version. A partial target set is not a complete candidate.
+See [actual build evidence](../roadmap/p4-exit-evidence.md) for the selected source and local macOS artifacts. Before complete handoff, attach `candidate-manifest.json`, `SHA256SUMS`, and all four `build-manifest-<target-id>.json` files from the [candidate assembler](provenance.md). Record the exact source commit, version and artifact hash in every device result. All seven files must share the same accepted source/version. A partial target set is not a complete candidate.
 
 The candidate floors are macOS 13.0, Windows 11 24H2 x64 and Ubuntu 22.04 x64. They are proposed acceptance boundaries, not existing support claims. Record actual CPU architecture, OS release, desktop/WebView runtime and installation method before selecting a file. Stop if a laptop does not match a declared target.
 

@@ -1,6 +1,8 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1–P3 complete locally. P4-01–09 local implementation recorded; native candidate acceptance remains explicit.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
+Status: **P1–P3 complete locally. All nine P4 implementation/handoff units are committed. macOS artifacts are inspected; complete candidate acceptance awaits native Windows/Ubuntu builds.**
+
+[P4 final evidence](p4-exit-evidence.md) records actual artifacts, repeat comparison and pending build/device gates.
 
 Latest completed unit: [P4-09](p4-09-evidence.md) — Native candidate handoff. Native package/device evidence remains separate.
 

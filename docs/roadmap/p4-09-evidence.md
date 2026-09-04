@@ -24,5 +24,9 @@ instructions. [P5](phase-5.md) has five ordered sections and a shared acceptance
 checklist covering runtime/first launch, five product journeys, persistence,
 upgrade/reinstall and removal with data retained. No device result is passed.
 
-Validation before final native rebuilds: 113 Python helper fixtures pass. Full
+Both final macOS architecture pairs and a repeat ARM64 build passed inspection.
+The final follow-up also disables rustup automatic installation for the optional
+shell-wrapper target probe, before Python starts.
+
+Validation: 113 Python helper fixtures pass. Full
 native build, repeat comparison and scanner results are in the final evidence.
