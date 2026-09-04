@@ -1,6 +1,6 @@
 # P4 — Native artifacts from one source candidate
 
-**P4-01–02 implemented locally; P4-03 is next. Native artifact and device evidence remain pending.**
+**P4-01–03 implemented locally; P4-04 is next. Native artifact and device evidence remain pending.**
 
 The original plan was source-reviewed on 2026-09-03 against v0.2.9 (`095d1ad`). Implementation follows the completed P3 source at `e82dcb5`; each unit has a separate local commit and evidence. [P4-01](p4-01-evidence.md) defines the versioned candidate matrix. Rust/Tauri remains the application stack.
 
