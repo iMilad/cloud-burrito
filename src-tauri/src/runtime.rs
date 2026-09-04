@@ -365,18 +365,29 @@ pub struct Runtime {
     pub(crate) queries: Arc<crate::widgets::query::QueryRegistry>,
     audit_write_failed: Arc<AtomicBool>,
     audit_request_id: Option<String>,
+    audit_retention: Arc<AtomicBool>,
+    audit_writer: Option<Arc<crate::audit_writer::AuditWriter>>,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         let paths = AppPaths::default();
+        let audit_write_failed = Arc::new(AtomicBool::new(false));
+        let audit_retention = Arc::new(AtomicBool::new(false));
+        let audit_writer = Some(Arc::new(crate::audit_writer::AuditWriter::new(
+            paths.clone(),
+            audit_retention.clone(),
+            audit_write_failed.clone(),
+        )));
         Self {
             storage: crate::storage::Store::new(paths.clone()),
             paths,
             aws: Arc::new(NativeAwsBackend),
             process: Arc::new(NativeProcessRunner),
             clock: Arc::new(SystemClock),
-            audit_write_failed: Arc::new(AtomicBool::new(false)),
+            audit_write_failed,
+            audit_retention,
+            audit_writer,
             audit_request_id: None,
             scheduler: Arc::new(Scheduler::default()),
             work: None,
@@ -396,9 +407,45 @@ impl Runtime {
         if let Some(id) = &self.audit_request_id {
             entry["request_id"] = serde_json::json!(id);
         }
-        if crate::audit::append(&self.paths, entry, self.clock.now_epoch()).is_err() {
+        if let Some(writer) = &self.audit_writer {
+            writer.enqueue(&entry, self.clock.now_epoch());
+        } else if crate::audit::encoded(&entry, self.clock.now_epoch())
+            .and_then(|line| crate::audit::append_record(&self.paths, &line, &self.audit_retention))
+            .is_err()
+        {
             // Sticky: a later successful append cannot repair a lost entry.
             self.audit_write_failed.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) async fn flush_audit(&self) -> bool {
+        match &self.audit_writer {
+            Some(writer) => writer.flush().await,
+            None => !self.audit_write_failed.load(Ordering::SeqCst),
+        }
+    }
+
+    pub(crate) fn set_audit_retention(&self, mode: crate::audit::RetentionMode) -> Result<(), ()> {
+        if let Some(writer) = &self.audit_writer {
+            writer.set_retention(mode)
+        } else {
+            crate::audit::set_retention(&self.paths, &self.audit_retention, mode)
+        }
+    }
+
+    pub(crate) fn commit_audit_retention<T, E>(
+        &self,
+        mode: crate::audit::RetentionMode,
+        save: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, crate::audit::RetentionError<E>> {
+        crate::audit::transact_retention(&self.paths, &self.audit_retention, mode, save)
+    }
+
+    pub(crate) fn audit_retention_mode(&self) -> crate::audit::RetentionMode {
+        if self.audit_retention.load(Ordering::SeqCst) {
+            crate::audit::RetentionMode::Bounded
+        } else {
+            crate::audit::RetentionMode::Preserve
         }
     }
 
@@ -424,6 +471,8 @@ impl Runtime {
             process: Arc::new(NativeProcessRunner),
             clock: Arc::new(FixedClock(1_700_000_000.0)),
             audit_write_failed: Arc::new(AtomicBool::new(false)),
+            audit_retention: Arc::new(AtomicBool::new(false)),
+            audit_writer: None,
             audit_request_id: None,
             scheduler: Arc::new(Scheduler::default()),
             work: None,

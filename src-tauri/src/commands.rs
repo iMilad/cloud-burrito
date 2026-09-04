@@ -117,7 +117,7 @@ pub async fn ping() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn aws_set_account(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    aws_set_account_impl(&state, params).await
+    final_diagnostics(&state, aws_set_account_impl(&state, params).await).await
 }
 
 async fn aws_set_account_impl(state: &AppState, params: Value) -> Result<Value, String> {
@@ -620,7 +620,7 @@ async fn verify_request_context_owned(
 
 #[tauri::command]
 pub async fn widget_fetch(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    widget_fetch_impl(&state, params).await
+    final_diagnostics(&state, widget_fetch_impl(&state, params).await).await
 }
 
 fn retain_cli_cleanup_failure(ctx: &widgets::WidgetCtx, result: &Value) -> bool {
@@ -916,7 +916,7 @@ fn retain_query_outcome(error: &mut Value, result: &Value) {
 #[tauri::command]
 pub async fn request_cancel(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
     if let Some(error) = local_validation(&state, "request_cancel", &params) {
-        return Ok(error);
+        return final_diagnostics(&state, Ok(error)).await;
     }
     state
         .work
@@ -938,18 +938,56 @@ pub async fn widget_get_source(params: Value) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn settings_get(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(settings_get_impl(&state))
+    let worker_state = state.inner().clone();
+    let result = tokio::task::spawn_blocking(move || settings_get_impl(&worker_state))
+        .await
+        .unwrap_or_else(|_| request_error("StorageReadFailed", "Saved settings could not be read"));
+    final_diagnostics(&state, Ok(result)).await
 }
 
 fn settings_get_impl(state: &AppState) -> Value {
-    state
-        .runtime
-        .with_diagnostics(load_settings(state).unwrap_or_else(|error| error))
+    let _guard = state.audit_settings.lock();
+    let mut result = match load_settings(state) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = state
+                .runtime
+                .set_audit_retention(crate::audit::RetentionMode::Preserve);
+            return state.runtime.with_diagnostics(error);
+        }
+    };
+    let configured = retention_mode(&result);
+    let preserve_required = state.runtime.set_audit_retention(configured).is_err();
+    if preserve_required {
+        // Reading saved bounded mode must never activate pruning for oversized
+        // legacy history. Loading does no rotation, rename or write itself.
+        let _ = state
+            .runtime
+            .set_audit_retention(crate::audit::RetentionMode::Preserve);
+    }
+    result["_audit_retention"] = json!({
+        "configured_mode": configured.as_str(),
+        "effective_mode": state.runtime.audit_retention_mode().as_str(),
+        "preserve_required": preserve_required,
+    });
+    state.runtime.with_diagnostics(result)
+}
+
+fn retention_mode(settings: &Value) -> crate::audit::RetentionMode {
+    if settings["audit_retention"] == "bounded" {
+        crate::audit::RetentionMode::Bounded
+    } else {
+        crate::audit::RetentionMode::Preserve
+    }
 }
 
 #[tauri::command]
 pub async fn settings_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    Ok(settings_set_impl(&state, params))
+    let worker_state = state.inner().clone();
+    let result = tokio::task::spawn_blocking(move || settings_set_impl(&worker_state, params))
+        .await
+        .unwrap_or_else(|_| request_error("StorageWriteFailed", "Settings could not be saved"));
+    final_diagnostics(&state, Ok(result)).await
 }
 
 fn local_validation(state: &AppState, command: &'static str, params: &Value) -> Option<Value> {
@@ -962,27 +1000,54 @@ fn local_validation(state: &AppState, command: &'static str, params: &Value) -> 
         })
 }
 
-fn settings_set_impl(state: &AppState, params: Value) -> Value {
+fn settings_set_impl(state: &AppState, mut params: Value) -> Value {
     if let Some(error) = local_validation(state, "settings_set", &params) {
         return state
             .runtime
             .with_diagnostics(settings::with_metadata(error, &params));
     }
-    let result = match settings::save(&state.runtime.storage, &params) {
+    let _guard = state.audit_settings.lock();
+    // Older five-field callers keep their current retention selection. Only an
+    // explicit sixth field can change it; a missing saved value means preserve.
+    if params.get("audit_retention").is_none() {
+        let previous = match load_settings(state) {
+            Ok(previous) => previous,
+            Err(error) => return state.runtime.with_diagnostics(error),
+        };
+        params["audit_retention"] = json!(retention_mode(&previous).as_str());
+    }
+    let selected = retention_mode(&params);
+    let result = match state
+        .runtime
+        .commit_audit_retention(selected, || settings::save(&state.runtime.storage, &params))
+    {
         Ok(result) => match refresh_configuration_revision(state) {
             Ok(_) => result,
             Err(error) => error,
         },
-        Err(error) => error.response("settings"),
+        Err(crate::audit::RetentionError::Save(error)) => error.response("settings"),
+        Err(crate::audit::RetentionError::HistoryUnavailable) => request_error(
+            "AuditHistoryFailed",
+            "Activity history could not be checked; settings were not saved",
+        ),
+        Err(crate::audit::RetentionError::PreserveRequired) => {
+            let mut error = request_error(
+                "AuditPreserveRequired",
+                "Preserve existing activity history before enabling bounded retention",
+            );
+            error["preserve_required"] = json!(true);
+            error
+        }
     };
-    state
-        .runtime
-        .with_diagnostics(settings::with_metadata(result, &params))
+    let mut result = settings::with_metadata(result, &params);
+    result["_audit_retention"] =
+        json!({"effective_mode":state.runtime.audit_retention_mode().as_str()});
+    state.runtime.with_diagnostics(result)
 }
 
 #[tauri::command]
 pub async fn dashboard_get(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(dashboard_get_impl(&state))
+    final_diagnostics(&state, Ok(dashboard_get_impl(&state))).await
 }
 
 fn dashboard_get_impl(state: &AppState) -> Value {
@@ -993,7 +1058,7 @@ fn dashboard_get_impl(state: &AppState) -> Value {
 
 #[tauri::command]
 pub async fn dashboard_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    Ok(dashboard_set_impl(&state, params))
+    final_diagnostics(&state, Ok(dashboard_set_impl(&state, params))).await
 }
 
 fn dashboard_set_impl(state: &AppState, params: Value) -> Value {
@@ -1006,29 +1071,108 @@ fn dashboard_set_impl(state: &AppState, params: Value) -> Value {
     )
 }
 
-#[tauri::command]
-pub async fn audit_tail(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    Ok(audit_tail_impl(&state, params))
+/// Flush after the final request event, then refresh the sticky diagnostics.
+async fn final_diagnostics(
+    state: &AppState,
+    result: Result<Value, String>,
+) -> Result<Value, String> {
+    state.runtime.flush_audit().await;
+    result.map(|value| state.runtime.with_diagnostics(value))
 }
 
+#[tauri::command]
+pub async fn audit_tail(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
+    Ok(audit_tail_async(&state, params).await)
+}
+
+async fn audit_tail_async(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "audit_tail", &params) {
+        return final_diagnostics(state, Ok(error)).await.unwrap();
+    }
+    state.runtime.flush_audit().await;
+    let worker_state = state.clone();
+    let result = tokio::task::spawn_blocking(move || audit_tail_impl(&worker_state, params))
+        .await
+        .unwrap_or_else(|_| audit_read_failed());
+    state.runtime.with_diagnostics(result)
+}
+
+fn audit_read_failed() -> Value {
+    request_error(
+        "AuditReadFailed",
+        "Local activity history could not be read",
+    )
+}
+
+/// Synchronous seam for disposable fixtures; native IPC dispatches this off
+/// async workers, and never holds connection/request locks during disk reads.
 fn audit_tail_impl(state: &AppState, params: Value) -> Value {
     if let Some(error) = local_validation(state, "audit_tail", &params) {
         return error;
     }
-    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
-    let result = match crate::audit::try_tail(&state.runtime.paths, limit) {
-        Ok(entries) => json!({"ok":true, "entries":entries}),
-        Err(()) => request_error(
-            "AuditReadFailed",
-            "Local activity history could not be read",
-        ),
+    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(300) as usize;
+    let cursor = params.get("cursor").and_then(Value::as_str);
+    let result = match crate::audit::read_page(&state.runtime.paths, cursor, limit) {
+        Ok(page) => {
+            let mut value = serde_json::to_value(page).expect("activity page is serializable");
+            value["ok"] = json!(true);
+            value
+        }
+        Err(()) => audit_read_failed(),
     };
     state.runtime.with_diagnostics(result)
 }
 
 #[tauri::command]
+pub async fn audit_history(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
+    Ok(audit_history_async(&state, params).await)
+}
+
+async fn audit_history_async(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "audit_history", &params) {
+        return final_diagnostics(state, Ok(error)).await.unwrap();
+    }
+    if !state.runtime.flush_audit().await && params["action"] == "preserve" {
+        return state.runtime.with_diagnostics(request_error(
+            "AuditFlushFailed",
+            "Activity writes could not be confirmed; history was not moved",
+        ));
+    }
+    let worker_state = state.clone();
+    let result = tokio::task::spawn_blocking(move || audit_history_impl(&worker_state, params))
+        .await
+        .unwrap_or_else(|_| {
+            request_error(
+                "AuditHistoryFailed",
+                "Local activity history could not be updated",
+            )
+        });
+    final_diagnostics(state, Ok(result)).await.unwrap()
+}
+
+fn audit_history_impl(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "audit_history", &params) {
+        return error;
+    }
+    let _guard = state.audit_settings.lock();
+    let result = if params["action"] == "preserve" {
+        crate::audit::preserve_history(&state.runtime.paths)
+    } else {
+        crate::audit::history_status(&state.runtime.paths)
+    };
+    let mut result = result.unwrap_or_else(|_| {
+        request_error(
+            "AuditHistoryFailed",
+            "Local activity history could not be updated",
+        )
+    });
+    result["mode"] = json!(state.runtime.audit_retention_mode().as_str());
+    state.runtime.with_diagnostics(result)
+}
+
+#[tauri::command]
 pub async fn aws_list_profiles(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(aws_list_profiles_impl(&state))
+    final_diagnostics(&state, Ok(aws_list_profiles_impl(&state))).await
 }
 
 fn aws_list_profiles_impl(state: &AppState) -> Value {
@@ -1049,7 +1193,7 @@ fn aws_list_profiles_impl(state: &AppState) -> Value {
 /// Local launch discovery only: no configuration, credential or process work.
 #[tauri::command]
 pub async fn cli_availability(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(cli_availability_impl(&state))
+    final_diagnostics(&state, Ok(cli_availability_impl(&state))).await
 }
 
 fn cli_availability_impl(state: &AppState) -> Value {
@@ -1063,7 +1207,7 @@ pub async fn aws_list_pipelines(
     state: State<'_, AppState>,
     params: Value,
 ) -> Result<Value, String> {
-    aws_list_pipelines_impl(&state, params).await
+    final_diagnostics(&state, aws_list_pipelines_impl(&state, params).await).await
 }
 
 async fn aws_list_pipelines_impl(state: &AppState, params: Value) -> Result<Value, String> {
@@ -1295,7 +1439,7 @@ async fn list_pipelines_scoped(wctx: &widgets::WidgetCtx) -> Value {
 
 #[tauri::command]
 pub async fn aws_auth_status(state: State<'_, AppState>) -> Result<Value, String> {
-    aws_auth_status_impl(&state).await
+    final_diagnostics(&state, aws_auth_status_impl(&state).await).await
 }
 
 async fn aws_auth_status_impl(state: &AppState) -> Result<Value, String> {
@@ -1423,12 +1567,12 @@ pub async fn policy_get(state: State<'_, AppState>) -> Result<Value, String> {
         Err(e) => json!({"raw":"", "valid":false, "error":e.message, "actions":[],
             "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()}),
     };
-    Ok(state.runtime.with_diagnostics(result))
+    final_diagnostics(&state, Ok(result)).await
 }
 
 #[tauri::command]
 pub async fn policy_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    Ok(policy_set_impl(&state, params))
+    final_diagnostics(&state, Ok(policy_set_impl(&state, params))).await
 }
 
 fn policy_set_impl(state: &AppState, params: Value) -> Value {

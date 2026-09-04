@@ -49,6 +49,7 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
     function defaultResponse(call) {
       const { command, params, context } = call;
       switch (command) {
+        case "audit_history": if (params.action !== "status") throw new Error("Unexpected audit history action"); return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
         case "request_cancel": if (typeof params.request_id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(params.request_id)) throw new Error("Invalid synthetic cancellation ID"); return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
         case "ping": return { ok: true, version: "synthetic-test" };
         case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };

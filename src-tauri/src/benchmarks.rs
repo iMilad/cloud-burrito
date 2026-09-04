@@ -187,21 +187,22 @@ fn prepare_audit(bytes: usize) -> TestDir {
 
 fn measure_audit(scenario: &str, directory: &TestDir, bytes: usize) -> Value {
     let started = Instant::now();
-    let result = audit::try_tail(&directory.paths(), 300);
+    let result = audit::read_page(&directory.paths(), None, 300);
     let complete_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let (outcome, rows, returned_bytes) = match result {
-        Ok(rows) => (
+    let (outcome, rows, returned_bytes, bytes_read) = match result {
+        Ok(page) => (
             "succeeded",
-            rows.len(),
-            serde_json::to_vec(&rows).unwrap().len(),
+            page.entries.len(),
+            serde_json::to_vec(&page.entries).unwrap().len(),
+            page.bytes_read,
         ),
-        Err(()) => ("failed", 0, 0),
+        Err(()) => ("failed", 0, 0, 0),
     };
     json!({
         "scenario":scenario,"component":"audit_tail","complete_ms":complete_ms,
         "fixture_bytes":bytes,"fixture_record_bytes":1024,"requested_entries":300,"returned_rows":rows,
         "outcome":outcome,"returned_json_bytes":returned_bytes,
-        "bytes_read":null,"bytes_read_note":"unmeasured; unchanged try_tail scans to EOF according to source, not an OS I/O counter",
+        "bytes_read":bytes_read,"bytes_read_note":"reader-counted file bytes including anchors; not an OS physical I/O counter",
         "filesystem_cache":"warm after five repeated reads; no OS cache flush", "fixture_construction_in_timed_scope":false,
         "native_memory_bytes":null,"memory_note":"native backend plus webview and retained allocator memory are unmeasured",
     })

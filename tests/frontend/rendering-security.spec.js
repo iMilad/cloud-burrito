@@ -64,6 +64,7 @@ async function boot(page, response = table, options = {}) {
         case "widget_fetch":
           if (fixture.rejectWidget) throw new Error("CB_SYNTHETIC_DIAGNOSTIC_SECRET");
           value = structuredClone(params.widget === "aws-cli" ? fixture.response : { render: "raw_json", data: {} }); break;
+        case "audit_history": if (params.action !== "status") throw new Error("Unexpected audit history action"); return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
         case "audit_tail": value = structuredClone(fixture.audit); break;
         case "policy_get": value = { raw: fixture.policy, valid: true, actions: [], path: "/synthetic/policy.yaml" }; break;
         case "policy_set": value = { raw: params.text, valid: true, actions: [] }; break;

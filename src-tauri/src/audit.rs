@@ -4,10 +4,12 @@
 //! retries or provider work. Only explicitly selected structured fields are
 //! persisted. Raw inputs, resource payloads, errors and configuration are not.
 
-use std::collections::VecDeque;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::collections::hash_map::DefaultHasher;
+use std::fs::{self, File, Metadata, OpenOptions};
+use std::hash::{Hash, Hasher};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -18,10 +20,113 @@ use crate::paths::AppPaths;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 pub const MAX_TAIL_ENTRIES: usize = 1000;
 // Bound retained memory even for old, malformed or externally edited logs.
-const MAX_LINE_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_LINE_BYTES: usize = 16 * 1024;
 
-fn log_path(paths: &AppPaths) -> PathBuf {
+pub(crate) fn log_path(paths: &AppPaths) -> PathBuf {
     paths.data_file("audit.log")
+}
+
+/// Final-component protection only: AppPaths parents are trusted. These
+/// platform OpenOptions flags introduce no native dependency.
+pub(crate) fn no_follow_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        const O_NOFOLLOW: i32 = 0x0000_0100;
+        options.custom_flags(O_NOFOLLOW);
+    }
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")
+    ))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        const O_NOFOLLOW: i32 = 0x0002_0000;
+        options.custom_flags(O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+}
+
+pub(crate) fn file_identity(metadata: &Metadata) -> u64 {
+    let mut hash = DefaultHasher::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.dev().hash(&mut hash);
+        metadata.ino().hash(&mut hash);
+    }
+    // Creation time is the portable fallback; boundary fingerprints still
+    // validate the continuation when filesystem identity APIs are unavailable.
+    #[cfg(not(unix))]
+    {
+        metadata
+            .created()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .hash(&mut hash);
+    }
+    hash.finish()
+}
+
+pub(crate) fn regular_file(metadata: &Metadata) -> bool {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Compare the inspected filename, opened handle and current filename before
+/// content I/O. New-file callers must set create_new, so a raced-in path fails.
+pub(crate) fn checked_open(
+    path: &Path,
+    inspected: Option<&Metadata>,
+    options: &OpenOptions,
+) -> Result<(File, Metadata), ()> {
+    if inspected.is_some_and(|metadata| !regular_file(metadata)) {
+        return Err(());
+    }
+    let file = options.open(path).map_err(|_| ())?;
+    let opened = file.metadata().map_err(|_| ())?;
+    let current = fs::symlink_metadata(path).map_err(|_| ())?;
+    if !regular_file(&opened)
+        || !regular_file(&current)
+        || inspected.is_some_and(|metadata| file_identity(metadata) != file_identity(&opened))
+        || file_identity(&current) != file_identity(&opened)
+    {
+        return Err(());
+    }
+    Ok((file, opened))
+}
+
+fn existing_metadata(path: &Path) -> Result<Option<Metadata>, ()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if regular_file(&metadata) => Ok(Some(metadata)),
+        Ok(_) => Err(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    }
+}
+
+fn same_current_file(path: &Path, opened: &Metadata) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|current| {
+        regular_file(&current) && file_identity(&current) == file_identity(opened)
+    })
 }
 
 pub fn now_epoch() -> f64 {
@@ -42,7 +147,7 @@ fn identifier(value: &Value) -> Option<&str> {
 
 /// An allowlist, not recursive redaction. Arbitrary nested fields are dropped
 /// instead of trying to recognize every possible credential spelling.
-fn sanitized(entry: &Value) -> Map<String, Value> {
+pub(crate) fn sanitized(entry: &Value) -> Map<String, Value> {
     let mut out = Map::new();
     for key in [
         "kind",
@@ -74,8 +179,10 @@ fn sanitized(entry: &Value) -> Map<String, Value> {
             }
         }
     }
-    if let Some(status @ ("stopped" | "not_confirmed" | "denied" | "failed" | "not_attempted")) =
-        entry.get("cleanup_status").and_then(Value::as_str)
+    if let Some(
+        status @ ("stopped" | "not_confirmed" | "denied" | "failed" | "not_attempted" | "unknown"
+        | "not_needed"),
+    ) = entry.get("cleanup_status").and_then(Value::as_str)
     {
         out.insert("cleanup_status".into(), json!(status));
         out.insert("event".into(), json!("query_cleanup"));
@@ -96,86 +203,262 @@ fn sanitized(entry: &Value) -> Map<String, Value> {
     out
 }
 
-/// Failure is explicit and deliberately carries no OS path or error payload.
+pub(crate) const RETENTION_FILES: usize = 5;
+pub(crate) const RETENTION_FILE_BYTES: u64 = 10 * 1024 * 1024;
+static NEXT_PRESERVATION: AtomicU64 = AtomicU64::new(1);
+#[cfg(test)]
+static PRESERVE_MODE: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetentionMode {
+    Preserve,
+    Bounded,
+}
+impl RetentionMode {
+    pub fn as_str(self) -> &'static str {
+        if self == Self::Bounded {
+            "bounded"
+        } else {
+            "preserve"
+        }
+    }
+}
+
+pub(crate) fn encoded(entry: &Value, timestamp: f64) -> Result<Vec<u8>, ()> {
+    let mut object = sanitized(entry);
+    object.insert("ts".into(), json!(timestamp));
+    let mut line = serde_json::to_vec(&object).map_err(|_| ())?;
+    line.push(b'\n');
+    if line.len() > MAX_LINE_BYTES {
+        return Err(());
+    }
+    Ok(line)
+}
+
+/// Synchronous compatibility path for isolated tests and the baseline replay.
+/// Production Runtime uses the ordered bounded writer queue.
+#[cfg(test)]
 pub fn append(paths: &AppPaths, entry: Value, timestamp: f64) -> Result<(), ()> {
-    let mut obj = sanitized(&entry);
-    obj.insert("ts".into(), json!(timestamp));
-    let line = serde_json::to_string(&obj).map_err(|_| ())?;
+    append_record(paths, &encoded(&entry, timestamp)?, &PRESERVE_MODE)
+}
+
+pub(crate) fn append_record(
+    paths: &AppPaths,
+    line: &[u8],
+    retention: &AtomicBool,
+) -> Result<(), ()> {
+    if line.is_empty() || line.len() > MAX_LINE_BYTES || line.last() != Some(&b'\n') {
+        return Err(());
+    }
     let _guard = WRITE_LOCK.lock();
     let path = log_path(paths);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| ())?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|_| ())?;
-    writeln!(file, "{line}").map_err(|_| ())
-}
-
-/// Scan history with bounded retained entries/line bytes. Disk scan time and
-/// rotation/retention remain P3 work. Missing history is a normal first run;
-/// an unreadable history is an explicit failure, never a fabricated empty log.
-pub fn try_tail(paths: &AppPaths, limit: usize) -> Result<Vec<Value>, ()> {
-    let limit = limit.min(MAX_TAIL_ENTRIES);
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-    let file = match fs::File::open(log_path(paths)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err(()),
-    };
-    let mut reader = BufReader::new(file);
-    let mut line = Vec::new();
-    let mut oversized = false;
-    let mut entries = VecDeque::new();
-    loop {
-        let buf = reader.fill_buf().map_err(|_| ())?;
-        if buf.is_empty() {
-            break;
+    fs::create_dir_all(path.parent().ok_or(())?).map_err(|_| ())?;
+    let sizes = history_sizes(paths)?;
+    if retention.load(Ordering::SeqCst) {
+        if sizes.iter().any(|(_, size)| *size > RETENTION_FILE_BYTES) {
+            return Err(());
         }
-        let count = buf
+        let active = sizes
             .iter()
-            .position(|b| *b == b'\n')
-            .map_or(buf.len(), |p| p + 1);
-        let ends_line = buf[count - 1] == b'\n';
-        if !oversized && line.len() + count <= MAX_LINE_BYTES {
-            line.extend_from_slice(&buf[..count]);
-        } else {
-            oversized = true;
-            line.clear();
-        }
-        reader.consume(count);
-        if ends_line {
-            if !oversized {
-                retain_line(&line, &mut entries, limit);
-            }
-            line.clear();
-            oversized = false;
+            .find(|(name, _)| name == "audit.log")
+            .map_or(0, |(_, size)| *size);
+        if active + line.len() as u64 > RETENTION_FILE_BYTES {
+            rotate(paths)?;
         }
     }
-    if !oversized && !line.is_empty() {
-        retain_line(&line, &mut entries, limit);
+    let inspected = existing_metadata(&path)?;
+    let mut options = no_follow_options();
+    options.append(true);
+    if inspected.is_none() {
+        options.create_new(true);
     }
-    Ok(entries.into_iter().collect())
+    let (mut file, opened) = checked_open(&path, inspected.as_ref(), &options)?;
+    if retention.load(Ordering::SeqCst)
+        && opened.len().saturating_add(line.len() as u64) > RETENTION_FILE_BYTES
+    {
+        return Err(());
+    }
+    file.write_all(line).map_err(|_| ())?;
+    if !same_current_file(&path, &opened) {
+        return Err(());
+    }
+    Ok(())
 }
 
-fn retain_line(line: &[u8], entries: &mut VecDeque<Value>, limit: usize) {
-    if let Ok(value) = serde_json::from_slice::<Value>(line) {
-        if !value.is_object() {
-            return;
-        }
-        let mut safe = sanitized(&value);
-        if let Some(ts) = value.get("ts").and_then(Value::as_f64) {
-            safe.insert("ts".into(), json!(ts));
-        }
-        if entries.len() == limit {
-            entries.pop_front();
-        }
-        entries.push_back(Value::Object(safe));
+/// Flush the current file under the same lock as append, rotation and preserve.
+/// A write-capable existing handle is needed for FlushFileBuffers on Windows.
+pub(crate) fn sync_history(paths: &AppPaths) -> Result<(), ()> {
+    let _guard = WRITE_LOCK.lock();
+    let path = log_path(paths);
+    let Some(inspected) = existing_metadata(&path)? else {
+        return Ok(());
+    };
+    let mut options = no_follow_options();
+    options.write(true);
+    let (file, opened) = checked_open(&path, Some(&inspected), &options)?;
+    file.sync_data().map_err(|_| ())?;
+    if !same_current_file(&path, &opened) {
+        return Err(());
     }
+    Ok(())
+}
+
+fn file_names() -> Vec<String> {
+    std::iter::once("audit.log".to_string())
+        .chain((1..RETENTION_FILES).map(|index| format!("audit.{index}")))
+        .collect()
+}
+
+fn history_sizes(paths: &AppPaths) -> Result<Vec<(String, u64)>, ()> {
+    let mut sizes = Vec::new();
+    for name in file_names() {
+        match fs::symlink_metadata(paths.data_file(&name)) {
+            Ok(metadata) if regular_file(&metadata) => sizes.push((name, metadata.len())),
+            Ok(_) => return Err(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(()),
+        }
+    }
+    Ok(sizes)
+}
+
+fn rotate(paths: &AppPaths) -> Result<(), ()> {
+    // All names have been checked as ordinary files. Expiry is enabled only
+    // after explicit saved retention choice; no default or reader rotates.
+    let oldest = paths.data_file(&format!("audit.{}", RETENTION_FILES - 1));
+    match fs::remove_file(oldest) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(()),
+    }
+    for index in (1..RETENTION_FILES - 1).rev() {
+        let from = paths.data_file(&format!("audit.{index}"));
+        if from.exists() {
+            fs::rename(from, paths.data_file(&format!("audit.{}", index + 1))).map_err(|_| ())?;
+        }
+    }
+    let active = log_path(paths);
+    if active.exists() {
+        fs::rename(active, paths.data_file("audit.1")).map_err(|_| ())?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RetentionError<E> {
+    HistoryUnavailable,
+    PreserveRequired,
+    Save(E),
+}
+
+/// Save the explicit choice while holding the same lock used by the writer.
+/// The callback must be synchronous and must not append an audit record.
+/// Failed persistence cannot temporarily enable rotation or expiry.
+pub(crate) fn transact_retention<T, E>(
+    paths: &AppPaths,
+    selected: &AtomicBool,
+    mode: RetentionMode,
+    save: impl FnOnce() -> Result<T, E>,
+) -> Result<T, RetentionError<E>> {
+    let _guard = WRITE_LOCK.lock();
+    if mode == RetentionMode::Bounded {
+        let sizes = history_sizes(paths).map_err(|_| RetentionError::HistoryUnavailable)?;
+        if sizes.iter().any(|(_, size)| *size > RETENTION_FILE_BYTES) {
+            return Err(RetentionError::PreserveRequired);
+        }
+    }
+    let result = save().map_err(RetentionError::Save)?;
+    selected.store(mode == RetentionMode::Bounded, Ordering::SeqCst);
+    Ok(result)
+}
+
+pub(crate) fn set_retention(
+    paths: &AppPaths,
+    selected: &AtomicBool,
+    mode: RetentionMode,
+) -> Result<(), ()> {
+    transact_retention(paths, selected, mode, || {
+        Ok::<_, std::convert::Infallible>(())
+    })
+    .map_err(|_| ())
+}
+
+pub(crate) fn history_status(paths: &AppPaths) -> Result<Value, ()> {
+    let _guard = WRITE_LOCK.lock();
+    let sizes = history_sizes(paths)?;
+    let active = sizes
+        .iter()
+        .find(|(name, _)| name == "audit.log")
+        .map_or(0, |(_, size)| *size);
+    let total = sizes
+        .iter()
+        .fold(0u64, |total, (_, size)| total.saturating_add(*size));
+    let oversized = sizes.iter().any(|(_, size)| *size > RETENTION_FILE_BYTES);
+    Ok(
+        json!({"ok":true,"location":log_path(paths).to_string_lossy(),"active_bytes":active,"total_bytes":total,
+        "known_files":sizes.len(),"oversized_legacy":oversized,"preserve_required":oversized,
+        "limits":{"files":RETENTION_FILES,"bytes_per_file":RETENTION_FILE_BYTES,"total_bytes":RETENTION_FILES as u64*RETENTION_FILE_BYTES},
+        "expiry":"When bounded retention is enabled, the oldest of five files expires before an append rotates the active file. Preserved history is never expired by this policy."}),
+    )
+}
+
+/// Explicit preservation moves only the five known history names into a fresh
+/// exclusive directory. It never overwrites or deletes an existing archive.
+pub(crate) fn preserve_history(paths: &AppPaths) -> Result<Value, ()> {
+    let _guard = WRITE_LOCK.lock();
+    let sizes = history_sizes(paths)?;
+    if sizes.is_empty() {
+        return Ok(json!({"ok":true,"preserved_files":0,"preserved_bytes":0}));
+    }
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut destination = None;
+    for _ in 0..16 {
+        let count = NEXT_PRESERVATION.fetch_add(1, Ordering::Relaxed);
+        let candidate = paths.data_file(&format!("audit-preserved-{epoch:x}-{count:x}"));
+        match fs::create_dir(&candidate) {
+            Ok(()) => {
+                destination = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(()),
+        }
+    }
+    let destination = destination.ok_or(())?;
+    let mut moved: Vec<&str> = Vec::new();
+    for (name, _) in &sizes {
+        if fs::rename(paths.data_file(name), destination.join(name)).is_err() {
+            // Best-effort rollback never overwrites a newly created file. Any
+            // files that cannot be restored remain preserved in this directory.
+            for previous in moved.iter().rev() {
+                if !paths.data_file(previous).exists() {
+                    let _ = fs::rename(destination.join(previous), paths.data_file(previous));
+                }
+            }
+            return Err(());
+        }
+        moved.push(name.as_str());
+    }
+    Ok(
+        json!({"ok":true,"preserved_files":sizes.len(),"preserved_bytes":sizes.iter().fold(0u64,|total,(_,size)|total.saturating_add(*size)),
+        "preserved_location":destination.to_string_lossy()}),
+    )
+}
+
+pub(crate) use crate::audit_reader::AuditPage;
+pub(crate) fn read_page(
+    paths: &AppPaths,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<AuditPage, ()> {
+    crate::audit_reader::read_page(paths, cursor, limit.min(MAX_TAIL_ENTRIES))
+}
+#[cfg(test)]
+pub fn try_tail(paths: &AppPaths, limit: usize) -> Result<Vec<Value>, ()> {
+    Ok(read_page(paths, None, limit.min(MAX_TAIL_ENTRIES))?.entries)
 }
 
 #[cfg(test)]
@@ -239,5 +522,224 @@ mod tests {
         assert!(!serde_json::to_string(&entries)
             .unwrap()
             .contains("synthetic-private-marker"));
+    }
+    #[test]
+    fn oversized_legacy_history_stays_preserved_until_explicit_move_and_opt_in() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        fs::create_dir_all(log_path(&paths).parent().unwrap()).unwrap();
+        let file = fs::File::create(log_path(&paths)).unwrap();
+        file.set_len(100 * 1024 * 1024).unwrap();
+        drop(file);
+        let retention = AtomicBool::new(false);
+        assert!(history_status(&paths).unwrap()["preserve_required"]
+            .as_bool()
+            .unwrap());
+        assert!(set_retention(&paths, &retention, RetentionMode::Bounded).is_err());
+        assert!(!retention.load(Ordering::SeqCst));
+        append(&paths, json!({"event":"synthetic-later"}), 1.0).unwrap();
+        assert!(fs::metadata(log_path(&paths)).unwrap().len() > 100 * 1024 * 1024);
+        let preserved = preserve_history(&paths).unwrap();
+        assert_eq!(preserved["preserved_files"], 1);
+        let archived = std::path::PathBuf::from(preserved["preserved_location"].as_str().unwrap())
+            .join("audit.log");
+        assert!(archived.exists());
+        assert!(!log_path(&paths).exists());
+        set_retention(&paths, &retention, RetentionMode::Bounded).unwrap();
+        append_record(
+            &paths,
+            &encoded(&json!({"event":"new-history"}), 2.0).unwrap(),
+            &retention,
+        )
+        .unwrap();
+        assert_eq!(try_tail(&paths, 10).unwrap()[0]["event"], "new-history");
+        assert!(fs::metadata(archived).unwrap().len() > 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn failed_settings_save_cannot_activate_rotation() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        fs::create_dir_all(log_path(&paths).parent().unwrap()).unwrap();
+        fs::File::create(log_path(&paths))
+            .unwrap()
+            .set_len(RETENTION_FILE_BYTES)
+            .unwrap();
+        fs::write(paths.data_file("audit.4"), "synthetic-oldest").unwrap();
+        let retention = AtomicBool::new(false);
+        let failed = transact_retention(&paths, &retention, RetentionMode::Bounded, || {
+            assert!(!retention.load(Ordering::SeqCst));
+            Err::<(), _>("synthetic-save-failure")
+        });
+        assert_eq!(failed, Err(RetentionError::Save("synthetic-save-failure")));
+        assert!(!retention.load(Ordering::SeqCst));
+        append_record(
+            &paths,
+            &encoded(&json!({"event":"after-failed-settings-save"}), 1.0).unwrap(),
+            &retention,
+        )
+        .unwrap();
+        assert!(fs::metadata(log_path(&paths)).unwrap().len() > RETENTION_FILE_BYTES);
+        assert_eq!(
+            fs::read_to_string(paths.data_file("audit.4")).unwrap(),
+            "synthetic-oldest"
+        );
+        assert!(!paths.data_file("audit.1").exists());
+    }
+
+    #[test]
+    fn retention_commit_checks_eligibility_before_save_and_activates_after_success() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        fs::create_dir_all(log_path(&paths).parent().unwrap()).unwrap();
+        fs::File::create(log_path(&paths))
+            .unwrap()
+            .set_len(RETENTION_FILE_BYTES + 1)
+            .unwrap();
+        let retention = AtomicBool::new(false);
+        let failure = transact_retention(
+            &paths,
+            &retention,
+            RetentionMode::Bounded,
+            || -> Result<(), ()> {
+                panic!("an ineligible retention choice must not reach settings save");
+            },
+        );
+        assert_eq!(failure, Err(RetentionError::PreserveRequired));
+        preserve_history(&paths).unwrap();
+        let saved = transact_retention(&paths, &retention, RetentionMode::Bounded, || {
+            assert!(!retention.load(Ordering::SeqCst));
+            Ok::<_, ()>("synthetic-saved")
+        })
+        .unwrap();
+        assert_eq!(saved, "synthetic-saved");
+        assert!(retention.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn opted_in_rotation_expires_only_the_oldest_known_file_before_append() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        fs::create_dir_all(log_path(&paths).parent().unwrap()).unwrap();
+        let active = fs::File::create(log_path(&paths)).unwrap();
+        active.set_len(RETENTION_FILE_BYTES).unwrap();
+        drop(active);
+        for index in 1..RETENTION_FILES {
+            fs::write(
+                paths.data_file(&format!("audit.{index}")),
+                format!("synthetic-{index}"),
+            )
+            .unwrap();
+        }
+        fs::write(paths.data_file("unrelated.keep"), "synthetic-unrelated").unwrap();
+        let retention = AtomicBool::new(false);
+        set_retention(&paths, &retention, RetentionMode::Bounded).unwrap();
+        append_record(
+            &paths,
+            &encoded(&json!({"event":"after-rotation"}), 1.0).unwrap(),
+            &retention,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(paths.data_file("audit.1")).unwrap().len(),
+            RETENTION_FILE_BYTES
+        );
+        assert_eq!(
+            fs::read_to_string(paths.data_file("audit.4")).unwrap(),
+            "synthetic-3"
+        );
+        assert_eq!(
+            fs::read_to_string(paths.data_file("unrelated.keep")).unwrap(),
+            "synthetic-unrelated"
+        );
+        assert_eq!(try_tail(&paths, 10).unwrap()[0]["event"], "after-rotation");
+        assert!(
+            history_status(&paths).unwrap()["total_bytes"]
+                .as_u64()
+                .unwrap()
+                <= RETENTION_FILES as u64 * RETENTION_FILE_BYTES
+        );
+    }
+
+    #[test]
+    fn repeated_preservation_creates_distinct_archives_and_preserve_mode_never_prunes() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        append(&paths, json!({"event":"first"}), 1.0).unwrap();
+        let first = preserve_history(&paths).unwrap();
+        append(&paths, json!({"event":"second"}), 2.0).unwrap();
+        let second = preserve_history(&paths).unwrap();
+        assert_ne!(first["preserved_location"], second["preserved_location"]);
+        for preserved in [first, second] {
+            assert!(
+                std::path::Path::new(preserved["preserved_location"].as_str().unwrap())
+                    .join("audit.log")
+                    .exists()
+            );
+        }
+        assert_eq!(preserve_history(&paths).unwrap()["preserved_files"], 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_symlinks_are_not_followed_by_retention_or_preservation() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        fs::create_dir_all(log_path(&paths).parent().unwrap()).unwrap();
+        let target = dir.path().join("synthetic-external-log");
+        fs::write(&target, "synthetic-original").unwrap();
+        std::os::unix::fs::symlink(&target, log_path(&paths)).unwrap();
+        assert!(history_status(&paths).is_err());
+        assert!(preserve_history(&paths).is_err());
+        assert!(append(&paths, json!({"event":"blocked"}), 1.0).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "synthetic-original");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn append_and_flush_reject_symlinks_without_modifying_the_target() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        let path = log_path(&paths);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let target = dir.path().join("synthetic-unrelated-target");
+        fs::write(&target, b"synthetic-target-must-stay-unchanged\n").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let before = fs::read(&target).unwrap();
+        assert!(append(&paths, json!({"event":"synthetic-attempt"}), 1.0).is_err());
+        assert!(sync_history(&paths).is_err());
+        assert_eq!(fs::read(&target).unwrap(), before);
+        assert!(fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raced_in_symlinks_cannot_open_for_append_flush_or_new_history() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        let path = log_path(&paths);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"synthetic-original-history\n").unwrap();
+        let inspected = fs::symlink_metadata(&path).unwrap();
+        let moved = dir.path().join("synthetic-original-handle-target");
+        fs::rename(&path, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &path).unwrap();
+        for append in [false, true] {
+            let mut options = no_follow_options();
+            if append {
+                options.append(true);
+            } else {
+                options.write(true);
+            }
+            // Same inode and metadata as the inspected original; no-follow and
+            // current symlink metadata must reject it before content operations.
+            assert!(checked_open(&path, Some(&inspected), &options).is_err());
+        }
+        let mut create = no_follow_options();
+        create.create_new(true).append(true);
+        assert!(checked_open(&path, None, &create).is_err());
+        assert_eq!(fs::read(&moved).unwrap(), b"synthetic-original-history\n");
     }
 }

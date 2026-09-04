@@ -75,6 +75,7 @@ async function boot(page, { theme = "dark", compact = false } = {}) {
         case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };
         case "widget_fetch": return attach(result(params), params);
         case "policy_get": case "policy_set": return { raw: "statements: []", valid: true, actions: [], path: "/synthetic/policy" };
+        case "audit_history": if (params.action !== "status") throw new Error("Unexpected audit history action"); return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
         case "audit_tail": return { entries: [] };
         case "widget_get_source": return { ok: true, yaml: "name: synthetic-widget", py: "// Synthetic source fixture" };
         default: fixture.unexpected.push(command); throw new Error("Unplanned synthetic native command");

@@ -314,6 +314,18 @@
             </select>
             <span id="settings-theme-error" class="field-error" hidden></span>
           </label>
+          <label>
+            <span>Audit history retention</span>
+            <select id="settings-audit-retention" aria-describedby="settings-audit-retention-error audit-retention-explanation">
+              <option value="preserve">Preserve all history (default)</option>
+              <option value="bounded">Bounded history: five files × 10 MiB</option>
+            </select>
+            <span id="settings-audit-retention-error" class="field-error" hidden></span>
+          </label>
+          <p id="audit-retention-explanation" class="muted small">Preserve keeps existing history without automatic expiry. Bounded retention uses up to five files of 10 MiB each (50 MiB total); the oldest file expires on rotation. This choice takes effect only when you save. Preserved copies never expire automatically and are outside that budget.</p>
+          <section class="audit-history-status small" aria-label="Audit history storage" data-audit-history-status></section>
+          <button type="button" class="btn btn-ghost small" data-audit-preserve>Preserve current history</button>
+          <p class="muted small" data-audit-preserve-status role="status"></p>
           <p class="muted small">Blank fields use the defaults shown. Appearance changes are previews until you save.</p>
           <p class="muted small">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. The app uses your existing SSO session to obtain temporary AWS credentials; it does not start an interactive login.</p>
           <p class="muted small">
@@ -363,8 +375,13 @@
         open. Captures lifecycle events, set-account attempts, operation
         preflights and widget diagnostics. A preflight records permission to
         proceed, not confirmation that an AWS request succeeded.
-        On disk: <code>~/.cloud_burrito/audit.log</code>.
+        Refresh pauses while the app is hidden. Read limits can omit older
+        entries; a replacement log starts a new displayed page.
       </p>
+      <section class="audit-history-status small" aria-label="Audit history storage" data-audit-history-status></section>
+      <button type="button" class="btn btn-ghost small" data-audit-preserve>Preserve current history</button>
+      <p class="muted small" data-audit-preserve-status role="status"></p>
+      <p id="audit-page-status" class="muted small" role="status"></p>
       <div id="audit-table-wrap"></div>
     </div>
   </aside>

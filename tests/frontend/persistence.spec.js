@@ -68,6 +68,7 @@ async function boot(page, files = {}) {
         case "aws_list_profiles": return { profiles: [], file_exists: false, error: null, discovery_state: "missing_config" };
         case "aws_auth_status": return { has_context: false, logged_in: false, connection_state: "disconnected" };
         case "policy_get": return { raw: "Statement: []", valid: true, actions: [], path: "/synthetic/policy.yaml" };
+        case "audit_history": if (params.action !== "status") throw new Error("Unexpected audit history action"); return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
         case "audit_tail": return { entries: [] };
         default: throw new Error("Unexpected synthetic boundary invocation");
       }

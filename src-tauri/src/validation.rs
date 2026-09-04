@@ -129,8 +129,21 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
             Ok(())
         }
         "audit_tail" => {
-            keys(p, &["limit"])?;
-            integer(p, "limit", 0, 1000)
+            keys(p, &["limit", "cursor"])?;
+            integer(p, "limit", 0, 1000)?;
+            if let Some(cursor) = p.get("cursor").filter(|value| !value.is_null()) {
+                if !text(cursor, 256, false, false)?.is_ascii() {
+                    return Err("Invalid activity cursor");
+                }
+            }
+            Ok(())
+        }
+        "audit_history" => {
+            keys(p, &["action"])?;
+            match required_text(p, "action", 16, false)? {
+                "status" | "preserve" => Ok(()),
+                _ => Err("Unknown activity history action"),
+            }
         }
         "policy_set" => {
             keys(p, &["text"])?;
@@ -161,8 +174,14 @@ pub(crate) fn settings_shape(value: &Value) -> Check {
             "default_profile",
             "default_region",
             "theme",
+            "audit_retention",
         ],
     )?;
+    if let Some(mode) = fields.get("audit_retention") {
+        if !matches!(mode.as_str(), Some("preserve" | "bounded")) {
+            return Err("Choose preserve or bounded activity history");
+        }
+    }
     for (name, limit, _) in SETTINGS_FIELDS {
         settings_field_shape(fields, name, limit)?;
     }
@@ -174,6 +193,15 @@ pub(crate) fn settings_field_errors(value: &Value) -> Map<String, Value> {
     let Some(fields) = value.as_object() else {
         return errors;
     };
+    if fields
+        .get("audit_retention")
+        .is_some_and(|mode| !matches!(mode.as_str(), Some("preserve" | "bounded")))
+    {
+        errors.insert(
+            "audit_retention".into(),
+            Value::String("Choose preserve or bounded activity history".into()),
+        );
+    }
     for (name, limit, message) in SETTINGS_FIELDS {
         let invalid_shape = settings_field_shape(fields, name, limit).is_err();
         let text = fields

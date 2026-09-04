@@ -9,6 +9,8 @@
 //! controlled Logs Insights start/stop capabilities. Query execution can incur scan costs.
 
 mod audit;
+mod audit_reader;
+mod audit_writer;
 mod aws;
 mod commands;
 mod dashboard;
@@ -62,6 +64,7 @@ pub fn run() {
             commands::dashboard_get,
             commands::dashboard_set,
             commands::audit_tail,
+            commands::audit_history,
             commands::policy_get,
             commands::policy_set,
         ])

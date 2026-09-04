@@ -20,6 +20,7 @@
     "allow-dashboard-get",
     "allow-dashboard-set",
     "allow-audit-tail",
+    "allow-audit-history",
     "allow-policy-get",
     "allow-policy-set"
   ]

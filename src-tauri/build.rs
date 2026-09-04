@@ -15,6 +15,7 @@ fn main() {
             "dashboard_get",
             "dashboard_set",
             "audit_tail",
+            "audit_history",
             "policy_get",
             "policy_set",
         ]),

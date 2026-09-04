@@ -139,6 +139,7 @@ export function installSyntheticBridge(options) {
         case "cli_availability": result = { ok: true, status: "available", available: true, version_verified: false }; break;
         case "widget_fetch": result = attach(widgetResponse(params), params, contextFor(params)); fixture.widgetResponses++; break;
         case "policy_get": case "policy_set": result = { raw: "statements: []", valid: true, actions: [], path: "/synthetic/policy" }; break;
+        case "audit_history": if (params.action !== "status") throw new Error("Unexpected synthetic audit action"); result = { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." }; break;
         case "audit_tail": result = { entries: [] }; break;
         case "widget_get_source": result = { ok: true, yaml: "name: synthetic", py: "// Synthetic source" }; break;
         default: fixture.errors.push("Unexpected synthetic bridge command"); throw new Error("Unexpected synthetic bridge command");

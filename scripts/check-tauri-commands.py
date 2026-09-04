@@ -12,7 +12,7 @@ EXPECTED_COMMANDS = {
     "ping", "aws_set_account", "aws_list_profiles", "aws_list_pipelines",
     "aws_auth_status", "cli_availability", "widget_fetch", "request_cancel", "widget_get_source",
     "settings_get", "settings_set", "dashboard_get", "dashboard_set",
-    "audit_tail", "policy_get", "policy_set",
+    "audit_tail", "audit_history", "policy_get", "policy_set",
 }
 
 

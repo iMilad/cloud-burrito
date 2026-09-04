@@ -2754,3 +2754,8 @@ tr[data-enrichment-state="failed"] .codeartifact-enrichment-state { color: var(-
 .query-recovery input[type="checkbox"] { flex: 0 0 auto; margin-top: 2px; }
 .query-recovery select { max-width: 100%; min-width: 0; color: var(--text-primary); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-2); }
 .query-recovery-run { justify-self: start; white-space: normal; }
+
+/* Audit storage information stays readable inside either side panel. */
+.audit-history-status { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
+.audit-history-status p { margin: 4px 0; }
+[data-audit-preserve-status] { overflow-wrap: anywhere; }

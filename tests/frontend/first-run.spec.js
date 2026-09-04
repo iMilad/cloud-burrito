@@ -71,6 +71,7 @@ async function boot(page, options = {}) {
         case "widget_fetch": return attach({ render: "table", columns: ["evidence"], rows: [{ evidence: params.widget === "aws-cli" ? "synthetic CLI result" : "synthetic SDK result" }] }, params,
           params.context?.mode === "pinned" ? params.context : active);
         case "policy_get": return { raw: "Statement: []", valid: true, actions: [], path: "/synthetic/policy" };
+        case "audit_history": if (params.action !== "status") throw new Error("Unexpected audit history action"); return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
         case "audit_tail": return { entries: [] };
         default: throw new Error("Unexpected synthetic boundary");
       }

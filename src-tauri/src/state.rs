@@ -87,6 +87,8 @@ pub struct AppState {
     pub runtime: Runtime,
     pub(crate) connection: Arc<Mutex<ConnectionState>>,
     pub(crate) work: Arc<crate::work_registry::WorkRegistry>,
+    /// Serializes local settings saves, retention activation and preservation.
+    pub(crate) audit_settings: Arc<Mutex<()>>,
     observed_policy: Arc<Mutex<(Option<String>, u64)>>,
     pub(crate) results: Arc<crate::result_cache::ResultCache>,
 }
@@ -98,6 +100,7 @@ impl AppState {
             runtime,
             connection: Arc::default(),
             work: Arc::default(),
+            audit_settings: Arc::default(),
             observed_policy: Arc::default(),
             results: Arc::default(),
         }

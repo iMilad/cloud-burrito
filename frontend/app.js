@@ -192,10 +192,11 @@
     }
     observeDiagnostics(result);
     if (["settings_set", "dashboard_set", "policy_set"].includes(command) && result?.ok === false) {
-      const errorType = ["StorageWriteFailed", "StorageSuperseded"].includes(result.error_type) ? result.error_type : "InvalidRequest";
+      const errorType = ["StorageWriteFailed", "StorageSuperseded", "AuditPreserveRequired"].includes(result.error_type) ? result.error_type : "InvalidRequest";
       const error = new Error(errorType === "StorageWriteFailed"
         ? "Changes could not be saved. Try again."
         : errorType === "StorageSuperseded" ? "Save was superseded by a newer change. Review and retry if needed."
+        : errorType === "AuditPreserveRequired" ? "Preserve current audit history before enabling bounded retention."
         : "Changes were rejected. Review the input and try again.");
       error.error_type = errorType;
       if (command === "settings_set") error.settings = result._settings;
@@ -1177,14 +1178,23 @@
   let settingsDraftDirty = false;
   let settingsReadFailed = false;
   let settingsDefaults = null;
+  let auditRetentionMetadata = null;
   let desktopPickersStarted = false;
   let bootComplete = false;
   // Browser-only demonstration regions. Desktop choices come from Rust.
   let allowedRegions = isTauri ? [] : ["eu-west-1", "us-east-1"];
   const SETTINGS_FIELDS = {
     aws_config_path: "settings-aws-config-path", sso_session_name: "settings-sso-session",
-    default_profile: "settings-default-profile", default_region: "settings-default-region", theme: "settings-theme",
+    default_profile: "settings-default-profile", default_region: "settings-default-region", theme: "settings-theme", audit_retention: "settings-audit-retention",
   };
+
+  const SETTINGS_REQUIRED_KEYS = Object.keys(SETTINGS_FIELDS).filter(key => key !== "audit_retention");
+
+  function settingsRetention(value) {
+    if (value === undefined) return "preserve";
+    if (!["preserve", "bounded"].includes(value)) throw new Error("Audit retention setting is invalid");
+    return value;
+  }
 
   function showSettingsFieldErrors(errors = {}) {
     for (const [key, id] of Object.entries(SETTINGS_FIELDS)) {
@@ -1197,7 +1207,7 @@
 
   function consumeSettingsMetadata(metadata) {
     if (!metadata || !metadata.defaults || typeof metadata.defaults !== "object"
-        || Object.keys(SETTINGS_FIELDS).some(key => typeof metadata.defaults[key] !== "string")
+        || SETTINGS_REQUIRED_KEYS.some(key => typeof metadata.defaults[key] !== "string")
         || !["dark", "light"].includes(metadata.defaults.theme)
         || !Array.isArray(metadata.allowed_regions) || !metadata.allowed_regions.length
         || metadata.allowed_regions.length > 128
@@ -1205,7 +1215,7 @@
         || !metadata.field_errors || typeof metadata.field_errors !== "object" || Array.isArray(metadata.field_errors)) {
       throw new Error("Settings metadata unavailable");
     }
-    settingsDefaults = { ...metadata.defaults };
+    settingsDefaults = { ...metadata.defaults, audit_retention: settingsRetention(metadata.defaults.audit_retention) };
     allowedRegions = [...new Set(metadata.allowed_regions)];
     for (const key of ["aws_config_path", "sso_session_name", "default_profile"]) {
       $("#" + SETTINGS_FIELDS[key]).placeholder = settingsDefaults[key] || "(none)";
@@ -1272,6 +1282,7 @@
       addOption($("#settings-theme"), s.theme, `${s.theme} — unsupported`, { unsupported: "true" });
     }
     $("#settings-theme").value = s.theme;
+    $("#settings-audit-retention").value = settingsRetention(s.audit_retention);
     settingsDraftDirty = false;
     updateThemePreview();
   }
@@ -1293,8 +1304,10 @@
       consumeSettingsMetadata(loaded?._settings);
       if (!loaded || typeof loaded !== "object" || Array.isArray(loaded)
           || loaded.ok === false || loaded._storage?.status === "failed"
-          || Object.keys(SETTINGS_FIELDS).some(key => typeof loaded[key] !== "string")) throw new Error("Settings unavailable");
+          || SETTINGS_REQUIRED_KEYS.some(key => typeof loaded[key] !== "string")) throw new Error("Settings unavailable");
+      loaded.audit_retention = settingsRetention(loaded.audit_retention);
       cachedSettings = loaded;
+      auditRetentionMetadata = loaded._audit_retention || null;
       settingsStorageReady = true;
       $("#settings-storage-warning")?.remove();
       $("#settings-save").disabled = settingsSavePending;
@@ -1327,6 +1340,7 @@
   function openSettingsPanel() {
     const panel = $("#settings-panel");
     showPanel(panel);
+    refreshAuditHistory();
     // Re-fetch external edits, while preserving the user's unsaved draft.
     const draft = settingsDraftRevision;
     loadSettings().then((s) => {
@@ -1345,18 +1359,19 @@
   let settingsSavePending = false;
   async function saveSettings(e, options = {}) {
     e.preventDefault();
-    if (!isTauri || settingsSavePending) return;
+    if (!isTauri || settingsSavePending || auditPreservePending) return;
     if (!settingsStorageReady && !options.recover) return;
     // Send empty strings for blank inputs — the backend treats empty as
     // "fall back to default" so the user doesn't need to retype defaults.
     const params = options.recover ? {
-      aws_config_path: "", sso_session_name: "", default_profile: "", default_region: "", theme: "",
+      aws_config_path: "", sso_session_name: "", default_profile: "", default_region: "", theme: "", audit_retention: "preserve",
     } : {
       aws_config_path:   $("#settings-aws-config-path").value.trim(),
       sso_session_name:  $("#settings-sso-session").value.trim(),
       default_profile:   $("#settings-default-profile").value.trim(),
       default_region:    $("#settings-default-region").value.trim(),
       theme:             $("#settings-theme").value,
+      audit_retention:    $("#settings-audit-retention").value,
     };
     const status = $("#settings-status");
     status.textContent = "Saving…";
@@ -1370,10 +1385,13 @@
       const saved = await tauriInvoke("settings_set", { params });
       if (configuration !== configurationGeneration) return;
       consumeSettingsMetadata(saved?._settings);
-      if (Object.keys(SETTINGS_FIELDS).some(key => typeof saved[key] !== "string")
+      if (SETTINGS_REQUIRED_KEYS.some(key => typeof saved[key] !== "string")
           || !["dark", "light"].includes(saved.theme)) throw new Error("Settings save response was incomplete. Reload to verify.");
       ++settingsLoadId;
+      saved.audit_retention = settingsRetention(saved.audit_retention);
       cachedSettings = saved;
+      auditRetentionMetadata = saved._audit_retention || null;
+      refreshAuditHistory();
       settingsStorageReady = true;
       settingsReadFailed = false;
       $("#settings-storage-warning")?.remove();
@@ -1423,6 +1441,7 @@
         try { consumeSettingsMetadata(err.settings); } catch (_) { /* Keep the last accepted catalogue. */ }
       }
       status.textContent = "Save failed: " + err;
+      if (err.error_type === "AuditPreserveRequired") refreshAuditHistory();
     } finally {
       settingsSavePending = false;
       $("#settings-save").disabled = !settingsStorageReady;
@@ -1528,18 +1547,95 @@
 
   // ===== Audit log panel (Tauri only) =====
   let auditTimer = null;
+  let auditReadPending = false;
+  let auditGeneration = 0;
+  let auditCursor = null;
+  let auditEntries = [];
+  let auditHistoryPending = false;
+  let auditPreservePending = false;
+  let auditHistory = null;
 
+  function auditVisible() {
+    return $("#audit-panel").getAttribute("aria-hidden") === "false" && !document.hidden;
+  }
+  function scheduleAudit(delay = 2000) {
+    clearTimeout(auditTimer);
+    auditTimer = null;
+    if (auditVisible()) auditTimer = setTimeout(refreshAudit, delay);
+  }
   function openAuditPanel() {
-    const panel = $("#audit-panel");
-    showPanel(panel);
+    showPanel($("#audit-panel"));
+    refreshAuditHistory();
     refreshAudit();
-    if (auditTimer) clearInterval(auditTimer);
-    // 2s gives a usable "live feed" feel without thrashing the core.
-    auditTimer = setInterval(refreshAudit, 2000);
   }
   function closeAuditPanel(options = {}) {
     hidePanel($("#audit-panel"), options);
-    if (auditTimer) { clearInterval(auditTimer); auditTimer = null; }
+    ++auditGeneration;
+    clearTimeout(auditTimer);
+    auditTimer = null;
+  }
+  function auditStorageText(value) {
+    return typeof value === "string" ? value.slice(0, 2048) : "Unavailable";
+  }
+  function auditBytes(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? `${(value / 1048576).toFixed(2)} MiB` : "unavailable";
+  }
+  function renderAuditHistory(error = false) {
+    document.querySelectorAll("[data-audit-history-status]").forEach(host => {
+      clear(host);
+      if (auditRetentionMetadata?.configured_mode === "bounded" && auditRetentionMetadata?.effective_mode === "preserve") {
+        host.appendChild(el("p", { class: "audit-read-warning" }, "Bounded retention is saved, but preserve mode is active until the oversized existing history is preserved."));
+      }
+      if (auditHistory) {
+        const mode = auditHistory.effective_mode || auditHistory.mode;
+        host.append(el("p", {}, `Active retention: ${mode === "bounded" ? "Bounded — five files × 10 MiB (50 MiB total)" : "Preserve — no automatic expiry"}.`),
+          el("p", { class: "mono" }, `Location: ${auditStorageText(auditHistory.location)}`),
+          el("p", {}, `Active file: ${auditBytes(auditHistory.active_bytes)} · Current history: ${auditBytes(auditHistory.total_bytes)}.`),
+          el("p", { class: "muted" }, auditStorageText(auditHistory.expiry)));
+        if (auditHistory.preserve_required === true) host.appendChild(el("p", { class: "audit-read-warning" },
+          "Existing history exceeds a rotation file limit. Preserve current history before saving bounded retention."));
+      }
+      if (error) host.appendChild(el("p", { class: "audit-read-warning", role: "status" },
+        "Audit storage status could not be read. The last confirmed status is retained."));
+      else if (!auditHistory) host.appendChild(el("p", { class: "muted" }, "Loading audit storage status…"));
+    });
+  }
+  async function refreshAuditHistory() {
+    if (!isTauri || auditHistoryPending) return;
+    auditHistoryPending = true;
+    renderAuditHistory();
+    try {
+      const result = await tauriInvoke("audit_history", { params: { action: "status" } });
+      if (!result || result.ok === false || typeof result.location !== "string"
+          || !["preserve", "bounded"].includes(result.effective_mode || result.mode)) throw new Error("Audit status unavailable");
+      auditHistory = result;
+      if (auditRetentionMetadata) auditRetentionMetadata = { ...auditRetentionMetadata, effective_mode: result.effective_mode || result.mode, preserve_required: result.preserve_required === true };
+      renderAuditHistory();
+    } catch (_) { renderAuditHistory(true); }
+    finally { auditHistoryPending = false; }
+  }
+  async function preserveAuditHistory() {
+    if (!isTauri || auditPreservePending || settingsSavePending) return;
+    auditPreservePending = true;
+    $("#settings-save").disabled = true;
+    document.querySelectorAll("[data-audit-preserve]").forEach(button => { button.disabled = true; });
+    const message = text => document.querySelectorAll("[data-audit-preserve-status]").forEach(host => { host.textContent = text; });
+    message("Preserving current audit files…");
+    try {
+      const result = await tauriInvoke("audit_history", { params: { action: "preserve" } });
+      if (!result || result.ok === false || !Number.isSafeInteger(result.preserved_files) || result.preserved_files < 0
+          || result.preserved_files > 5 || result.preserved_files > 0 && typeof result.preserved_location !== "string") throw new Error("Preservation failed");
+      message(result.preserved_files ? `Preserved ${result.preserved_files} files (${auditBytes(result.preserved_bytes)}) in ${auditStorageText(result.preserved_location)}. Preserved copies never expire automatically.` : "No current audit files needed preservation.");
+      ++auditGeneration;
+      auditCursor = null;
+      await refreshAuditHistory();
+      if (auditVisible()) refreshAudit();
+    } catch (_) { message("Audit preservation did not complete. Existing files may remain in their original or preservation location; review storage before retrying bounded retention."); }
+    finally {
+      auditPreservePending = false;
+      $("#settings-save").disabled = !settingsStorageReady || settingsSavePending;
+      document.querySelectorAll("[data-audit-preserve]").forEach(button => { button.disabled = false; });
+    }
   }
 
   // Render a single audit-log row. Each row's "detail" column carries the
@@ -1619,60 +1715,64 @@
   }
 
   async function refreshAudit() {
-    if (!isTauri) return;
+    clearTimeout(auditTimer);
+    auditTimer = null;
+    if (!isTauri || !auditVisible() || auditReadPending) return;
+    const generation = auditGeneration;
+    const requestedCursor = auditCursor;
+    auditReadPending = true;
     const wrap = $("#audit-table-wrap");
     let warning = $("#audit-read-warning");
     if (!warning) {
       warning = el("p", { id: "audit-read-warning", class: "audit-read-warning small", role: "status", hidden: true });
       wrap.before(warning);
     }
-    const showFailure = () => {
+    let nextDelay = 2000;
+    try {
+      const res = await tauriInvoke("audit_tail", { params: { limit: 300, ...(requestedCursor ? { cursor: requestedCursor } : {}) } });
+      if (generation !== auditGeneration || !auditVisible()) return;
+      if (!res || res.ok === false || !Array.isArray(res.entries) || res.entries.length > 1000
+          || res.cursor != null && (typeof res.cursor !== "string" || !/^[\x20-\x7e]{1,256}$/.test(res.cursor))) throw new Error("Audit page unavailable");
+      warning.hidden = true;
+      const incoming = res.entries.filter(entry => entry && typeof entry === "object" && !Array.isArray(entry));
+      // Cursorless older bridges return a full snapshot, not an append page.
+      auditEntries = (res.reset === true || !requestedCursor ? incoming : auditEntries.concat(incoming)).slice(-300);
+      auditCursor = typeof res.cursor === "string" ? res.cursor : null;
+      const notes = [];
+      if (res.reset === true) notes.push("The audit file changed; the displayed page was replaced.");
+      if (res.limited === true) notes.push("Older entries were omitted by the bounded reader.");
+      if (Number.isSafeInteger(res.skipped) && res.skipped > 0) notes.push(`${res.skipped} invalid or oversized records were skipped.`);
+      if (res.partial_tail === true) notes.push("Waiting for an incomplete final record.");
+      if (res.has_more === true) { notes.push("More recent entries are being read."); nextDelay = 100; }
+      $("#audit-page-status").textContent = notes.join(" ");
+      renderAuditEntries(wrap);
+    } catch (_) {
+      if (generation !== auditGeneration || !auditVisible()) return;
       warning.textContent = "Audit history could not be read. Previously displayed entries are unchanged.";
       warning.hidden = false;
-    };
-    let res;
-    try {
-      res = await tauriInvoke("audit_tail", { params: { limit: 300 } });
-    } catch (e) {
-      console.warn("Audit history could not be read.");
-      showFailure();
-      return;
+    } finally {
+      auditReadPending = false;
+      scheduleAudit(nextDelay);
     }
-    if (!res || res.ok === false || !Array.isArray(res.entries)) {
-      showFailure();
-      return;
-    }
-    warning.hidden = true;
+  }
+
+  function renderAuditEntries(wrap) {
     clear(wrap);
-    const entries = res.entries.filter(entry => entry && typeof entry === "object" && !Array.isArray(entry));
+    const entries = auditEntries;
     if (entries.length === 0) {
       wrap.appendChild(el("div", { class: "muted small" }, "No entries yet."));
       return;
     }
-    // Count summary at the top so the user gets an instant read.
-    const counts = entries.reduce((acc, e) => {
-      const kind = typeof e.kind === "string" ? e.kind : "unknown";
+    const counts = entries.reduce((acc, entry) => {
+      const kind = typeof entry.kind === "string" ? entry.kind.slice(0, 80) : "unknown";
       acc.set(kind, (acc.get(kind) || 0) + 1);
       return acc;
     }, new Map());
-    const summary = Array.from(counts.entries())
-      .sort()
-      .map(([k, n]) => `${k}=${n}`)
-      .join(" · ");
-    wrap.appendChild(el("div", { class: "muted small", style: "margin-bottom:8px;" }, summary));
-    const table = el("table", { class: "audit-table" },
-      el("thead", {}, el("tr", {},
-        el("th", {}, "Time"),
-        el("th", {}, "Kind"),
-        el("th", {}, "Primary"),
-        el("th", {}, "Detail"),
-        el("th", {}, "Extra"),
-      )),
-      el("tbody", {},
-        ...entries.slice().reverse().map(auditRowFor),
-      ),
-    );
-    wrap.appendChild(table);
+    wrap.appendChild(el("div", { class: "muted small", style: "margin-bottom:8px;" },
+      Array.from(counts.entries()).sort().map(([kind, count]) => `${kind}=${count}`).join(" · ")));
+    wrap.appendChild(el("table", { class: "audit-table" },
+      el("thead", {}, el("tr", {}, ...["Time", "Kind", "Primary", "Detail", "Extra"].map(name => el("th", {}, name)))),
+      el("tbody", {}, ...entries.slice().reverse().map(auditRowFor))));
   }
 
   // ===== Searchable top bar pickers (backed by selects populated from ~/.aws/config) =====
@@ -6399,6 +6499,12 @@
     }
     $("#identity-panel-close")?.addEventListener("click", closeIdentityPanel);
     $("#audit-panel-close").addEventListener("click", closeAuditPanel);
+    document.querySelectorAll("[data-audit-preserve]").forEach(button => button.addEventListener("click", preserveAuditHistory));
+    document.addEventListener("visibilitychange", () => {
+      clearTimeout(auditTimer);
+      auditTimer = null;
+      if (!document.hidden && auditVisible()) refreshAudit();
+    });
   }
 
   // ===== Widget-config panel wiring (works in browser mode too, Save no-ops

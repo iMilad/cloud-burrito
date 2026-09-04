@@ -1612,6 +1612,7 @@ async fn widget_input_errors_return_before_any_additional_provider_work() {
 }
 
 include!("command_input_tests.rs");
+include!("command_audit_tests.rs");
 
 fn audit_events_for(fixture: &Fixture, id: &Value) -> Vec<Value> {
     crate::audit::tail(&fixture.state.runtime.paths, 1000)

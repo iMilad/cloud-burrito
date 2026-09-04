@@ -103,6 +103,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--suite", choices=["backend", "browser", "all"], default="all")
+    parser.add_argument("--backend-components", nargs="+", choices=["producer", "cli"], default=["producer", "cli"])
     parser.add_argument("--chrome", default="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     args = parser.parse_args()
     result = {"schema_version": 1, "recorded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -118,7 +119,8 @@ def main():
     save()
     progress_path = args.output.with_suffix(".progress.jsonl")
     if args.suite in ("backend", "all"):
-        for test in ["benchmarks::replay_backend_baseline", "benchmarks_cli::replay_cli_baseline"]:
+        tests = {"producer": "benchmarks::replay_backend_baseline", "cli": "benchmarks_cli::replay_cli_baseline"}
+        for test in [tests[component] for component in dict.fromkeys(args.backend_components)]:
             print(f"Replaying {test}", flush=True)
             result["backend"].append(run_backend(test, environment, progress_path))
             save()

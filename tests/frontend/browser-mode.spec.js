@@ -355,6 +355,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
             }
             return withContext({ render: "raw_json", data: {} }, payload);
           }
+          if (command === "audit_history" && payload?.params?.action === "status") return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0, total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
           if (command === "ping") return { version: "test" };
           if (command === "cli_availability") return { ok: true, status: "available", available: true, version_verified: false };
           if (command === "settings_get") {

@@ -18,6 +18,7 @@ pub fn defaults() -> Map<String, Value> {
     m.insert("default_profile".into(), json!(""));
     m.insert("default_region".into(), json!("eu-west-1"));
     m.insert("theme".into(), json!("dark"));
+    m.insert("audit_retention".into(), json!("preserve"));
     m
 }
 
@@ -32,6 +33,11 @@ fn normal_form(values: &Value) -> Result<Value, StorageError> {
     let obj = values.as_object().ok_or(StorageError::Invalid)?;
     for (k, v) in obj {
         if !cleaned.contains_key(k) {
+            continue;
+        }
+        if k == "audit_retention" {
+            // Retention is an explicit choice; only an absent legacy key defaults.
+            cleaned.insert(k.clone(), v.clone());
             continue;
         }
         if let Some(s) = v.as_str() {
@@ -138,7 +144,7 @@ mod tests {
         let tmp = TestDir::new();
         let paths = tmp.paths();
         let store = Store::new(paths.clone());
-        let values = json!({"aws_config_path":"~/synthetic/config.ini", "sso_session_name":"synthetic-session", "default_profile":"synthetic-profile", "default_region":"us-east-1", "theme":"light"});
+        let values = json!({"aws_config_path":"~/synthetic/config.ini", "sso_session_name":"synthetic-session", "default_profile":"synthetic-profile", "default_region":"us-east-1", "theme":"light", "audit_retention":"preserve"});
         let saved = save(&store, &values).unwrap();
         assert_eq!(saved["_storage"]["status"], "saved");
         let mut loaded = load(&Store::new(paths.clone())).unwrap();
