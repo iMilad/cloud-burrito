@@ -418,6 +418,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
         domain: "demo-domain",
         repository: "demo_repo",
         package_prefix: "demo",
+        mode: "list",
         max_packages: 25,
       },
       context: { mode: "inherit", profile: null, account_id: null, region: null },

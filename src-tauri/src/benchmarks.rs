@@ -22,6 +22,8 @@ const SEED: u64 = 7301;
 const WARMUPS: usize = 5;
 const TRIALS: usize = 30;
 const SCENARIOS: &[&str] = &[
+    "ca-progressive-50",
+    "ca-progressive-1000",
     "ca-50-immediate",
     "ca-1000-immediate",
     "ca-1-delay-100",
@@ -282,8 +284,10 @@ async fn replay_backend_baseline() {
             };
             let value = if let Some(directory) = &audit_dir {
                 measure_audit(scenario, directory, bytes)
+            } else if scenario.starts_with("ca-progressive-") {
+                Box::pin(measure_progressive_packages(scenario)).await
             } else {
-                measure_packages(scenario, (!warmup).then_some(index)).await
+                Box::pin(measure_packages(scenario, (!warmup).then_some(index))).await
             };
             emit(value.clone(), &source, warmup, index);
             if !warmup {
@@ -334,4 +338,41 @@ async fn transport_measurements_distinguish_attempts_completion_bytes_and_droppe
     assert_eq!(value["transport"]["peak_active_http_attempts"], 1);
     assert!(value["transport"]["first_response_ms"].as_f64().is_some());
     assert!(value["transport"]["response_body_bytes"].as_u64().unwrap() > 0);
+}
+
+async fn measure_progressive_packages(scenario: &str) -> Value {
+    let total = if scenario.contains("1000") { 1000 } else { 50 };
+    let directory = TestDir::new();
+    let mut expected = package_fixture(25, 0, Fault::None);
+    expected[0] = ExpectedRequest::rest(
+        "POST",
+        "/v1/packages",
+        json!({"domain":"synthetic-domain","repository":"synthetic-repository","format":"pypi","max-results":"50","next-token":null}),
+        json!({"packages":(0..50).map(|i|json!({"package":package_name(i)})).collect::<Vec<_>>(),
+            "nextToken": if total > 50 { Some("synthetic-next-page") } else { None }}),
+    );
+    let http = ScriptedHttp::new(expected).unordered();
+    let mut ctx = http.context(&directory,"codeartifact-packages",json!({
+        "mode":"list","domain":"synthetic-domain","repository":"synthetic-repository","package_prefix":"synthetic-package-","max_packages":total,
+    }));
+    http.begin_measurement();
+    let started = Instant::now();
+    let list = widgets::fetch("codeartifact-packages", &ctx).await;
+    let first_useful_ms = started.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(http.calls(), 1);
+    assert_eq!(list["rows"].as_array().unwrap().len(), 50);
+    ctx.inputs = json!({"mode":"enrich","domain":"synthetic-domain","repository":"synthetic-repository",
+        "package_prefix":"synthetic-package-","packages":(0..25).map(package_name).collect::<Vec<_>>()});
+    let enrichment = widgets::fetch("codeartifact-packages", &ctx).await;
+    let complete_ms = started.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(enrichment["rows"].as_array().unwrap().len(), 25);
+    assert_ne!(enrichment["partial"], true);
+    http.assert_finished();
+    json!({"scenario":scenario,"component":"codeartifact_progressive_producer","complete_ms":complete_ms,
+        "first_useful_ms":first_useful_ms,"first_useful_definition":"50 package identities returned before any enrichment request",
+        "complete_definition":"first visible25 metadata rows enriched; remaining rows/pages intentionally deferred, not full-dataset completion",
+        "package_count":total,"returned_rows":50,"enriched_rows":25,"planned_sdk_calls":51,
+        "transport":http.snapshot(),"outcome":"succeeded","sdk_retry_mode":"disabled","actual_retry_attempts":0,
+        "returned_json_bytes":serde_json::to_vec(&list).unwrap().len()+serde_json::to_vec(&enrichment).unwrap().len(),
+        "native_memory_bytes":null,"fixture_construction_in_timed_scope":false})
 }

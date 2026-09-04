@@ -59,6 +59,12 @@ struct VersionSeed {
 }
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
+    match ctx.input_str("mode", "").as_str() {
+        "list" => return fetch_identity_page(ctx).await,
+        "enrich" => return fetch_enrichment_batch(ctx).await,
+        "" => {}
+        _ => return progressive_input_error(),
+    }
     let domain = ctx.input_str("domain", DEFAULT_DOMAIN).trim().to_string();
     let repository = ctx
         .input_str("repository", DEFAULT_REPOSITORY)
@@ -171,6 +177,242 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         result["error"] = json!(error);
     }
     coverage.attach(result)
+}
+
+const PAGE_SIZE: usize = 50;
+const ENRICH_BATCH: usize = 25;
+const MAX_PAGE_TOKEN: usize = 4 * 1024;
+
+/// One identity page is useful independently of version availability. It never
+/// starts version or history work; the caller explicitly requests visible rows.
+async fn fetch_identity_page(ctx: &WidgetCtx) -> Value {
+    let domain = ctx.input_str("domain", DEFAULT_DOMAIN).trim().to_string();
+    let repository = ctx
+        .input_str("repository", DEFAULT_REPOSITORY)
+        .trim()
+        .to_string();
+    let prefix = ctx
+        .input_str("package_prefix", DEFAULT_PACKAGE_PREFIX)
+        .trim()
+        .to_string();
+    let owner = ctx.input_str("domain_owner", "").trim().to_string();
+    let token = ctx.input_str("page_token", "");
+    if domain.is_empty()
+        || repository.is_empty()
+        || prefix.is_empty()
+        || token.len() > MAX_PAGE_TOKEN
+    {
+        return progressive_input_error();
+    }
+    let limit = ctx
+        .input_i64("max_packages", DEFAULT_MAX_PACKAGES)
+        .clamp(1, PAGE_SIZE as i64) as usize;
+    if let Some(denied) = ctx.preflight("codeartifact", "ListPackages") {
+        return denied;
+    }
+    let client = Client::new(&ctx.sdk);
+    let mut request = client
+        .list_packages()
+        .domain(&domain)
+        .repository(&repository)
+        .format(PackageFormat::Pypi)
+        .package_prefix(&prefix)
+        .max_results(limit as i32);
+    if !owner.is_empty() {
+        request = request.domain_owner(&owner);
+    }
+    if !token.is_empty() {
+        request = request.next_token(&token);
+    }
+    let response = match ctx
+        .send("codeartifact", "ListPackages", request.send())
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let mut coverage = Coverage::unknown(0);
+            coverage.count("pages", 0);
+            coverage.limit("results", Some(limit));
+            coverage.failure(
+                "request_failed",
+                "This package identity page could not be loaded.",
+                false,
+            );
+            return coverage.attach(json!({"render":"table", "mode":"list", "columns":["package","latest_version","last_published"], "rows":[], "next_page_token":null, "error":err_msg(error)}));
+        }
+    };
+    let mut next = response
+        .next_token()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let invalid_next = next
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_PAGE_TOKEN || value == &token);
+    if invalid_next {
+        next = None;
+    }
+    let mut rows = Vec::new();
+    let mut seen = HashSet::new();
+    let mut budget = PageBudget::default();
+    budget.advance(None);
+    let mut omitted = false;
+    for package in response
+        .packages()
+        .iter()
+        .filter_map(|summary| summary.package())
+        .filter(|package| !package.is_empty())
+    {
+        if !seen.insert(package) {
+            continue;
+        }
+        if rows.len() == limit {
+            omitted = true;
+            break;
+        }
+        let row = json!({"package":package, "latest_version":"", "last_published":"", "versions":[], "enrichment_state":"pending"});
+        if !budget.retain(&row) {
+            omitted = true;
+            break;
+        }
+        rows.push(row);
+    }
+    rows.sort_by_key(|row| row["package"].as_str().unwrap_or("").to_ascii_lowercase());
+    let mut coverage = Coverage::complete(rows.len());
+    coverage.limit("results", Some(limit));
+    coverage.count("enrichment_requested", 0);
+    coverage.count("pending", rows.len());
+    budget.apply(&mut coverage, !rows.is_empty());
+    if next.is_some() || omitted {
+        coverage.has_more(Some(true));
+        coverage.limited(
+            "identity_page",
+            "Only this bounded page of package names was loaded; request another page to continue.",
+        );
+    }
+    if invalid_next {
+        coverage.failure("pagination_stalled", "The service returned a repeated or oversized continuation token; this page is retained without automatic continuation.", !rows.is_empty());
+    }
+    coverage.attach(json!({"render":"table", "mode":"list", "columns":["package","latest_version","last_published"], "rows":rows, "next_page_token":next}))
+}
+
+/// A request supplies only the exact visible package names. Results keep their
+/// input order even when the bounded concurrent SDK work completes out of order.
+async fn fetch_enrichment_batch(ctx: &WidgetCtx) -> Value {
+    let domain = ctx.input_str("domain", DEFAULT_DOMAIN).trim().to_string();
+    let repository = ctx
+        .input_str("repository", DEFAULT_REPOSITORY)
+        .trim()
+        .to_string();
+    let owner = ctx.input_str("domain_owner", "").trim().to_string();
+    let Some(packages) = ctx.input_value("packages").and_then(Value::as_array) else {
+        return progressive_input_error();
+    };
+    if domain.is_empty()
+        || repository.is_empty()
+        || packages.is_empty()
+        || packages.len() > ENRICH_BATCH
+    {
+        return progressive_input_error();
+    }
+    let mut seen = HashSet::new();
+    let mut names = Vec::with_capacity(packages.len());
+    for package in packages {
+        let Some(name) = package.as_str() else {
+            return progressive_input_error();
+        };
+        if name.is_empty()
+            || name.len() > 2048
+            || name.trim() != name
+            || name.chars().any(char::is_control)
+            || !seen.insert(name)
+        {
+            return progressive_input_error();
+        }
+        names.push(name.to_string());
+    }
+    let client = Client::new(&ctx.sdk);
+    let mut results = stream::iter(names.into_iter().enumerate())
+        .map(|(index, name)| {
+            let client = &client;
+            let domain = &domain;
+            let repository = &repository;
+            let owner = &owner;
+            async move {
+                let (row, attempted) =
+                    match latest_package_row(ctx, client, domain, repository, name.clone(), owner)
+                        .await
+                    {
+                        Ok(row) => (row, true),
+                        Err(_) => {
+                            let mut row = PackageRow::without_details(name);
+                            row.detail_failed = true;
+                            row.detail_denied = true;
+                            (row, false)
+                        }
+                    };
+                (index, row, attempted)
+            }
+        })
+        .buffer_unordered(VERSION_DETAIL_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    results.sort_by_key(|(index, _, _)| *index);
+    let failed = results
+        .iter()
+        .filter(|(_, row, _)| row.detail_failed)
+        .count();
+    let attempted = results
+        .iter()
+        .filter(|(_, _, attempted)| *attempted)
+        .count();
+    let versions_limited = results
+        .iter()
+        .filter(|(_, row, _)| row.versions_limited)
+        .count();
+    let mut budget = PageBudget::default();
+    let mut rows = Vec::new();
+    for (_, row, _) in results {
+        let state = if row.detail_failed {
+            "failed"
+        } else {
+            "complete"
+        };
+        let value = json!({"package":row.package, "latest_version":row.latest_version,
+            "last_published":if row.detail_failed { "".to_string() } else { row.last_published },
+            "versions":row.versions, "enrichment_state":state,
+            "enrichment_error":if row.detail_failed { Some(if row.detail_denied { "Version details were not permitted." } else { "Version details could not be loaded." }) } else { None }});
+        if !budget.retain(&value) {
+            break;
+        }
+        rows.push(value);
+    }
+    let mut coverage = Coverage::unknown(rows.len());
+    coverage.unknown_reason("requested_packages", "These details describe only the requested package names, not a complete repository listing.");
+    coverage.count("requested", packages.len());
+    coverage.count("attempted", attempted);
+    coverage.count("failed", failed);
+    coverage.count("completed", packages.len().saturating_sub(failed));
+    coverage.limit("packages", Some(ENRICH_BATCH));
+    coverage.limit("versions_per_package", Some(RECENT_VERSION_LIMIT));
+    if failed > 0 {
+        coverage.failure(
+            "enrichment_failed",
+            "Some requested package details could not be loaded; successful rows are retained.",
+            !rows.is_empty(),
+        );
+    }
+    if versions_limited > 0 {
+        coverage.limited(
+            "version_limit",
+            "Only the recent version snapshot is shown for packages with additional versions.",
+        );
+    }
+    budget.apply(&mut coverage, !rows.is_empty());
+    coverage.attach(json!({"render":"table", "mode":"enrich", "columns":["package","latest_version","last_published"], "rows":rows}))
+}
+
+fn progressive_input_error() -> Value {
+    json!({"ok":false,"error_type":"InvalidInput","render":"table","columns":["package","latest_version","last_published"],"rows":[],"error":"Use a bounded package page or one to 25 unique package names."})
 }
 
 fn package_table(rows: Vec<PackageRow>) -> Value {
@@ -718,5 +960,145 @@ mod tests {
         assert_eq!(crate::request::outcome(&result), "failed");
         let complete = version_history("synthetic-package", vec![(0, known, false)]);
         assert_eq!(crate::request::outcome(&complete), "succeeded");
+    }
+}
+
+#[cfg(test)]
+mod progressive_tests {
+    use super::*;
+    use crate::{
+        test_aws::{ExpectedRequest as Request, ScriptedHttp},
+        test_support::TestDir,
+    };
+    use std::time::Duration;
+
+    fn inputs(mode: &str) -> Value {
+        json!({"mode":mode,"domain":"synthetic-domain","repository":"synthetic-repo","package_prefix":"synthetic"})
+    }
+
+    #[tokio::test]
+    async fn first_identity_page_returns_pending_names_without_any_version_requests() {
+        for requested in [50, 1000] {
+            let dir = TestDir::new();
+            let packages: Vec<_> = (0..50)
+                .rev()
+                .map(|i| json!({"package":format!("synthetic-{i:04}"),"format":"pypi"}))
+                .collect();
+            let script = ScriptedHttp::new(vec![Request::rest(
+                "POST",
+                "/v1/packages",
+                json!({"max-results":"50","next-token":null}),
+                json!({"packages":packages,"nextToken":"synthetic-next"}),
+            )]);
+            let mut params = inputs("list");
+            params["max_packages"] = json!(requested);
+            let result = fetch(&script.context(&dir, "codeartifact-packages", params)).await;
+            script.assert_finished();
+            assert_eq!(script.calls(), 1);
+            assert_eq!(result["rows"].as_array().unwrap().len(), 50);
+            assert_eq!(result["rows"][0]["package"], "synthetic-0000");
+            assert!(result["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["enrichment_state"] == "pending" && row["versions"] == json!([])));
+            assert_eq!(result["next_page_token"], "synthetic-next");
+            assert_eq!(result["coverage"]["counts"]["enrichment_requested"], 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn continuation_is_explicit_and_a_repeated_token_preserves_the_current_page() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![Request::rest(
+            "POST",
+            "/v1/packages",
+            json!({"next-token":"synthetic-next"}),
+            json!({"packages":[{"package":"synthetic-last"}],"nextToken":"synthetic-next"}),
+        )]);
+        let mut params = inputs("list");
+        params["page_token"] = json!("synthetic-next");
+        let result = fetch(&script.context(&dir, "codeartifact-packages", params)).await;
+        script.assert_finished();
+        assert_eq!(result["rows"][0]["package"], "synthetic-last");
+        assert_eq!(result["rows"][0]["enrichment_state"], "pending");
+        assert!(result["next_page_token"].is_null());
+        assert_eq!(result["partial"], true);
+        assert!(result["coverage"]
+            .to_string()
+            .contains("pagination_stalled"));
+    }
+
+    #[tokio::test]
+    async fn delayed_and_failed_details_preserve_requested_order_and_successful_metadata() {
+        let dir = TestDir::new();
+        let script=ScriptedHttp::new(vec![
+            Request::rest("POST","/v1/package/versions",json!({"package":"synthetic-z"}),json!({"versions":[{"version":"2.0.0","status":"Published"}]})).delay(Duration::from_millis(30)),
+            Request::rest("POST","/v1/package/versions",json!({"package":"synthetic-a"}),json!({"versions":[{"version":"1.0.0","status":"Published"}]})),
+            Request::rest("GET","/v1/package/version",json!({"package":"synthetic-z","version":"2.0.0"}),json!({"packageVersion":{"packageName":"synthetic-z","version":"2.0.0","publishedTime":1700000000.0}})),
+            Request::rest("GET","/v1/package/version",json!({"package":"synthetic-a","version":"1.0.0"}),json!({"__type":"AccessDeniedException","message":"SYNTHETIC_PRIVATE_ENRICHMENT_ERROR"})).status(403),
+        ]).unordered();
+        let mut params = inputs("enrich");
+        params["packages"] = json!(["synthetic-z", "synthetic-a"]);
+        let result = fetch(&script.context(&dir, "codeartifact-packages", params)).await;
+        script.assert_finished();
+        assert_eq!(script.calls(), 4);
+        assert_eq!(result["rows"][0]["package"], "synthetic-z");
+        assert_eq!(result["rows"][0]["enrichment_state"], "complete");
+        assert!(!result["rows"][0]["last_published"]
+            .as_str()
+            .unwrap()
+            .is_empty());
+        assert_eq!(result["rows"][1]["package"], "synthetic-a");
+        assert_eq!(result["rows"][1]["enrichment_state"], "failed");
+        assert_eq!(result["rows"][1]["versions"], json!(["1.0.0"]));
+        assert_eq!(result["rows"][1]["latest_version"], "1.0.0");
+        assert_eq!(result["partial"], true);
+        assert!(!result
+            .to_string()
+            .contains("SYNTHETIC_PRIVATE_ENRICHMENT_ERROR"));
+    }
+
+    #[tokio::test]
+    async fn malformed_or_oversized_batches_fail_before_any_sdk_request() {
+        let dir = TestDir::new();
+        for packages in [
+            json!([]),
+            json!(["synthetic-a", "synthetic-a"]),
+            json!([" synthetic-a"]),
+            json!([17]),
+            json!((0..26)
+                .map(|i| format!("synthetic-{i}"))
+                .collect::<Vec<_>>()),
+        ] {
+            let script = ScriptedHttp::new(vec![]);
+            let mut params = inputs("enrich");
+            params["packages"] = packages;
+            let result = fetch(&script.context(&dir, "codeartifact-packages", params)).await;
+            script.assert_finished();
+            assert_eq!(script.calls(), 0);
+            assert_eq!(result["error_type"], "InvalidInput");
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_dates_keep_version_metadata_without_attempting_description() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![Request::rest(
+            "POST",
+            "/v1/package/versions",
+            json!({"package":"synthetic-one"}),
+            json!({"versions":[{"version":"1.0.0","status":"Published"}]}),
+        )]);
+        let mut params = inputs("enrich");
+        params["packages"] = json!(["synthetic-one"]);
+        let mut ctx = script.context(&dir, "codeartifact-packages", params);
+        ctx.policy=crate::aws::policy::Policy::parse("statements:\n  - effect: Allow\n    action: ['*']\n  - effect: Deny\n    action: ['codeartifact:DescribePackageVersion']\n").map_err(|error|error.message);
+        let result = fetch(&ctx).await;
+        script.assert_finished();
+        assert_eq!(script.calls(), 1);
+        assert_eq!(result["rows"][0]["versions"], json!(["1.0.0"]));
+        assert_eq!(result["rows"][0]["enrichment_state"], "failed");
+        assert_eq!(result["partial"], true);
     }
 }

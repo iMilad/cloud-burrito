@@ -531,6 +531,7 @@ pub(crate) fn entry_operations(
         "resource-lookup" => &[("resourcegroupstaggingapi", "GetResources")],
         "pipeline-runs" => &[("codepipeline", "ListPipelineExecutions")],
         "pipeline-execution-detail" => &[("codepipeline", "ListActionExecutions")],
+        "codeartifact-packages" if mode == "enrich" => &[("codeartifact", "ListPackageVersions")],
         "codeartifact-packages" => &[("codeartifact", "ListPackages")],
         "codeartifact-package-version-history" => &[("codeartifact", "DescribePackageVersion")],
         "codebuild-log" => &[("codebuild", "BatchGetBuilds")],

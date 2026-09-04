@@ -3351,6 +3351,7 @@
             toggleRowDetail(tr, row, opts, columns.length);
           });
         }
+        if (opts && typeof opts.onRowCreated === "function") opts.onRowCreated(tr, row);
         return tr;
       }),
     );
@@ -4893,6 +4894,19 @@
 
   async function loadCodeArtifactVersionHistory(row, cell, historyOptions) {
     if (!cell.isConnected) return;
+    if (historyOptions.ensureEnriched && row.enrichment_state && row.enrichment_state !== "complete") {
+      const waiting = beginOwnedRequest(cell, historyOptions.context);
+      clear(cell);
+      cell.appendChild(el("div", { class: "muted small", role: "status" }, "Waiting for package details…"));
+      await historyOptions.ensureEnriched(row);
+      if (!waiting.current()) return;
+      if (row.enrichment_state === "failed" && codeArtifactVersions(row).length === 0) {
+        clear(cell);
+        cell.appendChild(el("div", { class: "muted small" }, "Package details could not be loaded. Version history is unknown."));
+        cell.appendChild(el("button", { type: "button", class: "exec-btn small", onclick: () => loadCodeArtifactVersionHistory(row, cell, historyOptions) }, "Retry package details"));
+        return;
+      }
+    }
     const localVersions = codeArtifactVersions(row);
     if (!isTauri || !historyOptions.form) {
       renderCodeArtifactVersionHistory(row, cell, localVersions);
@@ -4946,19 +4960,196 @@
     }
   }
 
+  function codeArtifactLatestCell(row) {
+    const version = String(row.latest_version || "");
+    const state = row.enrichment_state;
+    if (!version) return el("span", { class: "codeartifact-enrichment-state" }, state === "pending"
+      ? "Details pending" : state === "failed" ? "Details unavailable" : "");
+    return el("span", { class: "codeartifact-latest-version" },
+      el("span", { class: "codeartifact-latest-version-value", title: version }, version),
+      codeArtifactCopyButton(version, `Copy latest version ${version}`),
+      ...(state === "failed" ? [el("span", { class: "codeartifact-enrichment-state muted small" }, "Some details unavailable")] : []),
+    );
+  }
+
   function renderCodeArtifactPackagesTable(host, spec, historyOptions = {}) {
     renderTable(host, spec, {
       expand: (row, cell) => loadCodeArtifactVersionHistory(row, cell, historyOptions),
+      onRowCreated: (tr, row) => {
+        tr.dataset.package = row.package;
+        tr.dataset.enrichmentState = row.enrichment_state || "complete";
+        historyOptions.rowElements?.set(row.package, tr);
+      },
       renderCell: (column, row) => {
         if (column !== "latest_version") return null;
-        const version = String(row.latest_version || "");
-        if (!version) return el("span", {}, "");
-        return el("span", { class: "codeartifact-latest-version" },
-          el("span", { class: "codeartifact-latest-version-value", title: version }, version),
-          codeArtifactCopyButton(version, `Copy latest version ${version}`),
-        );
+        return codeArtifactLatestCell(row);
       },
     });
+  }
+
+  function updateCodeArtifactPackageRow(tr, row, columns) {
+    if (!tr?.isConnected) return;
+    tr.dataset.enrichmentState = row.enrichment_state;
+    for (let index = 0; index < columns.length; index++) {
+      const column = columns[index];
+      if (!["latest_version", "last_published"].includes(column)) continue;
+      const td = tr.children[index];
+      if (!td) continue;
+      const hadFocus = td.contains(document.activeElement);
+      clear(td);
+      if (column === "latest_version") td.appendChild(codeArtifactLatestCell(row));
+      else {
+        const formatted = formatDisplayValue(column, String(row[column] || ""));
+        td.textContent = formatted.text;
+        if (formatted.className) td.className = formatted.className;
+      }
+      if (hadFocus) focusSafely(td.querySelector("button") || tr);
+    }
+    tr.dataset.search = columns.map(column => String(row[column] ?? "")).join(" ");
+    tr.setAttribute("aria-label", `Inspect ${columns.map(column => String(row[column] ?? "")).filter(Boolean).join(" · ")}`);
+  }
+
+  async function loadCodeArtifactPage(form, host, inputs, cursor = null, browsing = null) {
+    const request = beginOwnedRequest(host);
+    const context = contextPayloadForTile(form);
+    const state = browsing || { seen: new Set(), tokens: new Set(), pages: 0, limit: inputs.max_packages };
+    const remaining = state.limit - state.seen.size;
+    if (remaining <= 0 || state.pages >= 20 || cursor && state.tokens.has(cursor)) return;
+    if (cursor) state.tokens.add(cursor);
+    const pageInputs = { ...inputs, mode: "list", max_packages: Math.min(50, remaining), ...(cursor ? { page_token: cursor } : {}) };
+    const errorEl = $(".codeartifact-packages-error", form.closest(".widget"));
+    if (errorEl) errorEl.textContent = "Loading package names…";
+    try {
+      const result = await fetchWidgetData("codeartifact-packages", pageInputs, host, context, request);
+      if (!request.accept(result)) return;
+      if (result.render !== "table" || !validResultShape(result) || !validCoverage(result.coverage)) {
+        dispatchRender(host, result);
+        if (errorEl) errorEl.textContent = result.error || "Package names could not be loaded.";
+        return;
+      }
+      // The producer returns at most one identity page. Already-enriched rows
+      // can be reused without requesting their metadata again.
+      if (result.rows.length > Math.min(50, remaining)) {
+        failResult(host, request, "Package identity page exceeded its requested limit.");
+        return;
+      }
+      const pageRows = result.rows.map(row => ({ ...row,
+        enrichment_state: ["pending", "failed", "complete"].includes(row.enrichment_state) ? row.enrichment_state : "complete" }));
+      if (pageRows.some(row => typeof row.package !== "string" || !row.package) || new Set(pageRows.map(row => row.package)).size !== pageRows.length) {
+        failResult(host, request, "Package identity page was invalid.");
+        return;
+      }
+      pageRows.forEach(row => state.seen.add(row.package));
+      state.pages++;
+      const rowElements = new Map();
+      const baseCoverage = result.coverage;
+      const pageSpec = { ...result, rows: pageRows };
+      const controls = el("div", { class: "codeartifact-page-controls" });
+      const progress = el("p", { class: "muted small codeartifact-page-progress", role: "status" });
+      const batchOwners = el("div", { class: "codeartifact-batch-owners" });
+      const loadDetails = el("button", { type: "button", class: "btn btn-ghost small codeartifact-load-details" }, "Load remaining package details");
+      const next = el("button", { type: "button", class: "btn btn-ghost small codeartifact-next-page" }, "Next package page");
+      const current = () => request.current() && host._codeArtifactPage === page;
+      const page = { request, rows: pageRows, rowElements, current, pendingBatches: 0 };
+      host._codeArtifactPage = page;
+      function showProgress() {
+        if (!current()) return;
+        const pending = pageRows.filter(row => row.enrichment_state === "pending").length;
+        const failed = pageRows.filter(row => row.enrichment_state === "failed").length;
+        const completed = pageRows.length - pending - failed;
+        const nextToken = typeof result.next_page_token === "string" && result.next_page_token.length <= 4096 ? result.next_page_token : null;
+        const cursorRepeated = nextToken && state.tokens.has(nextToken);
+        const canContinue = nextToken && !cursorRepeated && state.seen.size < state.limit && state.pages < 20;
+        progress.textContent = `Page ${state.pages}: ${pageRows.length} package names. ${completed} details complete, ${pending} pending, ${failed} failed. ${state.seen.size} of up to ${state.limit} requested names browsed.`
+          + (cursorRepeated ? " Repeated continuation token; refresh to restart." : nextToken && !canContinue ? " Browse limit reached; refine the prefix or refresh." : "");
+        loadDetails.disabled = page.pendingBatches > 0 || pending + failed === 0;
+        loadDetails.textContent = failed && !pending ? "Retry failed package details" : "Load remaining package details";
+        next.hidden = !nextToken;
+        next.disabled = !canContinue;
+        const coverage = baseCoverage ? { ...baseCoverage, counts: { ...baseCoverage.counts,
+          enrichment_complete: completed, enrichment_pending: pending, enrichment_failed: failed },
+          completeness: failed ? "unknown" : pending && baseCoverage.completeness === "complete" ? "limited" : baseCoverage.completeness,
+          reasons: [...baseCoverage.reasons,
+            ...(pending ? [{ code: "enrichment_pending", message: "Package names are available; some metadata has not been requested or completed." }] : []),
+            ...(failed ? [{ code: "enrichment_failed", message: "Some package metadata failed. Successful rows remain available." }] : []),
+          ] } : undefined;
+        const display = { ...pageSpec, coverage, ...(failed ? { ok: false, partial: true, error: "Some package metadata could not be loaded." } : {}) };
+        const view = host._resultView;
+        if (view) { view.coverage = coverage; view.state = resultState(display); view.nodes = Array.from(host.childNodes).filter(node => !node.classList?.contains("result-status")); }
+        paintResultStatus(host, resultState(display), display, view);
+      }
+      function enrich(requested) {
+        if (!current()) return Promise.resolve();
+        const existing = requested.map(row => row._enrichmentPromise).filter(Boolean);
+        const candidates = requested.filter(row => row.enrichment_state !== "complete" && !row._enrichmentPromise).slice(0, 25);
+        if (!candidates.length) return Promise.all(existing);
+        const owner = el("div", { class: "codeartifact-batch-owner" });
+        batchOwners.appendChild(owner);
+        const batchRequest = beginOwnedRequest(owner, context);
+        const batchInputs = { domain: inputs.domain, repository: inputs.repository, package_prefix: inputs.package_prefix,
+          ...(inputs.domain_owner ? { domain_owner: inputs.domain_owner } : {}), mode: "enrich", packages: candidates.map(row => row.package) };
+        page.pendingBatches++;
+        const work = (async () => {
+          try {
+            const enriched = await fetchWidgetData("codeartifact-packages", batchInputs, owner, context, batchRequest);
+            if (!current() || !batchRequest.accept(enriched)) return;
+            const valid = enriched.render === "table" && validResultShape(enriched) && validCoverage(enriched.coverage);
+            const returned = new Map(valid ? enriched.rows.filter(row => candidates.some(candidate => candidate.package === row.package)).map(row => [row.package, row]) : []);
+            for (const row of candidates) {
+              const detail = returned.get(row.package);
+              if (detail && ["complete", "failed"].includes(detail.enrichment_state)) {
+                for (const key of ["latest_version", "last_published", "versions", "enrichment_state", "enrichment_error"]) row[key] = detail[key];
+              } else { row.enrichment_state = "failed"; row.enrichment_error = "Package metadata was unavailable."; }
+              updateCodeArtifactPackageRow(rowElements.get(row.package), row, pageSpec.columns);
+            }
+            renderWithResultState(owner, enriched, () => { clear(owner); owner.appendChild(el("span", { class: "muted small" }, `${candidates.length} package detail results received.`)); });
+          } catch (_) {
+            if (!current() || !batchRequest.current()) return;
+            for (const row of candidates) { row.enrichment_state = "failed"; row.enrichment_error = "Package metadata could not be loaded.";
+              updateCodeArtifactPackageRow(rowElements.get(row.package), row, pageSpec.columns); }
+            failResult(owner, batchRequest, "Package metadata could not be loaded. Retry failed package details.");
+          } finally {
+            candidates.forEach(row => { delete row._enrichmentPromise; });
+            page.pendingBatches--;
+            if (current()) {
+              // Filtering sees the newly available metadata without replacing
+              // the input, row nodes, selected text, or expanded details.
+              host.querySelector(".table-filter")?.dispatchEvent(new Event("input", { bubbles: true }));
+              showProgress();
+              // Keep at most four bounded batch summaries on the active page.
+              while (batchOwners.children.length > 4 && !batchOwners.firstElementChild.querySelector(".request-cancel")) batchOwners.firstElementChild.remove();
+            }
+          }
+        })();
+        candidates.forEach(row => { row._enrichmentPromise = work; });
+        showProgress();
+        return Promise.all([...existing, work]);
+      }
+      renderCodeArtifactPackagesTable(host, pageSpec, { form, inputs, context, rowElements,
+        ensureEnriched: row => row._enrichmentPromise || enrich([row]) });
+      controls.append(progress, loadDetails, next, batchOwners);
+      host.appendChild(controls);
+      loadDetails.addEventListener("click", () => { if (current()) enrich(pageRows.filter(row => row.enrichment_state !== "complete")); });
+      next.addEventListener("click", async () => {
+        if (!current() || next.disabled) return;
+        const keyboard = document.activeElement === next;
+        const loaded = await loadCodeArtifactPage(form, host, inputs, result.next_page_token, state);
+        if (keyboard && loaded?.current()) focusSafely(host.querySelector(".codeartifact-next-page:not([disabled])") || host.querySelector("tr.expandable"));
+      });
+      if (errorEl) errorEl.textContent = result.error || "";
+      persistCodeArtifactInputs(form, inputs);
+      host.hidden = false;
+      showProgress();
+      // Yield one painted frame of identities before requesting metadata.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (current()) enrich(pageRows.filter(row => row.enrichment_state === "pending").slice(0, 25));
+      }));
+      return page;
+    } catch (error) {
+      if (!request.current()) return;
+      if (errorEl) errorEl.textContent = "Package names could not be loaded. Retry.";
+      failResult(host, request, String(error));
+    }
   }
 
   async function renderCodeArtifactPackages(target) {
@@ -4991,33 +5182,7 @@
             return;
           }
           $(".codeartifact-max", form).value = String(inputs.max_packages);
-          errorEl.textContent = "Loading...";
-          clear(rows);
-          const request = beginOwnedRequest(rows);
-          try {
-            const fetchInputs = { ...inputs };
-            const fetchContext = contextPayloadForTile(form);
-            const result = await fetchWidgetData(
-              "codeartifact-packages",
-              fetchInputs,
-              form,
-              fetchContext, request,
-            );
-            if (!request.accept(result)) return;
-            if (result && result.error) errorEl.textContent = result.error;
-            else errorEl.textContent = "";
-            renderCodeArtifactPackagesTable(rows, result, {
-              form,
-              inputs: fetchInputs,
-              context: fetchContext,
-            });
-            rows.hidden = false;
-            persistCodeArtifactInputs(form, inputs);
-          } catch (err) {
-            if (!request.current()) return;
-            errorEl.textContent = `Error: ${err}`;
-            failResult(rows, request, String(err));
-          }
+          await loadCodeArtifactPage(form, rows, inputs);
         });
       }
     });

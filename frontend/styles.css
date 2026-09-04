@@ -2738,3 +2738,11 @@ body :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible 
   .connection-status { margin-inline: 10px; }
   .side-panel-body { padding: 14px; }
 }
+
+/* Bounded package pages keep metadata controls in the widget scroll area. */
+.codeartifact-page-controls { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.codeartifact-page-controls > button { justify-self: start; }
+.codeartifact-page-progress { margin: 0; overflow-wrap: anywhere; }
+.codeartifact-enrichment-state { color: var(--text-secondary); font-size: 11px; }
+tr[data-enrichment-state="failed"] .codeartifact-enrichment-state { color: var(--error); }
+.codeartifact-batch-owners { display: grid; gap: var(--space-2); min-width: 0; }

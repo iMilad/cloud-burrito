@@ -362,21 +362,62 @@ fn widget_inputs(name: &str, p: &Map<String, Value>) -> Check {
         }
         "log-tail" | "cloudwatch-logs" | "logs-insights" => log_inputs(name, p)?,
         "codeartifact-packages" => {
-            keys(
-                p,
-                &[
+            let mode = match p.get("mode") {
+                None => "",
+                Some(Value::String(mode)) if matches!(mode.as_str(), "list" | "enrich") => {
+                    mode.as_str()
+                }
+                _ => return Err("Unknown package request mode"),
+            };
+            let allowed: &[&str] = match mode {
+                "list" => &[
+                    "mode",
+                    "domain",
+                    "repository",
+                    "package_prefix",
+                    "domain_owner",
+                    "max_packages",
+                    "page_token",
+                ],
+                "enrich" => &[
+                    "mode",
+                    "domain",
+                    "repository",
+                    "package_prefix",
+                    "domain_owner",
+                    "packages",
+                ],
+                _ => &[
                     "domain",
                     "repository",
                     "package_prefix",
                     "domain_owner",
                     "max_packages",
                 ],
-            )?;
+            };
+            keys(p, allowed)?;
             for key in ["domain", "repository", "package_prefix"] {
                 optional_text(p, key, MAX_NAME, false, false, false)?;
             }
             optional_text(p, "domain_owner", 128, true, false, false)?;
-            integer(p, "max_packages", 1, 1000)?;
+            if mode == "enrich" {
+                let packages = array(required(p, "packages")?, 25)?;
+                if packages.is_empty() {
+                    return Err("At least one package name is required");
+                }
+                let mut seen = HashSet::new();
+                for package in packages {
+                    let name = text(package, MAX_NAME, false, false)?;
+                    if name.trim() != name || !seen.insert(name) {
+                        return Err("Package names must be unique exact names");
+                    }
+                }
+            } else {
+                integer(p, "max_packages", 1, 1000)?;
+                if mode == "list" {
+                    optional_text(p, "page_token", 4096, false, false, false)?;
+                }
+            }
         }
         "codeartifact-package-version-history" => {
             keys(
@@ -885,5 +926,54 @@ mod tests {
         // decoded bytes would incorrectly admit this otherwise bounded input.
         assert!(json_budget(&json!(vec!["\u{1}".repeat(32_000); 6])).is_err());
         assert!(json_budget(&json!({"fixture": [null, true, 42, "bounded"]})).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod progressive_package_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn check(inputs: Value) -> Check {
+        validate(
+            "widget_fetch",
+            &json!({"request_id":"synthetic-request","widget":"codeartifact-packages","inputs":inputs,"context":{"mode":"inherit","profile":null,"account_id":null,"region":null}}),
+        )
+    }
+
+    #[test]
+    fn progressive_shapes_are_mode_specific_and_bounded() {
+        for inputs in [
+            json!({"mode":"list","page_token":"synthetic-next","max_packages":1000}),
+            json!({"mode":"enrich","packages":["synthetic-one"]}),
+            json!({}),
+        ] {
+            assert!(check(inputs).is_ok());
+        }
+        for inputs in [
+            json!({"mode":"list","packages":["synthetic-one"]}),
+            json!({"mode":"enrich","page_token":"synthetic-next","packages":["synthetic-one"]}),
+            json!({"mode":"enrich","max_packages":50,"packages":["synthetic-one"]}),
+            json!({"mode":"enrich","packages":["synthetic-one","synthetic-one"]}),
+            json!({"mode":"enrich","packages":[" synthetic-one"]}),
+            json!({"mode":"enrich","packages":[]}),
+            json!({"mode":"enrich","packages":(0..26).map(|i|format!("synthetic-{i}")).collect::<Vec<_>>()}),
+            json!({"mode":"list","page_token":"x".repeat(4097)}),
+            json!({"mode":"unknown"}),
+            json!({"page_token":"synthetic-next"}),
+        ] {
+            assert!(
+                check(inputs.clone()).is_err(),
+                "unexpected accepted input: {inputs}"
+            );
+        }
+        assert_eq!(
+            crate::widgets::entry_operations("codeartifact-packages", &json!({"mode":"list"})),
+            &[("codeartifact", "ListPackages")]
+        );
+        assert_eq!(
+            crate::widgets::entry_operations("codeartifact-packages", &json!({"mode":"enrich"})),
+            &[("codeartifact", "ListPackageVersions")]
+        );
     }
 }
