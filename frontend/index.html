@@ -1,14 +1,40 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-design="studio">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cloud Burrito</title>
   <link rel="icon" type="image/svg+xml" href="assets/cloud-burrito-icon.svg" />
+  <script src="studio.js"></script>
   <link rel="stylesheet" href="vendor/gridstack.min.css" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="studio.css" />
 </head>
 <body>
+  <aside class="studio-rail studio-only" aria-label="Workspace navigation">
+    <a class="studio-wordmark" href="#" aria-label="Cloud Burrito workspace">
+      <img src="assets/cloud-burrito-icon.svg" alt="" width="38" height="38" />
+      <span>cloud<br /><b>burrito.</b></span>
+    </a>
+    <div class="studio-rail-label">YOUR CONTROL ROOM</div>
+    <nav id="studio-nav" aria-label="Open tools">
+      <button type="button" data-studio-jump="overview" aria-current="location"><span class="studio-nav-icon" aria-hidden="true">◈</span><span>Overview</span><span id="studio-tool-count" class="studio-count">0</span></button>
+      <div class="studio-nav-rule"></div>
+      <button type="button" data-studio-jump="pipeline-runs"><span class="studio-nav-icon" aria-hidden="true">⇢</span><span>Pipelines</span></button>
+      <button type="button" data-studio-jump="cfn-stacks"><span class="studio-nav-icon" aria-hidden="true">▱</span><span>Infrastructure</span></button>
+      <button type="button" data-studio-jump="log-tail"><span class="studio-nav-icon" aria-hidden="true">≋</span><span>Logs</span></button>
+      <button type="button" data-studio-jump="errors-by-stack"><span class="studio-nav-icon" aria-hidden="true">⌁</span><span>Error signals</span></button>
+      <button type="button" data-studio-jump="codeartifact-packages"><span class="studio-nav-icon" aria-hidden="true">⬡</span><span>Packages</span></button>
+      <button type="button" data-studio-jump="resource-lookup"><span class="studio-nav-icon" aria-hidden="true">⌕</span><span>Resource lookup</span></button>
+    </nav>
+    <div class="studio-rail-bottom">
+      <div class="studio-rail-note"><span aria-hidden="true">↗</span><p>Stay curious.<br /><b>Keep the context.</b></p></div>
+      <button type="button" data-studio-action="settings"><span aria-hidden="true">⚙</span> Settings</button>
+      <button type="button" data-studio-action="audit"><span aria-hidden="true">◷</span> Audit history</button>
+      <span class="studio-edition">STUDIO EDITION <i aria-hidden="true"></i></span>
+    </div>
+  </aside>
+  <button type="button" id="studio-return">Try Studio <span aria-hidden="true">↗</span></button>
   <header class="topbar">
     <div class="topbar-left">
       <div class="brand">
@@ -82,6 +108,29 @@
   <p id="connection-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
 
   <main class="dashboard">
+    <section class="studio-overview studio-only" aria-labelledby="studio-heading">
+      <div class="studio-hero-copy">
+        <div class="studio-eyebrow"><span aria-hidden="true"></span> THE INVESTIGATION WORKSPACE</div>
+        <h1 id="studio-heading">Less noise.<br /><span>More signal.</span></h1>
+        <p>From a failed run to the line that explains it.<br />Your tools. Your context. One workspace.</p>
+        <span id="studio-mode-label" class="studio-mode">Checking workspace mode…</span>
+      </div>
+      <div class="studio-route" aria-label="Investigation shortcuts">
+        <svg class="studio-route-art" viewBox="0 0 360 270" fill="none" aria-hidden="true"><circle cx="258" cy="150" r="113" stroke="currentColor" stroke-width="1"/><circle cx="258" cy="150" r="87" stroke="currentColor" stroke-width="1"/><path d="M70 243 300 13M194 257 337 114" stroke="currentColor"/><circle cx="329" cy="63" r="8" fill="currentColor"/></svg>
+        <div class="studio-route-label">FOLLOW A THREAD <span aria-hidden="true">↙</span></div>
+        <button type="button" data-studio-jump="pipeline-runs"><span class="studio-route-number">01</span><span><b>Start with the run</b><small>Pipeline executions</small></span><span class="studio-route-arrow" aria-hidden="true">↗</span></button>
+        <button type="button" data-studio-jump="cfn-stacks"><span class="studio-route-number">02</span><span><b>Find the moving parts</b><small>CloudFormation stacks</small></span><span class="studio-route-arrow" aria-hidden="true">↗</span></button>
+        <button type="button" data-studio-jump="log-tail"><span class="studio-route-number">03</span><span><b>Get to the evidence</b><small>Lambda log output</small></span><span class="studio-route-arrow" aria-hidden="true">↗</span></button>
+      </div>
+    </section>
+    <section class="studio-workspace-bar studio-only" aria-label="Workspace controls">
+      <div><span class="studio-section-index">01 /</span><h2>Your workspace</h2><span id="studio-summary">Open tools</span></div>
+      <div class="studio-workspace-actions">
+        <button type="button" id="studio-classic-switch" title="Return to the original design"><span aria-hidden="true">↶</span> Classic view</button>
+        <button type="button" id="studio-density" aria-pressed="false"><svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="2" y="3" width="14" height="4" rx="1"/><rect x="2" y="11" width="14" height="4" rx="1"/></svg> Compact view</button>
+        <button type="button" id="studio-launcher" aria-label="Search commands" aria-haspopup="dialog" aria-controls="command-panel"><span aria-hidden="true">⌕</span> Search commands <kbd>⌘ / Ctrl K</kbd></button>
+      </div>
+    </section>
     <div class="grid-stack" id="grid-stack">
 
       <!-- Pipeline Runs -->
@@ -458,6 +507,13 @@
     </div>
   </aside>
 
+  <section id="command-panel" class="studio-command-panel" role="dialog" aria-modal="true" aria-labelledby="command-title" aria-hidden="true" inert>
+    <div class="studio-command-heading"><div><span class="studio-eyebrow">AT YOUR FINGERTIPS</span><h2 id="command-title">Where next?</h2></div><button type="button" id="command-close" aria-label="Close commands">Esc <span aria-hidden="true">×</span></button></div>
+    <input type="search" id="command-search" aria-label="Search commands" placeholder="Find an open tool or workspace action…" autocomplete="off" spellcheck="false" />
+    <div id="command-results" aria-label="Matching commands"></div>
+    <p id="command-empty" hidden>No matching commands. Try a tool name.</p>
+    <div class="studio-command-footer"><span>↑ ↓ to move · Enter to open</span><span>WORKSPACE COMMANDS</span></div>
+  </section>
   <div class="scrim" id="scrim" hidden></div>
 
   <script src="vendor/gridstack-all.js"></script>

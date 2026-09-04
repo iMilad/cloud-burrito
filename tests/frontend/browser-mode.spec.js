@@ -39,20 +39,17 @@ test("starts in browser mode and renders mock widgets", async ({ page }) => {
   await expect(stackWidget(page).locator(".table-filter-count")).toHaveText("4");
 });
 
-test("omits the unavailable global search shortcut and keeps the persistent region picker", async ({ page }) => {
+test("keeps command navigation separate from unavailable global search and persists the region picker", async ({ page }) => {
   const globalSearch = page.getByRole("textbox", { name: "Global search" });
   await expect(globalSearch).toHaveCount(0);
   const filter = stackWidget(page).getByRole("textbox", { name: "Search stacks (name, status, or date)…" });
   await filter.focus();
-  await page.evaluate(() => {
-    window.__shortcutPrevented = null;
-    document.addEventListener("keydown", event => {
-      if (event.ctrlKey && event.key.toLowerCase() === "k") window.__shortcutPrevented = event.defaultPrevented;
-    });
-  });
   await page.keyboard.press("Control+K");
   await expect(globalSearch).toHaveCount(0);
-  expect(await page.evaluate(() => window.__shortcutPrevented)).toBe(false);
+  await expect(page.locator("#command-panel")).toHaveAttribute("aria-hidden", "false");
+  await expect(page.locator("#command-search")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(filter).toBeFocused();
 
   const region = page.getByRole("combobox", { name: "Default region" });
   await region.click();
@@ -86,6 +83,23 @@ test("omits the unavailable global search shortcut and keeps the persistent regi
   await expect(stackWidget(page).locator(".widget-context")).toHaveText(
     "Default · (none) · (none) · us-east-1"
   );
+});
+
+test("a delayed blur cannot dismiss a picker that has already regained focus", async ({ page }) => {
+  await page.clock.install();
+  const region = page.getByRole("combobox", { name: "Default region" });
+  await region.focus();
+  await region.fill("us");
+  await page.locator("#theme-toggle").focus();
+  await region.focus();
+  await region.fill("us");
+  await page.clock.fastForward(120);
+  await expect(region).toBeFocused();
+  await expect(region).toHaveValue("us");
+  await expect(region).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#topbar-picker-list").getByRole("option")).toHaveText("us-east-1");
+  await region.press("Enter");
+  await expect(page.locator("#region-select")).toHaveValue("us-east-1");
 });
 
 test("beta exposes working widget controls and honest log-count naming", async ({ page }) => {

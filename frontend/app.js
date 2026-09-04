@@ -48,7 +48,8 @@
 
   function closeActivePanel(options = {}) {
     const close = { "side-panel": closeSidePanel, "settings-panel": closeSettingsPanel,
-      "audit-panel": closeAuditPanel, "identity-panel": closeIdentityPanel, "widget-config-panel": closeWidgetConfigPanel };
+      "audit-panel": closeAuditPanel, "identity-panel": closeIdentityPanel, "widget-config-panel": closeWidgetConfigPanel,
+      "command-panel": options => window.CloudBurritoStudio?.close(options) };
     if (activePanel) close[activePanel.id]?.(options);
   }
 
@@ -1994,7 +1995,7 @@
       }
     });
     input.addEventListener("blur", () => setTimeout(() => {
-      if (topbarPickerInput === input) closeTopbarPicker(true);
+      if (topbarPickerInput === input && document.activeElement !== input) closeTopbarPicker(true);
     }, 120));
     syncTopbarPicker(select);
   }
@@ -7525,6 +7526,7 @@
     bootComplete = true;
     if (isTauri) startDesktopPickers();
     else initTopbarPickers();
+    window.CloudBurritoStudio?.init({ showPanel, hidePanel });
   }
   document.addEventListener("DOMContentLoaded", boot);
 })();
