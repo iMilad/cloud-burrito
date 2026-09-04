@@ -40,6 +40,15 @@ mod test_support;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let paths = match paths::AppPaths::native() {
+        Ok(paths) => paths,
+        Err(message) => {
+            // A fixed message avoids leaking local paths. Refuse before Tauri,
+            // audit storage, or any other startup work can use a relative home.
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    };
     tauri::Builder::default()
         // Only deliberate application diagnostics reach stdout/platform logs.
         // SDK/dependency transport logs are not a reviewed redacted surface.
@@ -48,7 +57,7 @@ pub fn run() {
                 .filter(|metadata| metadata.target().starts_with("cloud_burrito"))
                 .build(),
         )
-        .manage(AppState::default())
+        .manage(AppState::with_runtime(runtime::Runtime::native(paths)))
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::aws_set_account,

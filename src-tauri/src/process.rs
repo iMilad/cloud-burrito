@@ -340,6 +340,10 @@ fn configured_command(
     home: &Path,
 ) -> Result<Command, String> {
     let mut command = Command::new(&launch.program);
+    // The GUI owns piped output; a Windows console window is unnecessary.
+    // Keep direct executable launch and the existing argument/environment fence.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     command
         .args(&launch.prefix)
         .args(&request.argv)
@@ -502,7 +506,10 @@ fn discovery_candidates(ambient: &[(OsString, OsString)], platform: Platform) ->
     if platform == Platform::Windows {
         for name in ["ProgramFiles", "ProgramFiles(x86)"] {
             if let Some(directory) = env_value(ambient, name, platform) {
-                candidates.push(Path::new(directory).join("Amazon/AWSCLIV2/aws.exe"));
+                let directory = Path::new(directory);
+                if directory.is_absolute() {
+                    candidates.push(directory.join("Amazon/AWSCLIV2/aws.exe"));
+                }
             }
         }
     } else {
@@ -1103,6 +1110,65 @@ mod tests {
     }
 
     #[test]
+    fn windows_gui_discovery_works_without_path_with_spaces_and_unicode() {
+        let dir = crate::test_support::TestDir::new();
+        let program_files = dir.path().join("Synthetic Program Files 雲");
+        let binary = program_files.join("Amazon/AWSCLIV2/aws.exe");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fake_image(&binary, b"MZsynthetic-never-executed", false);
+        let ambient = vec![("pRoGrAmFiLeS".into(), program_files.into_os_string())];
+        let launch = discover_binary(&ambient, Platform::Windows).unwrap();
+        assert_eq!(launch.program, binary.canonicalize().unwrap());
+        assert!(launch.prefix.is_empty());
+        let availability = CliAvailability::from_discovery(Some(launch)).response();
+        assert_eq!(availability["available"], true);
+        assert_eq!(availability["version_verified"], false);
+        assert!(availability.get("path").is_none());
+    }
+
+    #[test]
+    fn gui_discovery_fallback_candidates_do_not_need_an_ambient_path() {
+        let candidates = discovery_candidates(&[], Platform::Unix);
+        assert!(candidates.contains(&PathBuf::from("/usr/local/bin/aws")));
+        assert!(candidates.contains(&PathBuf::from("/usr/bin/aws")));
+        // Candidate enumeration does not inspect installed system binaries.
+        assert!(discovery_candidates(&[], Platform::Windows).is_empty());
+        assert!(discovery_candidates(
+            &[("ProgramFiles".into(), "relative-programs".into())],
+            Platform::Windows
+        )
+        .is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_path_list_rejects_drive_relative_entries() {
+        let dir = crate::test_support::TestDir::new();
+        let install = dir.path().join("Synthetic CLI 雲");
+        std::fs::create_dir_all(&install).unwrap();
+        let binary = install.join("aws.exe");
+        fake_image(&binary, b"MZsynthetic-never-executed", false);
+        let path = std::env::join_paths([
+            Path::new(r"C:relative"),
+            Path::new(r"\root-relative"),
+            install.as_path(),
+        ])
+        .unwrap();
+        let ambient = vec![("Path".into(), path)];
+        assert_eq!(
+            discovery_candidates(&ambient, Platform::Windows),
+            vec![binary.clone()]
+        );
+        assert_eq!(
+            discover_binary(&ambient, Platform::Windows)
+                .unwrap()
+                .program,
+            binary.canonicalize().unwrap()
+        );
+        assert!(native_executable(Path::new(r"C:aws.exe"), Platform::Windows).is_none());
+    }
+
+    #[test]
     fn availability_uses_only_injected_candidates_and_does_not_probe_a_version() {
         let dir = crate::test_support::TestDir::new();
         let missing = dir.path().join("absent-synthetic-aws");
@@ -1334,6 +1400,48 @@ mod tests {
         assert!(
             retained_path.join("unowned-child-file").exists(),
             "cleanup must not recursively remove files"
+        );
+    }
+
+    #[test]
+    fn command_plan_keeps_unicode_paths_and_query_as_single_arguments() {
+        let dir = crate::test_support::TestDir::new();
+        let base = dir.path().join("Synthetic CLI 雲");
+        std::fs::create_dir_all(&base).unwrap();
+        let home = IsolatedHome::create_in(&base).unwrap();
+        let binary = base.join(if cfg!(windows) { "aws.exe" } else { "aws" });
+        let mut request = request();
+        request
+            .argv
+            .extend(["--query".into(), "{Label: 'Synthetic 雲 value'}".into()]);
+        let command = configured_command(
+            &LaunchSpec {
+                program: binary.clone(),
+                prefix: Vec::new(),
+            },
+            &request,
+            &[("PATH".into(), "untrusted-inherited-path".into())],
+            &home.0,
+        )
+        .unwrap();
+        assert_eq!(command.as_std().get_program(), binary.as_os_str());
+        assert_eq!(command.as_std().get_current_dir(), Some(home.0.as_path()));
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert_eq!(args.len(), request.argv.len());
+        assert_eq!(
+            args.last(),
+            Some(&OsStr::new("{Label: 'Synthetic 雲 value'}"))
+        );
+        let env: Vec<_> = command.as_std().get_envs().collect();
+        assert!(!env.iter().any(|(key, _)| *key == "PATH"));
+        for key in ["HOME", "USERPROFILE"] {
+            assert!(env
+                .iter()
+                .any(|(name, value)| *name == key && *value == Some(home.0.as_os_str())));
+        }
+        assert!(
+            !binary.exists(),
+            "building the command must not execute anything"
         );
     }
 

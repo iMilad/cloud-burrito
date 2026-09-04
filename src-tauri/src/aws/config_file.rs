@@ -314,17 +314,39 @@ fn validate_start_url(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Expand a leading `~` to the user's home directory.
-pub fn expand(path: &str) -> PathBuf {
-    if path == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
-    }
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(path)
+/// Expand a leading `~` without falling back to the launch directory.
+pub fn expand(path: &str) -> Result<PathBuf, String> {
+    expand_with_home(path, cfg!(windows), || {
+        #[cfg(test)]
+        panic!("tests must inject home expansion instead of accessing personal storage");
+        #[cfg(not(test))]
+        dirs::home_dir()
+    })
+}
+
+fn expand_with_home(
+    path: &str,
+    windows: bool,
+    home: impl FnOnce() -> Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    let rest = if path == "~" {
+        Some("")
+    } else {
+        path.strip_prefix("~/")
+            .or_else(|| windows.then(|| path.strip_prefix("~\\")).flatten())
+    };
+    let Some(rest) = rest else {
+        // Explicit custom paths retain their existing spelling and semantics.
+        return Ok(PathBuf::from(path));
+    };
+    let home = home().filter(|home| home.is_absolute()).ok_or_else(|| {
+        "User home is unavailable; choose an absolute AWS config path in Settings".to_string()
+    })?;
+    Ok(if windows {
+        home.join(rest.replace('\\', "/"))
+    } else {
+        home.join(rest)
+    })
 }
 
 const MAX_CONFIG_BYTES: usize = 2 * 1024 * 1024;
@@ -332,6 +354,7 @@ const MAX_DISCOVERY_PROFILES: usize = 500;
 
 #[derive(Clone, Copy)]
 enum DiscoveryFailure {
+    HomeUnavailable,
     Missing,
     Unreadable,
     TooLarge,
@@ -382,11 +405,19 @@ fn inspect_with_reader(
     sso_constraint: Option<&str>,
     read: impl FnOnce(&Path) -> Result<Vec<u8>, DiscoveryFailure>,
 ) -> Value {
-    let resolved = expand(config_path);
+    inspect_resolved(config_path, sso_constraint, expand(config_path), read)
+}
+
+fn inspect_resolved(
+    config_path: &str,
+    sso_constraint: Option<&str>,
+    resolved: Result<PathBuf, String>,
+    read: impl FnOnce(&Path) -> Result<Vec<u8>, DiscoveryFailure>,
+) -> Value {
     let mut info = json!({
         "ok": true,
         "config_path": config_path,
-        "resolved_path": resolved.to_string_lossy(),
+        "resolved_path": resolved.as_ref().ok().map(|path| path.to_string_lossy()),
         "file_exists": true,
         "error": Value::Null,
         "discovery_state": "no_profiles",
@@ -395,7 +426,8 @@ fn inspect_with_reader(
         "partial": false,
         "coverage": {"complete":true, "returned":0, "limit":MAX_DISCOVERY_PROFILES, "omitted":0},
     });
-    let result = read(&resolved).and_then(|bytes| {
+    let result = resolved.map_err(|_| DiscoveryFailure::HomeUnavailable).and_then(|resolved| {
+        let bytes = read(&resolved)?;
         if bytes.len() > MAX_CONFIG_BYTES { return Err(DiscoveryFailure::TooLarge); }
         let text = std::str::from_utf8(&bytes).map_err(|_| DiscoveryFailure::InvalidUtf8)?;
         let ini = Ini::load_from_str_noescape(text).map_err(|_| DiscoveryFailure::InvalidIni)?;
@@ -412,6 +444,12 @@ fn inspect_with_reader(
     });
     if let Err(failure) = result {
         let (state, reason, exists, error) = match failure {
+            DiscoveryFailure::HomeUnavailable => (
+                "unreadable_config",
+                "home_unavailable",
+                Value::Null,
+                "User home is unavailable. Choose an absolute AWS config path in Settings.",
+            ),
             DiscoveryFailure::Missing => (
                 "missing_config",
                 "not_found",
@@ -539,7 +577,7 @@ fn discovery_row(
 
 /// Path to the cached SSO token for a session, keyed by `sha1(session_name)`
 /// like the AWS CLI / botocore.
-pub fn sso_cache_path(sso_session_name: &str) -> PathBuf {
+pub fn sso_cache_path(sso_session_name: &str) -> Result<PathBuf, String> {
     let mut hasher = Sha1::new();
     hasher.update(sso_session_name.as_bytes());
     let sha = hex::encode(hasher.finalize());
@@ -549,6 +587,70 @@ pub fn sso_cache_path(sso_session_name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tilde_expansion_uses_only_an_injected_absolute_home() {
+        let dir = crate::test_support::TestDir::new();
+        let home = dir.path().join("Synthetic Home 雲");
+        for (path, windows) in [("~", false), ("~", true)] {
+            assert_eq!(
+                expand_with_home(path, windows, || Some(home.clone())).unwrap(),
+                home
+            );
+        }
+        for (path, windows) in [
+            ("~/.aws/config", false),
+            ("~/.aws/config", true),
+            (r"~\.aws\config", true),
+        ] {
+            assert_eq!(
+                expand_with_home(path, windows, || Some(home.clone())).unwrap(),
+                home.join(".aws/config")
+            );
+        }
+        for home in [
+            None,
+            Some(PathBuf::new()),
+            Some(PathBuf::from("synthetic-relative-home")),
+        ] {
+            let error = expand_with_home("~/.aws/config", false, || home).unwrap_err();
+            assert_eq!(
+                error,
+                "User home is unavailable; choose an absolute AWS config path in Settings"
+            );
+        }
+        assert!(!home.exists());
+    }
+
+    #[test]
+    fn explicit_custom_config_paths_do_not_resolve_a_personal_home() {
+        for (path, windows) in [
+            (r"C:\Synthetic Cloud 雲\config.ini", true),
+            (r"\\synthetic-host\synthetic-share\config.ini", true),
+            ("synthetic-config.ini", false),
+            (r"~\.aws\config", false),
+        ] {
+            let expanded =
+                expand_with_home(path, windows, || panic!("unexpected home lookup")).unwrap();
+            assert_eq!(expanded, PathBuf::from(path));
+        }
+    }
+
+    #[test]
+    fn missing_home_discovery_reports_no_read_or_false_missing_file() {
+        let result = inspect_resolved(
+            "~/.aws/config",
+            None,
+            expand_with_home("~/.aws/config", false, || None),
+            |_| panic!("failed path expansion must not open a file"),
+        );
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["discovery_state"], "unreadable_config");
+        assert_eq!(result["discovery_reason"], "home_unavailable");
+        assert!(result["resolved_path"].is_null());
+        assert!(result["file_exists"].is_null());
+        assert_eq!(result["coverage"]["complete"], false);
+    }
 
     #[test]
     fn profile_inspection_does_not_echo_parser_content_or_home() {

@@ -94,7 +94,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    #[cfg(test)]
     pub fn with_runtime(runtime: Runtime) -> Self {
         Self {
             runtime,

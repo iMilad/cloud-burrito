@@ -100,6 +100,44 @@ mod tests {
     use crate::test_support::TestDir;
 
     #[test]
+    fn custom_drive_unc_and_unicode_config_paths_survive_reopen() {
+        let tmp = TestDir::new();
+        let store = Store::new(tmp.paths());
+        for path in [
+            r"C:\Synthetic Cloud 雲\config.ini",
+            r"\\synthetic-host\synthetic-share\config.ini",
+            "/synthetic home 雲/config.ini",
+            r"~\.aws\config",
+        ] {
+            let saved = save(&store, &json!({"aws_config_path": path})).unwrap();
+            assert_eq!(saved["aws_config_path"], path);
+            assert_eq!(
+                load(&Store::new(tmp.paths())).unwrap()["aws_config_path"],
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn inaccessible_settings_location_returns_errors_without_touching_its_contents() {
+        let tmp = TestDir::new();
+        let data = tmp.paths().data_file("settings.json");
+        std::fs::create_dir_all(&data).unwrap();
+        let retained = data.join("synthetic-existing-file");
+        std::fs::write(&retained, b"synthetic-existing-content").unwrap();
+        let store = Store::new(tmp.paths());
+        assert_eq!(load(&store), Err(StorageError::ReadFailed));
+        assert_eq!(
+            save(&store, &json!({"theme":"light"})),
+            Err(StorageError::WriteFailed)
+        );
+        assert_eq!(
+            std::fs::read(&retained).unwrap(),
+            b"synthetic-existing-content"
+        );
+    }
+
+    #[test]
     fn save_drops_unknown_keys_and_blanks() {
         let tmp = TestDir::new();
         let store = Store::new(tmp.paths());

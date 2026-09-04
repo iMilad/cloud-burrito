@@ -1,6 +1,6 @@
 # Cloud Burrito — From working tool to public beta
 
-**P1 and P2 complete locally. P3-01–08 complete locally; P4 is next. Device tests deferred.**
+**P1–P3 complete locally. P4-01–02 implemented locally; P4-03 is next. Device tests deferred.**
 
 Decision reference: 2026-09-03. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
 

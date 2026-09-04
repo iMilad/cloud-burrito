@@ -105,13 +105,16 @@ fn sdk_token_home(windows: bool, get: impl Fn(&str) -> Option<String>) -> Option
 }
 
 fn named_sso_cache_path(session: &str) -> Result<PathBuf, String> {
-    let home = sdk_token_home(cfg!(windows), |name| std::env::var(name).ok())
-        .filter(|home| !home.is_empty())
+    let home = sdk_token_home(cfg!(windows), |name| std::env::var(name).ok()).map(PathBuf::from);
+    named_sso_cache_path_with_home(session, home)
+}
+
+fn named_sso_cache_path_with_home(session: &str, home: Option<PathBuf>) -> Result<PathBuf, String> {
+    let home = home
+        .filter(|home| home.is_absolute())
         .ok_or_else(|| "SSO token cache home is unavailable".to_string())?;
     let hash = hex::encode(Sha1::digest(session.as_bytes()));
-    Ok(PathBuf::from(home)
-        .join(".aws/sso/cache")
-        .join(format!("{hash}.json")))
+    Ok(home.join(".aws/sso/cache").join(format!("{hash}.json")))
 }
 
 /// Token expiry is deliberately not checked here: a named session may renew an
@@ -130,7 +133,7 @@ fn validate_sso_cache_metadata(text: &str, snapshot: &SsoProfileSnapshot) -> Res
 /// Legacy profiles have no refresh registration. The selected start URL is the
 /// cache key; expired tokens use the existing external `aws sso login` workflow.
 fn legacy_sso_token(snapshot: &SsoProfileSnapshot) -> Result<String, String> {
-    let path = config_file::sso_cache_path(snapshot.token_cache_key());
+    let path = config_file::sso_cache_path(snapshot.token_cache_key())?;
     let text = bounded_read(&path, 128 * 1024)?;
     let value = validate_sso_cache_metadata(&text, snapshot)?;
     let expiry = value
@@ -161,7 +164,7 @@ impl AwsBackend for NativeAwsBackend {
 
     fn snapshot_sso(&self, ctx: &AwsContext) -> Result<SsoProfileSnapshot, String> {
         require_live_aws();
-        let config_path = config_file::expand(&ctx.aws_config_path);
+        let config_path = config_file::expand(&ctx.aws_config_path)?;
         let text = bounded_read(&config_path, 2 * 1024 * 1024)?;
         SsoProfileSnapshot::parse(
             &text,
@@ -371,7 +374,12 @@ pub struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
-        let paths = AppPaths::default();
+        Self::native(AppPaths::default())
+    }
+}
+
+impl Runtime {
+    pub fn native(paths: AppPaths) -> Self {
         let audit_write_failed = Arc::new(AtomicBool::new(false));
         let audit_retention = Arc::new(AtomicBool::new(false));
         let audit_writer = Some(Arc::new(crate::audit_writer::AuditWriter::new(
@@ -394,9 +402,7 @@ impl Default for Runtime {
             queries: Arc::default(),
         }
     }
-}
 
-impl Runtime {
     pub(crate) fn with_work(&self, work: WorkScope) -> Self {
         let mut scoped = self.clone();
         scoped.work = Some(work);
@@ -596,6 +602,64 @@ mod tests {
         assert!(lookup(&all[1..], false).is_none());
         assert!(lookup(&all[2..3], true).is_none());
         assert!(lookup(&[], true).is_none());
+    }
+
+    #[test]
+    fn named_token_cache_requires_an_absolute_selected_home() {
+        for home in [
+            None,
+            Some(PathBuf::new()),
+            Some(PathBuf::from("synthetic-relative-home")),
+        ] {
+            assert_eq!(
+                named_sso_cache_path_with_home("synthetic-session", home),
+                Err("SSO token cache home is unavailable".into())
+            );
+        }
+        let dir = crate::test_support::TestDir::new();
+        let home = dir.path().join("Synthetic Home 雲");
+        let path = named_sso_cache_path_with_home("synthetic-session", Some(home.clone())).unwrap();
+        let expected_hash = hex::encode(Sha1::digest(b"synthetic-session"));
+        assert_eq!(
+            path,
+            home.join(".aws/sso/cache")
+                .join(format!("{expected_hash}.json"))
+        );
+        assert!(
+            !home.exists(),
+            "cache path selection must not read or create storage"
+        );
+        // Do not silently fall back to another SDK environment key when HOME
+        // exists but is unusable: that would select a different token cache.
+        let chosen = sdk_token_home(true, |name| match name {
+            "HOME" => Some("relative-home".into()),
+            "USERPROFILE" => Some(home.to_string_lossy().into_owned()),
+            _ => None,
+        });
+        assert!(
+            named_sso_cache_path_with_home("synthetic-session", chosen.map(PathBuf::from)).is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_named_cache_accepts_drive_and_unc_but_rejects_partial_roots() {
+        for home in [
+            r"C:\Synthetic Home 雲",
+            r"\\synthetic-host\synthetic-share\home",
+        ] {
+            assert!(
+                named_sso_cache_path_with_home("synthetic-session", Some(PathBuf::from(home)))
+                    .unwrap()
+                    .starts_with(home)
+            );
+        }
+        for home in [r"C:relative-home", r"\root-relative-home"] {
+            assert!(
+                named_sso_cache_path_with_home("synthetic-session", Some(PathBuf::from(home)))
+                    .is_err()
+            );
+        }
     }
 
     #[test]
