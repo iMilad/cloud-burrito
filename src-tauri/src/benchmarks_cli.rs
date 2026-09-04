@@ -64,6 +64,7 @@ async fn measure(scenario: &str) -> Value {
     let output_bytes = output.len();
     let counts = Arc::new(Counts::default());
     let dir = TestDir::new();
+    crate::aws::policy::load(&dir.paths()).unwrap();
     let mut runtime = Runtime::for_test(dir.paths());
     runtime.process = Arc::new(SyntheticRunner {
         counts: counts.clone(),

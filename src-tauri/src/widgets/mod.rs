@@ -9,6 +9,7 @@
 
 mod aws_cli;
 pub(crate) mod budget;
+mod cli_json;
 pub(crate) mod query;
 pub(crate) use aws_cli::parse_cli_command;
 mod cfn_stack_detail;

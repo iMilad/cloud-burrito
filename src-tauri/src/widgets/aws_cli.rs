@@ -75,6 +75,9 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
             return json!({"ok": false, "error": safe_diagnostic(&error, &access.credentials)})
         }
     };
+    if access.cancellation.is_cancelled() {
+        return json!({"ok":false,"error_type":"Cancelled","error":"AWS CLI request cancelled"});
+    }
     if !output.success {
         // Child diagnostics can contain request data, credentials or proxy URLs.
         // Do not echo them into the webview or audit log.
@@ -83,36 +86,53 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
             "error": "AWS CLI command failed; check the selected account, permissions and inputs",
         });
     }
+    if output.stderr.len() > 256 * 1024 {
+        return json!({"ok":false,"error":"AWS CLI stderr exceeded its 256 KiB limit"});
+    }
     if output.stdout.len() > MAX_OUTPUT_BYTES {
         return json!({
             "ok": false,
             "error": "output larger than 2 MB — narrow it with --query or --max-items",
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if contains_credentials(&stdout, &access.credentials) {
+    let stdout = match std::str::from_utf8(&output.stdout) {
+        Ok(text) => text,
+        Err(_) => {
+            return json!({"ok":false,"error_type":"CliInvalidOutput","error":"AWS CLI output was not valid UTF-8 JSON"})
+        }
+    };
+    if contains_credentials(stdout, &access.credentials) {
         return json!({"ok": false, "error": "CLI output contained authentication material and was not displayed"});
     }
     let trimmed = stdout.trim();
     let mut out = if trimmed.is_empty() {
         cli_result_model(&json!([]), parsed)
     } else {
-        match serde_json::from_str::<Value>(trimmed) {
+        match super::cli_json::decode(trimmed) {
             Ok(v) if value_contains_credentials(&v, &access.credentials) => {
                 return json!({"ok": false, "error": "CLI output contained authentication material and was not displayed"});
             }
             Ok(v) => cli_result_model(&v, parsed),
-            Err(_) => return json!({"ok": false, "error": "AWS CLI output was not valid JSON"}),
+            Err(super::cli_json::DecodeError::Budget) => {
+                return json!({"ok":false,"error_type":"CliDecodeBudgetExceeded","error":"CLI JSON exceeds the local structure budget; narrow it with --query or --max-items"})
+            }
+            Err(super::cli_json::DecodeError::Invalid) => {
+                return json!({"ok": false, "error": "AWS CLI output was not valid JSON"})
+            }
         }
     };
     out["action"] = json!(action);
     out["account_id"] = json!(ctx.account_id);
     out["region"] = json!(ctx.region);
+    if super::cli_json::encoded_size(&out, MAX_RESULT_BYTES).is_none() {
+        return result_budget_error();
+    }
     out
 }
 
 fn cli_result_model(value: &Value, parsed: &ParsedCli) -> Value {
-    let (model, clipped_cells) = table_model(value);
+    let (model, stats) = bounded_table_model(value);
+    let clipped_cells = stats.clipped_cells;
     // CLI pagination is delegated to the executable. Its output is not proof
     // of complete AWS coverage, particularly after a JMESPath projection.
     let mut coverage = match model["rows"].as_array() {
@@ -168,8 +188,30 @@ fn cli_result_model(value: &Value, parsed: &ParsedCli) -> Value {
         coverage.limit("nested_cell_characters", Some(MAX_CELL_CHARS));
         coverage.limited(
             "cell_display_limit",
-            "Long nested JSON cells are shortened for display; the displayed text is incomplete.",
+            "Long cells are shortened for display; open available cell details to inspect the full bounded value.",
         );
+    }
+    coverage.limit("rows", Some(MAX_ROWS));
+    coverage.limit("columns", Some(MAX_COLUMNS));
+    coverage.limit("column_name_characters", Some(MAX_COLUMN_CHARS));
+    coverage.limit("string_cell_characters", Some(MAX_STRING_CHARS));
+    coverage.limit("result_bytes", Some(MAX_RESULT_BYTES));
+    coverage.limit("json_nodes", Some(super::cli_json::MAX_NODES));
+    coverage.limit("json_depth", Some(super::cli_json::MAX_DEPTH));
+    if stats.omitted_rows > 0 {
+        coverage.count("omitted_rows", stats.omitted_rows);
+        coverage.limited("row_limit","Some CLI output rows were omitted by the local row or display byte budget; narrow the command to inspect them.");
+    }
+    if stats.omitted_fields > 0 {
+        coverage.count("omitted_fields", stats.omitted_fields);
+        coverage.limited("column_limit","Some fields exceed the local column count or name limit; narrow the command to inspect them.");
+    }
+    if stats.full_values_withheld > 0 {
+        coverage.count("full_values_withheld", stats.full_values_withheld);
+        coverage.limited("full_value_limit","Some full cell values exceed the local detail budget; use --query to return a smaller value.");
+    }
+    if stats.byte_limited {
+        coverage.limited("result_byte_limit","The local CLI display byte budget was reached; omitted output remains available only through a narrower command.");
     }
     coverage.attach(model)
 }
@@ -711,39 +753,96 @@ fn validate_relationships(
     Ok(())
 }
 
-/// Longest cell text before nested JSON gets truncated.
+/// Preserve the compact nested preview; full bounded values are explicit details.
 const MAX_CELL_CHARS: usize = 120;
+const MAX_STRING_CHARS: usize = 4096;
+const MAX_FULL_CELL_BYTES: usize = 16 * 1024;
+const MAX_ROWS: usize = 500;
+const MAX_COLUMNS: usize = 32;
+const MAX_COLUMN_CHARS: usize = 256;
+const MAX_RESULT_BYTES: usize = 512 * 1024;
+// Reserve headers, coverage, action and verified-context metadata separately.
+const MAX_TABLE_DATA_BYTES: usize = MAX_RESULT_BYTES - 64 * 1024;
 
-/// Map arbitrary CLI JSON output onto the closed `table` render shape, falling
-/// back to `raw_json` when nothing tabular is recognizable.
-fn table_model(value: &Value) -> (Value, usize) {
-    let mut clipped_cells = 0;
-    let model = table_content(value, &mut clipped_cells);
-    (model, clipped_cells)
+#[derive(Default)]
+struct ModelStats {
+    clipped_cells: usize,
+    omitted_rows: usize,
+    omitted_fields: usize,
+    full_values_withheld: usize,
+    byte_limited: bool,
+}
+struct TableBuilder {
+    rows: Vec<Value>,
+    details: Vec<Value>,
+    bytes: usize,
+    stats: ModelStats,
+}
+impl TableBuilder {
+    fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            details: Vec::new(),
+            bytes: 0,
+            stats: ModelStats::default(),
+        }
+    }
+    fn push(&mut self, row: Value, details: Vec<Value>, row_stats: ModelStats) -> bool {
+        let Some(bytes) = super::cli_json::encoded_size(
+            &(&row, &details),
+            MAX_TABLE_DATA_BYTES.saturating_sub(self.bytes),
+        ) else {
+            self.stats.byte_limited = true;
+            return false;
+        };
+        self.stats.clipped_cells += row_stats.clipped_cells;
+        self.stats.omitted_fields += row_stats.omitted_fields;
+        self.stats.full_values_withheld += row_stats.full_values_withheld;
+        self.bytes += bytes;
+        self.rows.push(row);
+        self.details.extend(details);
+        true
+    }
+    fn finish(mut self, columns: Vec<String>, source_rows: usize) -> (Value, ModelStats) {
+        self.stats.omitted_rows = source_rows.saturating_sub(self.rows.len());
+        let mut model = json!({"render":"table","columns":columns,"rows":self.rows});
+        if !self.details.is_empty() {
+            model["cell_details"] = Value::Array(self.details);
+        }
+        (model, self.stats)
+    }
 }
 
-fn table_content(value: &Value, clipped_cells: &mut usize) -> Value {
+#[cfg(test)]
+fn table_model(value: &Value) -> (Value, usize) {
+    let (model, stats) = bounded_table_model(value);
+    (model, stats.clipped_cells)
+}
+
+fn bounded_table_model(value: &Value) -> (Value, ModelStats) {
     match value {
-        Value::Array(items) => array_table(items, clipped_cells).unwrap_or_else(|| raw_json(value)),
+        Value::Array(items) => array_table(items).unwrap_or_else(|| raw_json(value)),
         Value::Object(map) => {
-            // The CLI's usual top level: one array of results plus scalar
-            // siblings (NextToken and friends). Unwrap to the array.
-            let array_keys: Vec<&String> = map
-                .iter()
-                .filter(|(_, v)| v.is_array())
-                .map(|(k, _)| k)
-                .collect();
-            if array_keys.len() == 1 && map.values().all(|v| v.is_array() || is_scalar(v)) {
-                let items = map[array_keys[0]].as_array().expect("filtered on is_array");
-                return array_table(items, clipped_cells).unwrap_or_else(|| raw_json(value));
+            let mut arrays = map.values().filter_map(Value::as_array);
+            let first = arrays.next();
+            if arrays.next().is_none() && map.values().all(|v| v.is_array() || is_scalar(v)) {
+                if let Some(items) = first {
+                    return array_table(items).unwrap_or_else(|| raw_json(value));
+                }
             }
-            // Flat object of scalars (sts get-caller-identity) -> key/value.
             if !map.is_empty() && map.values().all(is_scalar) {
-                let rows: Vec<Value> = map
-                    .iter()
-                    .map(|(k, v)| json!({"key": k, "value": cell(v, clipped_cells)}))
-                    .collect();
-                return json!({"render": "table", "columns": ["key", "value"], "rows": rows});
+                let mut table = TableBuilder::new();
+                for (key, value) in map.iter().take(MAX_ROWS) {
+                    let index = table.rows.len();
+                    let mut details = Vec::new();
+                    let mut row_stats = ModelStats::default();
+                    let row = json!({"key":cell(&Value::String(key.clone()),index,"key",&mut row_stats,&mut details),
+                        "value":cell(value,index,"value",&mut row_stats,&mut details)});
+                    if !table.push(row, details, row_stats) {
+                        break;
+                    }
+                }
+                return table.finish(vec!["key".into(), "value".into()], map.len());
             }
             raw_json(value)
         }
@@ -751,66 +850,142 @@ fn table_content(value: &Value, clipped_cells: &mut usize) -> Value {
     }
 }
 
-/// Array of objects -> union columns; array of scalars -> one `value` column;
-/// empty -> empty table; mixed shapes -> None (caller falls back to raw JSON).
-fn array_table(items: &[Value], clipped_cells: &mut usize) -> Option<Value> {
-    if items.is_empty() {
-        return Some(json!({"render": "table", "columns": [], "rows": []}));
-    }
-    if items.iter().all(|v| v.is_object()) {
-        let mut columns: Vec<String> = Vec::new();
-        let mut rows: Vec<Value> = Vec::new();
-        for item in items {
-            let map = item.as_object().expect("checked is_object");
+fn array_table(items: &[Value]) -> Option<(Value, ModelStats)> {
+    if items.iter().all(Value::is_object) {
+        let mut table = TableBuilder::new();
+        let mut columns = Vec::new();
+        for item in items.iter().take(MAX_ROWS) {
+            let index = table.rows.len();
             let mut row = serde_json::Map::new();
-            for (k, v) in map {
-                if !columns.contains(k) {
-                    columns.push(k.clone());
+            let mut details = Vec::new();
+            let mut row_stats = ModelStats::default();
+            for (key, value) in item.as_object().expect("checked object") {
+                if key.chars().count() > MAX_COLUMN_CHARS
+                    || (!columns.contains(key) && columns.len() == MAX_COLUMNS)
+                {
+                    row_stats.omitted_fields += 1;
+                    continue;
                 }
-                row.insert(k.clone(), cell(v, clipped_cells));
+                if !columns.contains(key) {
+                    columns.push(key.clone());
+                }
+                row.insert(
+                    key.clone(),
+                    cell(value, index, key, &mut row_stats, &mut details),
+                );
             }
-            rows.push(Value::Object(row));
+            if !table.push(Value::Object(row), details, row_stats) {
+                break;
+            }
         }
-        return Some(json!({"render": "table", "columns": columns, "rows": rows}));
+        return Some(table.finish(columns, items.len()));
     }
     if items.iter().all(is_scalar) {
-        let rows: Vec<Value> = items
-            .iter()
-            .map(|v| json!({"value": cell(v, clipped_cells)}))
-            .collect();
-        return Some(json!({"render": "table", "columns": ["value"], "rows": rows}));
+        let mut table = TableBuilder::new();
+        for value in items.iter().take(MAX_ROWS) {
+            let index = table.rows.len();
+            let mut details = Vec::new();
+            let mut row_stats = ModelStats::default();
+            let row = json!({"value":cell(value,index,"value",&mut row_stats,&mut details)});
+            if !table.push(row, details, row_stats) {
+                break;
+            }
+        }
+        return Some(table.finish(vec!["value".into()], items.len()));
     }
     None
 }
 
-fn is_scalar(v: &Value) -> bool {
-    !v.is_array() && !v.is_object()
+fn is_scalar(value: &Value) -> bool {
+    !value.is_array() && !value.is_object()
+}
+fn shortened(text: &str, limit: usize) -> String {
+    text.chars()
+        .take(limit.saturating_sub(1))
+        .chain(std::iter::once('…'))
+        .collect()
 }
 
-/// Scalars pass through; nested structures become truncated JSON text.
-fn cell(v: &Value, clipped_cells: &mut usize) -> Value {
-    if is_scalar(v) {
-        return v.clone();
+/// Bounded byte prefix prevents serializing a large nested value twice in full.
+struct JsonPrefix(Vec<u8>);
+impl std::io::Write for JsonPrefix {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let remaining = MAX_FULL_CELL_BYTES.saturating_sub(self.0.len());
+        if bytes.len() > remaining {
+            self.0.extend_from_slice(&bytes[..remaining]);
+            return Err(std::io::Error::other("CLI cell preview limit"));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
     }
-    let s = serde_json::to_string(v).unwrap_or_default();
-    if s.chars().count() > MAX_CELL_CHARS {
-        *clipped_cells += 1;
-        let truncated: String = s.chars().take(MAX_CELL_CHARS).collect();
-        Value::String(format!("{truncated}…"))
-    } else {
-        Value::String(s)
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
+fn cell(
+    value: &Value,
+    row: usize,
+    column: &str,
+    stats: &mut ModelStats,
+    details: &mut Vec<Value>,
+) -> Value {
+    if let Some(text) = value.as_str() {
+        if text.chars().count() > MAX_STRING_CHARS {
+            stats.clipped_cells += 1;
+            stats.full_values_withheld += 1;
+            details.push(json!({"row":row,"column":column,"unavailable":true}));
+            return json!(shortened(text, MAX_STRING_CHARS));
+        }
+        return value.clone();
+    }
+    if is_scalar(value) {
+        return value.clone();
+    }
+    let mut prefix = JsonPrefix(Vec::new());
+    let complete = serde_json::to_writer(&mut prefix, value).is_ok();
+    if let Err(error) = std::str::from_utf8(&prefix.0) {
+        prefix.0.truncate(error.valid_up_to());
+    }
+    let text = String::from_utf8(prefix.0).expect("trimmed valid UTF-8 prefix");
+    let characters = text.chars().count();
+    if !complete || characters > MAX_CELL_CHARS {
+        stats.clipped_cells += 1;
+        if complete && characters <= MAX_STRING_CHARS {
+            details.push(json!({"row":row,"column":column,"value":value}));
+        } else {
+            stats.full_values_withheld += 1;
+            details.push(json!({"row":row,"column":column,"unavailable":true}));
+        }
+        return json!(shortened(&text, MAX_CELL_CHARS));
+    }
+    json!(text)
+}
 
-fn raw_json(v: &Value) -> Value {
-    json!({"render": "raw_json", "data": v})
+fn raw_json(value: &Value) -> (Value, ModelStats) {
+    if super::cli_json::encoded_size(value, MAX_TABLE_DATA_BYTES).is_none() {
+        return (
+            result_budget_error(),
+            ModelStats {
+                byte_limited: true,
+                ..ModelStats::default()
+            },
+        );
+    }
+    // A raw response has one complete value; it never duplicates the table data.
+    (
+        json!({"render":"raw_json","data":value}),
+        ModelStats::default(),
+    )
+}
+fn result_budget_error() -> Value {
+    json!({"ok":false,"error_type":"CliResultBudgetExceeded","error":"CLI result exceeds the local display budget; narrow the command with --query or --max-items. No truncated JSON was displayed."})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use futures::future::BoxFuture;
@@ -856,6 +1031,7 @@ mod tests {
         process: Arc<FakeProcessRunner>,
         policy: Result<Policy, String>,
     ) -> WidgetCtx {
+        policy::load(&dir.paths()).unwrap();
         let mut runtime = Runtime::for_test(dir.paths());
         runtime.process = process;
         WidgetCtx {
@@ -1464,5 +1640,232 @@ mod tests {
         assert_eq!(empty["rows"], json!([]));
         assert_eq!(table_model(&json!("just a string")).0["render"], "raw_json");
         assert_eq!(table_model(&json!({})).0["render"], "raw_json");
+    }
+    #[test]
+    fn table_budgets_report_omitted_rows_columns_and_whole_result_bytes() {
+        let parsed = parse_cli_command("aws cloudformation list-stacks").unwrap();
+        let wide = json!((0..600)
+            .map(|_| (0..40)
+                .map(|i| (format!("field-{i:02}"), json!(i)))
+                .collect::<serde_json::Map<_, _>>())
+            .collect::<Vec<_>>());
+        let result = cli_result_model(&wide, &parsed);
+        assert_eq!(result["columns"].as_array().unwrap().len(), 32);
+        assert_eq!(result["rows"].as_array().unwrap().len(), 500);
+        assert_eq!(result["coverage"]["counts"]["omitted_rows"], 100);
+        assert_eq!(result["coverage"]["counts"]["omitted_fields"], 4000);
+        assert_eq!(result["coverage"]["completeness"], "limited");
+        assert!(super::super::cli_json::encoded_size(&result, MAX_RESULT_BYTES).is_some());
+
+        let large = json!((0..1000)
+            .map(|_| json!({"description":"x".repeat(2000)}))
+            .collect::<Vec<_>>());
+        let result = cli_result_model(&large, &parsed);
+        assert!(result["rows"].as_array().unwrap().len() < 500);
+        assert!(
+            result["coverage"]["counts"]["omitted_rows"]
+                .as_u64()
+                .unwrap()
+                > 500
+        );
+        assert!(super::super::cli_json::encoded_size(&result, MAX_RESULT_BYTES).is_some());
+        assert!(result["coverage"].to_string().contains("result_byte_limit"));
+        assert!(result.get("data").is_none());
+    }
+
+    #[test]
+    fn full_bounded_cell_details_are_separate_from_previews_and_large_values_are_explicit() {
+        let parsed = parse_cli_command("aws cloudformation list-stacks").unwrap();
+        let source = json!([{"nested":{"description":"x".repeat(300)},"long":"🦀".repeat(5000)}]);
+        let result = cli_result_model(&source, &parsed);
+        assert!(
+            result["rows"][0]["nested"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count()
+                <= MAX_CELL_CHARS
+        );
+        assert_eq!(
+            result["rows"][0]["long"].as_str().unwrap().chars().count(),
+            MAX_STRING_CHARS
+        );
+        let details = result["cell_details"].as_array().unwrap();
+        let nested = details
+            .iter()
+            .find(|detail| detail["column"] == "nested")
+            .unwrap();
+        assert_eq!(nested["row"], 0);
+        assert_eq!(nested["value"], source[0]["nested"]);
+        let unavailable = details
+            .iter()
+            .find(|detail| detail["column"] == "long")
+            .unwrap();
+        assert_eq!(unavailable["unavailable"], true);
+        assert!(unavailable.get("value").is_none());
+        assert_eq!(result["coverage"]["counts"]["full_values_withheld"], 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_structural_overflow_and_large_raw_values_never_become_successful_json() {
+        let dir = TestDir::new();
+        let cases = vec![
+            (vec![b'"', 0xff, b'"'], "CliInvalidOutput"),
+            (
+                format!(
+                    "[{}]",
+                    vec!["0"; super::super::cli_json::MAX_NODES].join(",")
+                )
+                .into_bytes(),
+                "CliDecodeBudgetExceeded",
+            ),
+            (
+                format!("{}0{}", "[".repeat(33), "]".repeat(33)).into_bytes(),
+                "CliDecodeBudgetExceeded",
+            ),
+            (
+                serde_json::to_vec(&json!([{"nested":"x".repeat(MAX_RESULT_BYTES)},true])).unwrap(),
+                "CliResultBudgetExceeded",
+            ),
+        ];
+        for (stdout, expected) in cases {
+            let process = FakeProcessRunner::with_response(Ok(ProcessOutput {
+                stdout,
+                stderr: Vec::new(),
+                success: true,
+            }));
+            let ctx = fetch_context(&dir, process.clone(), allowed_fetch_policy());
+            let result = fetch(&ctx).await;
+            assert_eq!(result["ok"], false);
+            assert_eq!(result["error_type"], expected);
+            assert!(result.get("data").is_none());
+            assert!(result.get("rows").is_none());
+            assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    struct BudgetProcessRunner {
+        calls: AtomicUsize,
+        active: Arc<AtomicUsize>,
+        peak: AtomicUsize,
+        released: AtomicBool,
+        release: tokio::sync::Notify,
+    }
+    struct BudgetActive(Arc<AtomicUsize>);
+    impl Drop for BudgetActive {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    impl ProcessRunner for BudgetProcessRunner {
+        fn run(&self, request: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>> {
+            Box::pin(async move {
+                let index = self.calls.fetch_add(1, Ordering::SeqCst);
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak.fetch_max(active, Ordering::SeqCst);
+                let _active = BudgetActive(self.active.clone());
+                // Hold admitted fake children until the test has dispatched
+                // cancellation, independently of filesystem policy-read timing.
+                while !self.released.load(Ordering::SeqCst) {
+                    let release = self.release.notified();
+                    tokio::pin!(release);
+                    release.as_mut().enable();
+                    if self.released.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = request.cancellation.cancelled() => return Err("AWS CLI request cancelled".into()),
+                        _ = &mut release => {},
+                    }
+                }
+                tokio::select! {
+                    _=request.cancellation.cancelled()=>return Err("AWS CLI request cancelled".into()),
+                    _=tokio::time::sleep(std::time::Duration::from_millis(1))=>{},
+                }
+                let stdout = match index % 5 {
+                    0 => vec![b'x'; MAX_OUTPUT_BYTES + 1],
+                    1 => b"[invalid".to_vec(),
+                    2 => vec![b'"', 0xff, b'"'],
+                    _ => br#"{"StackSummaries":[{"StackName":"synthetic-stack"}]}"#.to_vec(),
+                };
+                Ok(ProcessOutput {
+                    stdout,
+                    stderr: Vec::new(),
+                    success: true,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn fifty_fake_jobs_recover_cli_permits_after_overflow_parse_failure_and_cancellation() {
+        let dir = TestDir::new();
+        let process = Arc::new(BudgetProcessRunner {
+            calls: AtomicUsize::new(0),
+            active: Arc::new(AtomicUsize::new(0)),
+            peak: AtomicUsize::new(0),
+            released: AtomicBool::new(false),
+            release: tokio::sync::Notify::new(),
+        });
+        let empty = FakeProcessRunner::with_response(Ok(ProcessOutput {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            success: true,
+        }));
+        let mut template = fetch_context(&dir, empty, allowed_fetch_policy());
+        template.runtime.process = process.clone();
+        for _ in 0..10 {
+            process.released.store(false, Ordering::SeqCst);
+            let round_start = process.calls.load(Ordering::SeqCst);
+            let contexts: Vec<_> = (0..50)
+                .map(|_| {
+                    let mut ctx = template.clone();
+                    ctx.cli.as_mut().unwrap().cancellation =
+                        crate::process::ProcessCancellation::new();
+                    ctx
+                })
+                .collect();
+            let mut jobs: Vec<_> = contexts
+                .iter()
+                .map(|ctx| Box::pin(crate::widgets::fetch("aws-cli", ctx)))
+                .collect();
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    for job in &mut jobs {
+                        assert!(futures::poll!(job.as_mut()).is_pending());
+                    }
+                    if process.calls.load(Ordering::SeqCst) == round_start + 2 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("two fake children should reach the held runner");
+            assert_eq!(process.active.load(Ordering::SeqCst), 2);
+            assert_eq!(template.runtime.scheduler.snapshot().cli, 2);
+            assert_eq!(template.runtime.scheduler.snapshot().queued, 48);
+            let before = process.calls.load(Ordering::SeqCst);
+            for index in (10..50).step_by(2) {
+                contexts[index].cli.as_ref().unwrap().cancellation.cancel();
+            }
+            contexts[0].cli.as_ref().unwrap().cancellation.cancel();
+            process.released.store(true, Ordering::SeqCst);
+            process.release.notify_waiters();
+            let results = futures::future::join_all(jobs).await;
+            assert!(results.iter().any(|result| result["ok"] == false));
+            assert!(results
+                .iter()
+                .all(
+                    |result| super::super::cli_json::encoded_size(result, MAX_RESULT_BYTES)
+                        .is_some()
+                ));
+            assert_eq!(process.calls.load(Ordering::SeqCst) - before, 28);
+            assert_eq!(process.active.load(Ordering::SeqCst), 0);
+            assert_eq!(template.runtime.scheduler.snapshot().cli, 0);
+            assert_eq!(template.runtime.scheduler.snapshot().queued, 0);
+        }
+        assert_eq!(process.peak.load(Ordering::SeqCst), 2);
     }
 }

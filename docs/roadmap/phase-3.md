@@ -1,6 +1,6 @@
 # P3 — Earn the performance claim
 
-Implementation status: **P3-01–05 complete locally; P3-06 is next. Native performance metrics remain unmeasured.**
+Implementation status: **P3-01–06 complete locally; P3-07 is next. Native performance metrics remain unmeasured.**
 
 Planning source review: `0.2.9`, 2026-09-03. [P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline at `6c0377e`, its method, raw measurements and limitations. The remaining work packages below define implementation acceptance; their targets are not product claims.
 
