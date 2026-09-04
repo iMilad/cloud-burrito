@@ -1,8 +1,8 @@
 # P1 — Build the trust boundary
 
-Status: **P1 in progress. P1-01 through P1-03 complete locally; P1-04 is next; P1-05/06 not started. Native validation pending.**
+Status: **P1 in progress. P1-01 through P1-04 complete locally; P1-05 is next; P1-06 not started. Native validation pending.**
 
-Original source reference: `0.2.9` / `095d1ad`, reviewed 2026-09-03. [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md) record subsequent local implementation. Remaining work is planned; this document does not certify the current app. Read the [operation inventory](aws-operation-inventory.md) and [journey contracts](phase-0.md) alongside it.
+Original source reference: `0.2.9` / `095d1ad`, reviewed 2026-09-03. [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md) record implementation now in local baseline `a879851`. [P1-04 evidence](p1-04-evidence.md) tracks the separate constrained-CLI change. Remaining work is planned; this document does not certify the current app. Read the [operation inventory](aws-operation-inventory.md) and [journey contracts](phase-0.md) alongside it.
 
 ## Outcome
 
@@ -15,8 +15,8 @@ P0 device checks may remain pending while this work is planned. Implementation c
 | Source finding | Current response / remaining work |
 | --- | --- |
 | Original prefix guard and CLI registry bypass | P1-02 replaced them with exact service/operation/argument records; policy only narrows the supported set |
-| Original CLI process inherits its environment | P1-02 rejects unknown/context/endpoint options; P1-03 blocks desktop CLI execution with `CliContextUnavailable` until P1-04 supplies verified credentials and a controlled environment |
-| The same runner buffers output before applying its 2 MiB stdout limit | Bound both streams during reading; terminate and reap on limit, timeout or cancellation |
+| Original CLI process inherits its environment | P1-02 rejects unsupported operations/options; P1-04 replaces P1-03's temporary CLI block with exact verified credentials and an isolated child environment/home/cwd/null configuration; offline checks pass |
+| Original runner buffers output before applying its stdout limit | P1-04 implements concurrent streaming caps of 2 MiB stdout and 256 KiB stderr, a 30-second-or-expiry deadline, and direct-child termination/reaping; synthetic supervisor checks pass, native behavior remains unverified |
 | Original [context.rs](../../src-tauri/src/aws/context.rs) resolved credentials without account verification and changed global config environment | P1-03 uses explicit SSO snapshots and frozen credentials shared by STS verification and resource clients; expiry, refresh and principal checks precede reuse |
 | Original [commands.rs](../../src-tauri/src/commands.rs) published the last completion; [state.rs](../../src-tauri/src/state.rs) cached only profile/account/region | P1-03 versions connection attempts, verifies pinned contexts independently, keys caches by verified identity/configuration/session and invalidates changed contexts; broader tile ownership remains P1-05 |
 | [widgets/mod.rs](../../src-tauri/src/widgets/mod.rs) records preflight, which may cover multiple subsequent requests | Distinguish permission decisions, provider activity and completed operations |
@@ -60,7 +60,7 @@ P0 device checks may remain pending while this work is planned. Implementation c
 - Make connection an attempt-scoped state transition: disconnected → verifying → verified/failed. Only the latest attempt may publish success, failure, timestamps or last-attempt details.
 - Verify pinned contexts independently. Cache keys include configuration revision, profile, actual identity, region and session/provider revision. Reconfiguration or provider identity changes invalidate affected contexts and pending results.
 - Fence auth-status polling and cached identity-panel updates by selection/request generation. This does not complete P1-05's broader tile, selector and detail-owner lifecycle.
-- Keep desktop CLI execution unavailable with `CliContextUnavailable` until P1-04 can hand the verified credentials to an isolated child; SDK widgets continue through their verified contexts.
+- At the P1-03 boundary, desktop CLI execution was temporarily unavailable with `CliContextUnavailable`. P1-04 replaces that block with verified credential handoff and isolated execution; the historical evidence retains the original behavior.
 - **Done when:** mismatched identities never become active, pinned contexts cannot borrow the topbar identity, and an older success or failure cannot replace a newer connection outcome.
 
 STS returns the account and principal associated with the calling credentials and does not require an IAM permission grant for this operation. The app may still apply its own local verification policy. An IAM grant hint is therefore not a general solution to verification failures. [AWS STS reference](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
@@ -69,16 +69,18 @@ The SDK's default credential chain can discover credentials beyond a profile lab
 
 ### P1-04 — Constrain and supervise the CLI child
 
-**Next implementation unit.** The desktop CLI is temporarily blocked; completing this handoff and process contract is required before enabling it again.
+**Complete locally, 2026-09-04.** The desktop CLI is re-enabled with the contract below. The full Rust library suite passes **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. See [P1-04 evidence](p1-04-evidence.md). Native CLI/provider/device acceptance remains separate.
 
-**Depends on:** P1-02/03. **Touchpoints:** `aws_cli.rs` and its injected runner.
+**Depends on:** P1-02/03. **Touchpoints:** `commands.rs`, `context.rs`, `aws_cli.rs`, `widgets/mod.rs`, `process.rs` and injected command/process tests.
 
-- Resolve an absolute executable path and execute argv directly. Platform discovery is completed in P4; never add a shell fallback.
-- Construct a documented environment allowlist and controlled AWS configuration. Preserve required OS runtime variables and deliberately supported proxy/certificate settings; remove competing credentials, profile/provider, endpoint and debug settings.
-- Preferred design: pass the same verified temporary credential snapshot to the child without persisting it; bind region/configuration explicitly. Revalidate on credential refresh. If a supported provider cannot be handed off safely, report CLI unavailable for that context while retaining supported SDK features.
+- Resolve an absolute executable under the AWS CLI v2 installation contract. Support native installers and a narrow Unix absolute-Python wrapper: validate the native interpreter, preserve its absolute virtual-environment path, then invoke `[-I, canonical aws script, validated argv]`. Reject shell, environment-relative and batch wrappers; no shell fallback. Version and publisher trust remain local-installation requirements, not facts established by executable-image checks; no version probe was run.
+- Build an explicit child environment with isolated temporary home and working directory, null AWS config/credentials files and no inherited profile/credential/endpoint discovery. Only deliberately supported runtime/proxy/CA variables survive the environment allowlist.
+- Pass the exact temporary key, secret, token and expiry from the STS-verified frozen provider without persisting credentials. The child uses the captured region; missing/incomplete/expired handoff fails closed. A refreshed context must hand off its newly verified credential set.
 - Reject user overrides for identity, region, endpoint, signing, TLS verification, pager/output and arbitrary local input files. Review both `--name value` and `--name=value`, repeats, abbreviated switches and nested file-value forms.
-- Keep the existing 30-second deadline and 2 MiB stdout cap as initial limits; propose a separate 256 KiB stderr cap. Enforce streaming caps before accumulation, preserve only bounded sanitized error text, and await child termination. These are design limits, not measured behavior.
-- **Done when:** fake-child tests prove exact argv/environment, no secret persistence/logging, bounded streams, and termination/reaping on timeout, cancellation and overflow. Real executable discovery and OS process behavior await native validation.
+- Enforce an execution deadline of 30 seconds or credential expiry, whichever is earlier. Read stdout/stderr concurrently with 2 MiB/256 KiB streaming caps; overflow fails the request. Cleanup may exceed that deadline while waiting for OS-confirmed direct-child exit. Remove the isolated directory only when empty; a nonempty directory can remain. The UI does not expose raw stderr and masks the exact handed-off credential values in surfaced runner errors.
+- Monitor affected context validity every 100 ms while the CLI is pending. Cancel on selection/configuration/session invalidation, await runner completion before returning a fenced result, and preserve unrelated pinned work. Caller-drop cancellation keeps the direct-child supervisor responsible for termination and reaping.
+- Preserve cleanup failure when context invalidation also occurs: return and audit the stable `CliCleanupFailed` outcome instead of hiding it behind a superseded-context error. A controlled command regression covers this ordering.
+- **Local acceptance passed:** isolated tests cover exact handoff/environment, denied execution, streaming bounds and direct-child cleanup ordering on timeout, expiry, cancellation and overflow. This does not establish whole-process-tree termination, actual AWS CLI behavior or OS-runtime cleanup; those remain native validation requirements.
 
 ### P1-05 — Bind every result to the request that produced it
 
@@ -105,7 +107,7 @@ Tauri capabilities govern which windows/webviews may reach commands and permissi
 
 ## Planned acceptance evidence
 
-P1-02's operation/argument denial cases and P1-03's identity, connection-ordering, configuration/refresh and auth-poll cases pass locally; see [P1-02](p1-02-evidence.md) and [P1-03 evidence](p1-03-evidence.md). CLI lifetime/environment, broader tile ownership and rendering/audit contracts remain pending. The table retains the phase-wide acceptance contract, including already covered cases.
+P1-02's operation/argument denial cases and P1-03's identity, connection-ordering, configuration/refresh and auth-poll cases pass locally; their historical evidence is unchanged. P1-04 handoff/environment/cleanup checks also pass, including preservation of cleanup failure after context invalidation; see [its evidence](p1-04-evidence.md). Broader tile ownership, rendering/audit and native-runtime contracts remain open. The table retains the phase-wide acceptance contract, including already covered cases.
 
 | Case | Required observable result | Contract |
 | --- | --- | --- |
@@ -124,4 +126,4 @@ P1-02's operation/argument denial cases and P1-03's identity, connection-orderin
 
 P1 is complete only after the implementation exists, the deterministic cases pass through production boundaries, and a focused security review covers the changed paths. Preserve native process/provider checks in the validation ledger until real OS evidence exists; do not describe a synthetic pass as full platform verification.
 
-P2 receives verified context/result/error contracts. P3 receives cancellation ownership, process byte limits and cache identity rules. P4 receives executable/environment/storage portability requirements. **P1-01–03 are complete locally. Next is P1-04:** verified credential handoff and a constrained CLI child. Full P1 remains incomplete; P1-05 tile ownership, P1-06 command/rendering/audit work and deferred validation stay open.
+P2 receives verified context/result/error contracts. P3 receives cancellation ownership, process byte limits and cache identity rules. P4 receives executable/environment/storage portability requirements. **P1-01–04 are complete locally. P1-05 is next:** bind every tile/detail/selector result to its owner. Full P1 remains incomplete; P1-06 command/rendering/audit work and deferred live/native validation stay open.

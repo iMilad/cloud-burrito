@@ -169,13 +169,75 @@ impl AwsBackend for ScriptedAws {
     }
 }
 
+struct ProcessScript {
+    completion: oneshot::Receiver<Result<ProcessOutput, String>>,
+    cancellation_observed: Option<oneshot::Sender<()>>,
+}
+
+/// No request is executable unless the test queued its exact completion path.
+/// Captures the production handoff without spawning a process or reading env.
 #[derive(Default)]
-struct RejectProcess(AtomicUsize);
+struct RejectProcess {
+    calls: AtomicUsize,
+    completed: AtomicUsize,
+    requests: Mutex<Vec<CliRequest>>,
+    scripts: Mutex<VecDeque<ProcessScript>>,
+}
+
+impl RejectProcess {
+    fn queue_output(&self) -> oneshot::Sender<Result<ProcessOutput, String>> {
+        let (tx, rx) = oneshot::channel();
+        self.scripts.lock().push_back(ProcessScript {
+            completion: rx,
+            cancellation_observed: None,
+        });
+        tx
+    }
+
+    fn ready(&self, output: ProcessOutput) {
+        self.queue_output().send(Ok(output)).unwrap();
+    }
+
+    fn wait_for_cancellation(
+        &self,
+    ) -> (
+        oneshot::Receiver<()>,
+        oneshot::Sender<Result<ProcessOutput, String>>,
+    ) {
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        self.scripts.lock().push_back(ProcessScript {
+            completion: finish_rx,
+            cancellation_observed: Some(observed_tx),
+        });
+        (observed_rx, finish_tx)
+    }
+}
 
 impl ProcessRunner for RejectProcess {
-    fn run(&self, _: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        panic!("unexpected process execution in command test");
+    fn run(&self, request: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let script = self
+            .scripts
+            .lock()
+            .pop_front()
+            .expect("unexpected process execution: no scripted completion");
+        let cancellation = request.cancellation.clone();
+        self.requests.lock().push(request);
+        Box::pin(async move {
+            if let Some(observed) = script.cancellation_observed {
+                cancellation.cancelled().await;
+                observed.send(()).expect("cancellation observer dropped");
+            }
+            let output = script
+                .completion
+                .await
+                .expect("scripted process completion dropped");
+            // Represents the injected runner's termination/reap completion.
+            // Command tests cannot establish real OS process reaping.
+            self.completed.fetch_add(1, Ordering::SeqCst);
+            output
+        })
     }
 }
 
@@ -221,7 +283,8 @@ impl Fixture {
     }
 
     fn no_process(&self) {
-        assert_eq!(self.process.0.load(Ordering::SeqCst), 0);
+        assert_eq!(self.process.calls.load(Ordering::SeqCst), 0);
+        assert!(self.process.requests.lock().is_empty());
     }
 
     async fn connect_a(&self, key: &str, expiry: u64) {
@@ -237,8 +300,8 @@ impl Fixture {
 fn credentials(key: &str, expiry: u64) -> Credentials {
     Credentials::new(
         key,
-        "CB_SYNTHETIC_SECRET",
-        Some("CB_SYNTHETIC_TOKEN".into()),
+        format!("CB_SYNTHETIC_SECRET_{key}"),
+        Some(format!("CB_SYNTHETIC_TOKEN_{key}")),
         Some(UNIX_EPOCH + Duration::from_secs(expiry)),
         "command-test-only",
     )
@@ -260,6 +323,61 @@ fn demo(profile: &str, account: &str) -> Value {
 
 fn pinned(profile: &str, account: &str) -> Value {
     json!({"context": {"mode": "pinned", "profile": profile, "account_id": account, "region": "us-east-1"}})
+}
+
+fn cli_params() -> Value {
+    json!({"widget": "aws-cli", "inputs": {"command": "aws sts get-caller-identity"}})
+}
+
+fn pinned_cli(profile: &str, account: &str) -> Value {
+    let mut params = cli_params();
+    params["context"] = pinned(profile, account)["context"].clone();
+    params
+}
+
+fn process_output(label: &str) -> ProcessOutput {
+    ProcessOutput {
+        stdout: serde_json::to_vec(&json!({"label": label})).unwrap(),
+        stderr: Vec::new(),
+        success: true,
+    }
+}
+
+fn assert_cli_request(request: &CliRequest, key: &str, region: &str, expiry: u64) {
+    assert_eq!(
+        request.argv,
+        ["sts", "get-caller-identity", "--output", "json"]
+    );
+    assert_eq!(request.region, region);
+    assert_eq!(request.credentials.access_key_id(), key);
+    assert_eq!(
+        request.credentials.secret_access_key(),
+        format!("CB_SYNTHETIC_SECRET_{key}")
+    );
+    assert_eq!(
+        request.credentials.session_token(),
+        Some(format!("CB_SYNTHETIC_TOKEN_{key}").as_str())
+    );
+    assert_eq!(
+        request.credentials.expiry(),
+        Some(UNIX_EPOCH + Duration::from_secs(expiry))
+    );
+}
+
+fn assert_no_handoff_secrets(fixture: &Fixture, result: &Value, keys: &[&str]) {
+    let result = result.to_string();
+    let audit =
+        serde_json::to_string(&crate::audit::tail(&fixture.state.runtime.paths, 200)).unwrap();
+    for key in keys {
+        for secret in [
+            key.to_string(),
+            format!("CB_SYNTHETIC_SECRET_{key}"),
+            format!("CB_SYNTHETIC_TOKEN_{key}"),
+        ] {
+            assert!(!result.contains(&secret));
+            assert!(!audit.contains(&secret));
+        }
+    }
 }
 
 #[tokio::test]
@@ -750,33 +868,458 @@ async fn malformed_policy_and_sso_or_sts_denial_prevent_all_provider_and_process
 }
 
 #[tokio::test]
-async fn command_dispatch_keeps_cli_unavailable_until_verified_child_handoff_exists() {
+async fn inherited_cli_receives_exact_sts_verified_credentials_without_payload_fallback() {
     let fixture = Fixture::new();
-    let result = widget_fetch_impl(
-        &fixture.state,
-        json!({"widget": "aws-cli", "inputs": {"command": "aws sts get-caller-identity"}}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result["error_type"], "CliContextUnavailable");
-    let unsupported = widget_fetch_impl(
-        &fixture.state,
-        json!({"widget": "aws-cli", "inputs": {"command": "aws ecr batch-delete-image"}}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(unsupported["error_type"], "UnsupportedCommand");
-    aws::policy::write_text(&fixture.state.runtime.paths, "statements: []").unwrap();
-    let denied = widget_fetch_impl(
-        &fixture.state,
-        json!({"widget": "aws-cli", "inputs": {"command": "aws sts get-caller-identity"}}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(denied["render"], "permission_denied");
+    fixture.connect_a("CB_SYNTHETIC_CLI_A1", 3000).await;
+    fixture
+        .process
+        .ready(process_output("synthetic inherited result"));
+    let mut params = cli_params();
+    // These are untrusted widget payload, not configuration or credentials.
+    params["inputs"]["profile"] = json!("demo-b");
+    params["inputs"]["region"] = json!("eu-west-1");
+    params["inputs"]["aws_config_path"] = json!("synthetic-untrusted.ini");
+    params["inputs"]["credentials"] = json!({"access_key_id": "CB_SYNTHETIC_UNTRUSTED"});
+    let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(result["render"], "table");
+    assert_eq!(result["action"], "sts:GetCallerIdentity");
+    assert_eq!(result["account_id"], ACCOUNT_A);
+    assert_eq!(result["region"], "us-east-1");
+    assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 1);
+    {
+        let requests = fixture.process.requests.lock();
+        assert_cli_request(&requests[0], "CB_SYNTHETIC_CLI_A1", "us-east-1", 3000);
+    }
+    assert_eq!(
+        fixture.aws.identity_keys.lock().as_slice(),
+        ["CB_SYNTHETIC_CLI_A1"]
+    );
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+    assert_no_handoff_secrets(&fixture, &result, &["CB_SYNTHETIC_CLI_A1"]);
+}
+
+#[tokio::test]
+async fn pinned_cli_uses_its_own_verified_keys_instead_of_active_account_credentials() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_CLI_A1", 3000).await;
+    fixture.aws.ready(
+        "demo-b",
+        "CB_SYNTHETIC_CLI_B_PIN",
+        ACCOUNT_B,
+        "principal-b",
+        3000,
+    );
+    fixture
+        .process
+        .ready(process_output("synthetic pinned result"));
+    let result = widget_fetch_impl(&fixture.state, pinned_cli("demo-b", ACCOUNT_B))
+        .await
+        .unwrap();
+    assert_eq!(result["render"], "table");
+    assert_eq!(result["account_id"], ACCOUNT_B);
+    assert_eq!(fixture.state.current_ctx().unwrap().account_id, ACCOUNT_A);
+    assert_eq!(
+        fixture.aws.identity_keys.lock().as_slice(),
+        ["CB_SYNTHETIC_CLI_A1", "CB_SYNTHETIC_CLI_B_PIN"]
+    );
+    {
+        let requests = fixture.process.requests.lock();
+        assert_eq!(requests.len(), 1);
+        assert_cli_request(&requests[0], "CB_SYNTHETIC_CLI_B_PIN", "us-east-1", 3000);
+    }
+    assert_no_handoff_secrets(
+        &fixture,
+        &result,
+        &["CB_SYNTHETIC_CLI_A1", "CB_SYNTHETIC_CLI_B_PIN"],
+    );
+}
+
+#[tokio::test]
+async fn cli_operation_argument_and_policy_denials_do_no_provider_or_process_work() {
+    for command in [
+        "aws ecr batch-delete-image",
+        "aws sts get-role-credentials",
+        "aws sts get-caller-identity --profile demo-b",
+        "aws sts get-caller-identity --region eu-west-1",
+        "aws sts get-caller-identity --endpoint-url https://example.invalid",
+    ] {
+        let fixture = Fixture::new();
+        aws::policy::write_text(
+            &fixture.state.runtime.paths,
+            "statements:\n  - effect: Allow\n    action: ['*']\n",
+        )
+        .unwrap();
+        let mut params = pinned_cli("demo-a", ACCOUNT_A);
+        params["inputs"]["command"] = json!(command);
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert_eq!(result["error_type"], "UnsupportedCommand");
+        fixture.aws.assert_no_resolution();
+        assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+        fixture.no_process();
+    }
+    for text in [
+        "not: [valid",
+        "statements: []",
+        "statements:\n  - effect: Allow\n    action: ['*']\n  - effect: Deny\n    action: [sso:GetRoleCredentials]\n",
+        "statements:\n  - effect: Allow\n    action: ['*']\n  - effect: Deny\n    action: [sts:GetCallerIdentity]\n",
+        "statements:\n  - effect: Allow\n    action: ['*']\n  - effect: Deny\n    action: [cloudformation:ListStacks]\n",
+    ] {
+        let fixture = Fixture::new();
+        let _ = fixture.policy();
+        std::fs::write(aws::policy::policy_path(&fixture.state.runtime.paths), text).unwrap();
+        let mut params = pinned_cli("demo-a", ACCOUNT_A);
+        params["inputs"]["command"] = json!("aws cloudformation list-stacks");
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert_eq!(result["render"], "permission_denied");
+        fixture.aws.assert_no_resolution();
+        assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+        fixture.no_process();
+    }
+}
+
+#[tokio::test]
+async fn cli_cannot_use_absent_or_invalid_context_as_an_ambient_credentials_fallback() {
+    let fixture = Fixture::new();
+    let missing = widget_fetch_impl(&fixture.state, cli_params())
+        .await
+        .unwrap();
+    assert_eq!(missing["error_type"], "NoVerifiedContext");
+    let mut incomplete = cli_params();
+    incomplete["context"] = json!({"mode": "pinned", "profile": "demo-a", "region": "us-east-1"});
+    assert_eq!(
+        widget_fetch_impl(&fixture.state, incomplete).await.unwrap()["error_type"],
+        "InvalidContext"
+    );
+    let invalid = widget_fetch_impl(&fixture.state, pinned_cli("demo-a", ACCOUNT_B))
+        .await
+        .unwrap();
+    assert_eq!(invalid["error_type"], "UnsupportedProfile");
     fixture.aws.assert_no_resolution();
-    assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
     fixture.no_process();
+}
+
+#[tokio::test]
+async fn cli_rejects_missing_or_expired_provider_credentials_before_process_handoff() {
+    for provided in [
+        Err("synthetic SSO credentials unavailable".to_string()),
+        Ok(Credentials::new(
+            "CB_SYNTHETIC_NO_EXPIRY",
+            "CB_SYNTHETIC_SECRET",
+            Some("CB_SYNTHETIC_TOKEN".into()),
+            None,
+            "command-test-only",
+        )),
+        Ok(credentials("CB_SYNTHETIC_ALREADY_EXPIRED", 1234)),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .aws
+            .queue_credentials("demo-a")
+            .send(provided)
+            .unwrap();
+        let result = widget_fetch_impl(&fixture.state, pinned_cli("demo-a", ACCOUNT_A))
+            .await
+            .unwrap();
+        assert_eq!(result["ok"], false);
+        assert!(matches!(
+            result["error_type"].as_str(),
+            Some("CredentialsError" | "CredentialsExpired")
+        ));
+        assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 0);
+        fixture.no_process();
+    }
+}
+
+#[tokio::test]
+async fn cli_handoff_rejects_incomplete_temporary_credentials_even_after_fake_sts_success() {
+    for (key, secret, token) in [
+        ("", "CB_SYNTHETIC_SECRET", Some("CB_SYNTHETIC_TOKEN")),
+        ("CB_SYNTHETIC_EMPTY_SECRET", "", Some("CB_SYNTHETIC_TOKEN")),
+        ("CB_SYNTHETIC_NO_TOKEN", "CB_SYNTHETIC_SECRET", None),
+        ("CB_SYNTHETIC_EMPTY_TOKEN", "CB_SYNTHETIC_SECRET", Some("")),
+    ] {
+        let fixture = Fixture::new();
+        fixture.aws.ready_identity(key, ACCOUNT_A, "principal-a");
+        fixture
+            .aws
+            .queue_credentials("demo-a")
+            .send(Ok(Credentials::new(
+                key,
+                secret,
+                token.map(str::to_string),
+                Some(UNIX_EPOCH + Duration::from_secs(3000)),
+                "command-test-only",
+            )))
+            .unwrap();
+        let result = widget_fetch_impl(&fixture.state, pinned_cli("demo-a", ACCOUNT_A))
+            .await
+            .unwrap();
+        assert_eq!(result["error_type"], "CliCredentialsUnavailable");
+        assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
+        fixture.no_process();
+    }
+}
+
+#[tokio::test]
+async fn cli_after_refresh_receives_the_new_sts_verified_temporary_credentials() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_CLI_A1", 2000).await;
+    fixture
+        .process
+        .ready(process_output("synthetic first session"));
+    assert_eq!(
+        widget_fetch_impl(&fixture.state, cli_params())
+            .await
+            .unwrap()["render"],
+        "table"
+    );
+    fixture.clock.0.store(2000, Ordering::SeqCst);
+    fixture.aws.ready(
+        "demo-a",
+        "CB_SYNTHETIC_CLI_A2",
+        ACCOUNT_A,
+        "principal-a",
+        4000,
+    );
+    fixture
+        .process
+        .ready(process_output("synthetic refreshed session"));
+    let result = widget_fetch_impl(&fixture.state, cli_params())
+        .await
+        .unwrap();
+    assert_eq!(result["render"], "table");
+    assert_eq!(
+        fixture.aws.identity_keys.lock().as_slice(),
+        ["CB_SYNTHETIC_CLI_A1", "CB_SYNTHETIC_CLI_A2"]
+    );
+    {
+        let requests = fixture.process.requests.lock();
+        assert_eq!(requests.len(), 2);
+        assert_cli_request(&requests[0], "CB_SYNTHETIC_CLI_A1", "us-east-1", 2000);
+        assert_cli_request(&requests[1], "CB_SYNTHETIC_CLI_A2", "us-east-1", 4000);
+    }
+    assert_no_handoff_secrets(
+        &fixture,
+        &result,
+        &["CB_SYNTHETIC_CLI_A1", "CB_SYNTHETIC_CLI_A2"],
+    );
+}
+
+#[tokio::test]
+async fn invalidated_cli_waits_for_cancellation_and_runner_completion_before_returning() {
+    for change in ["selection", "path", "profile", "expiry"] {
+        let fixture = Fixture::new();
+        fixture.connect_a("CB_SYNTHETIC_CLI_PENDING", 3000).await;
+        let (mut cancelled, finish_process) = fixture.process.wait_for_cancellation();
+        let pending = widget_fetch_impl(&fixture.state, cli_params());
+        tokio::pin!(pending);
+        assert!(futures::poll!(&mut pending).is_pending());
+        assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 1);
+        match change {
+            "selection" => {
+                fixture.aws.ready(
+                    "demo-b",
+                    "CB_SYNTHETIC_NEW_ACTIVE",
+                    ACCOUNT_B,
+                    "principal-b",
+                    3000,
+                );
+                assert_eq!(
+                    aws_set_account_impl(&fixture.state, demo("demo-b", ACCOUNT_B))
+                        .await
+                        .unwrap()["ok"],
+                    true
+                );
+            }
+            "path" => {
+                settings::save(
+                    &fixture.state.runtime.paths,
+                    &json!({"aws_config_path": "synthetic-changed-config.ini"}),
+                );
+            }
+            "profile" => {
+                fixture
+                    .aws
+                    .snapshots
+                    .lock()
+                    .get_mut("demo-a")
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .role_name = "ChangedSyntheticRole".into();
+            }
+            "expiry" => {
+                fixture.clock.0.store(3000, Ordering::SeqCst);
+            }
+            _ => unreachable!(),
+        }
+        // Drive the real command monitor until the fake child sees cancellation.
+        // The timeout is a failure bound, not a sequencing sleep.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                result = &mut pending => panic!("command returned before the runner completed: {result:?}"),
+                observed = &mut cancelled => observed.expect("runner never observed cancellation"),
+            }
+        }).await.expect("context change did not cancel the running CLI");
+        assert!(fixture.process.requests.lock()[0]
+            .cancellation
+            .is_cancelled());
+        assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 0);
+        assert!(futures::poll!(&mut pending).is_pending());
+        finish_process
+            .send(Ok(process_output("SYNTHETIC_STALE_RESULT_MUST_NOT_ESCAPE")))
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 1);
+        let expected = match change {
+            "profile" => "ConfigurationChanged",
+            "expiry" => "CredentialsExpired",
+            _ => "Superseded",
+        };
+        assert_eq!(result["error_type"], expected, "change: {change}");
+        assert!(!result
+            .to_string()
+            .contains("SYNTHETIC_STALE_RESULT_MUST_NOT_ESCAPE"));
+        if change == "selection" {
+            assert_eq!(fixture.state.current_ctx().unwrap().account_id, ACCOUNT_B);
+        }
+        assert_no_handoff_secrets(&fixture, &result, &["CB_SYNTHETIC_CLI_PENDING"]);
+    }
+}
+
+#[tokio::test]
+async fn cli_cleanup_failure_is_visible_even_after_the_context_is_superseded() {
+    for supersede in [false, true] {
+        let fixture = Fixture::new();
+        fixture.connect_a("CB_SYNTHETIC_CLEANUP", 3000).await;
+        if !supersede {
+            fixture
+                .process
+                .queue_output()
+                .send(Err(crate::process::CLEANUP_FAILED.into()))
+                .unwrap();
+            let result = widget_fetch_impl(&fixture.state, cli_params())
+                .await
+                .unwrap();
+            assert_eq!(result["error_type"], "CliCleanupFailed");
+        } else {
+            let (mut cancelled, finish) = fixture.process.wait_for_cancellation();
+            let pending = widget_fetch_impl(&fixture.state, cli_params());
+            tokio::pin!(pending);
+            assert!(futures::poll!(&mut pending).is_pending());
+            fixture.aws.ready(
+                "demo-b",
+                "CB_SYNTHETIC_NEW_ACTIVE",
+                ACCOUNT_B,
+                "principal-b",
+                3000,
+            );
+            assert_eq!(
+                aws_set_account_impl(&fixture.state, demo("demo-b", ACCOUNT_B))
+                    .await
+                    .unwrap()["ok"],
+                true
+            );
+            tokio::time::timeout(Duration::from_secs(2), async {
+                tokio::select! {
+                    result = &mut pending => panic!("cleanup returned before its outcome: {result:?}"),
+                    observed = &mut cancelled => observed.unwrap(),
+                }
+            }).await.unwrap();
+            finish
+                .send(Err(crate::process::CLEANUP_FAILED.into()))
+                .unwrap();
+            let result = pending.await.unwrap();
+            assert_eq!(result["error_type"], "CliCleanupFailed");
+            assert_eq!(fixture.state.current_ctx().unwrap().account_id, ACCOUNT_B);
+        }
+        let audit = crate::audit::tail(&fixture.state.runtime.paths, 50);
+        let failure = audit
+            .iter()
+            .find(|entry| entry["error_type"] == "CliCleanupFailed")
+            .unwrap();
+        assert_eq!(failure["account_id"], ACCOUNT_A);
+        assert!(!failure.to_string().contains("CB_SYNTHETIC_CLEANUP"));
+    }
+}
+
+#[tokio::test]
+async fn unrelated_topbar_switch_does_not_cancel_a_pinned_cli_request() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_ACTIVE_A1", 3000).await;
+    fixture.aws.ready(
+        "demo-b",
+        "CB_SYNTHETIC_INDEPENDENT_PIN",
+        ACCOUNT_B,
+        "principal-b",
+        3000,
+    );
+    let finish_process = fixture.process.queue_output();
+    let pending = widget_fetch_impl(&fixture.state, pinned_cli("demo-b", ACCOUNT_B));
+    tokio::pin!(pending);
+    assert!(futures::poll!(&mut pending).is_pending());
+    fixture.aws.ready(
+        "demo-a",
+        "CB_SYNTHETIC_ACTIVE_A2",
+        ACCOUNT_A,
+        "principal-a",
+        3000,
+    );
+    let mut changed_topbar = demo("demo-a", ACCOUNT_A);
+    changed_topbar["region"] = json!("eu-west-1");
+    assert_eq!(
+        aws_set_account_impl(&fixture.state, changed_topbar)
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    assert!(futures::poll!(&mut pending).is_pending());
+    assert!(!fixture.process.requests.lock()[0]
+        .cancellation
+        .is_cancelled());
+    finish_process
+        .send(Ok(process_output("synthetic independent pinned result")))
+        .unwrap();
+    let result = pending.await.unwrap();
+    assert_eq!(result["render"], "table");
+    assert_eq!(result["account_id"], ACCOUNT_B);
+    assert_eq!(result["region"], "us-east-1");
+    assert_eq!(fixture.state.current_ctx().unwrap().region, "eu-west-1");
+    assert_eq!(fixture.process.completed.load(Ordering::SeqCst), 1);
+    {
+        let requests = fixture.process.requests.lock();
+        assert_cli_request(
+            &requests[0],
+            "CB_SYNTHETIC_INDEPENDENT_PIN",
+            "us-east-1",
+            3000,
+        );
+    }
+}
+
+#[tokio::test]
+async fn cli_runner_error_does_not_expose_the_verified_temporary_credentials() {
+    let fixture = Fixture::new();
+    let key = "CB_SYNTHETIC_CLI_ERROR";
+    fixture.connect_a(key, 3000).await;
+    fixture
+        .process
+        .queue_output()
+        .send(Err(format!(
+            "synthetic runner error: {key} CB_SYNTHETIC_SECRET_{key} CB_SYNTHETIC_TOKEN_{key}"
+        )))
+        .unwrap();
+    let result = widget_fetch_impl(&fixture.state, cli_params())
+        .await
+        .unwrap();
+    assert_eq!(result["ok"], false);
+    assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 1);
+    assert_no_handoff_secrets(&fixture, &result, &[key]);
 }
 
 #[tokio::test]

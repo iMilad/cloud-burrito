@@ -38,24 +38,44 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
 }
 
 async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
+    let Some(access) = &ctx.cli else {
+        return json!({"ok": false, "error_type": "CliCredentialsUnavailable", "error": "Select a verified account before running a command"});
+    };
+    if access.cancellation.is_cancelled() {
+        return json!({"ok": false, "error_type": "Cancelled", "error": "Command cancelled"});
+    }
+    if !access
+        .credentials
+        .expiry()
+        .is_some_and(|expiry| crate::runtime::unexpired(expiry, ctx.runtime.clock.now_epoch(), 0.0))
+    {
+        return json!({"ok": false, "error_type": "CredentialsExpired", "error": "Verified credentials expired; reconnect the account"});
+    }
     let output = match ctx
         .runtime
         .process
         .run(CliRequest {
             argv: parsed.argv.clone(),
-            profile: ctx.profile.clone(),
             region: ctx.region.clone(),
+            credentials: access.credentials.clone(),
+            cancellation: access.cancellation.clone(),
         })
         .await
     {
         Ok(out) => out,
-        Err(error) => return json!({"ok": false, "error": error}),
+        Err(error) if error == crate::process::CLEANUP_FAILED => {
+            return json!({"ok": false, "error_type": "CliCleanupFailed", "error": error});
+        }
+        Err(error) => {
+            return json!({"ok": false, "error": safe_diagnostic(&error, &access.credentials)})
+        }
     };
     if !output.success {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Child diagnostics can contain request data, credentials or proxy URLs.
+        // Do not echo them into the webview or audit log.
         return json!({
             "ok": false,
-            "error": format!("aws exited with {}: {}", output.status, tail_chars(stderr.trim(), 400)),
+            "error": "AWS CLI command failed; check the selected account, permissions and inputs",
         });
     }
     if output.stdout.len() > MAX_OUTPUT_BYTES {
@@ -65,11 +85,17 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
         });
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
+    if contains_credentials(&stdout, &access.credentials) {
+        return json!({"ok": false, "error": "CLI output contained authentication material and was not displayed"});
+    }
     let trimmed = stdout.trim();
     let mut out = if trimmed.is_empty() {
         json!({"render": "table", "columns": [], "rows": []})
     } else {
         match serde_json::from_str::<Value>(trimmed) {
+            Ok(v) if value_contains_credentials(&v, &access.credentials) => {
+                return json!({"ok": false, "error": "CLI output contained authentication material and was not displayed"});
+            }
             Ok(v) => table_model(&v),
             Err(e) => return json!({"ok": false, "error": format!("output was not JSON: {e}")}),
         }
@@ -80,13 +106,38 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
     out
 }
 
-/// Last `n` chars of a string (stderr can be pages of stack trace).
-fn tail_chars(s: &str, n: usize) -> String {
-    let count = s.chars().count();
-    if count <= n {
-        return s.to_string();
+fn contains_credentials(text: &str, credentials: &aws_credential_types::Credentials) -> bool {
+    [
+        credentials.access_key_id(),
+        credentials.secret_access_key(),
+        credentials.session_token().unwrap_or(""),
+    ]
+    .iter()
+    .any(|value| !value.is_empty() && text.contains(value))
+}
+
+fn safe_diagnostic(text: &str, credentials: &aws_credential_types::Credentials) -> String {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    if contains_credentials(text, credentials) || contains_credentials(&clean, credentials) {
+        return "AWS CLI execution failed; authentication details were withheld".into();
     }
-    format!("…{}", s.chars().skip(count - n).collect::<String>())
+    clean.chars().take(400).collect()
+}
+
+fn value_contains_credentials(
+    value: &Value,
+    credentials: &aws_credential_types::Credentials,
+) -> bool {
+    match value {
+        Value::String(text) => contains_credentials(text, credentials),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_contains_credentials(value, credentials)),
+        Value::Object(values) => values.iter().any(|(key, value)| {
+            contains_credentials(key, credentials) || value_contains_credentials(value, credentials)
+        }),
+        _ => false,
+    }
 }
 
 /// A validated, ready-to-spawn CLI command.
@@ -723,12 +774,21 @@ mod tests {
         WidgetCtx {
             sdk: test_sdk_config(),
             runtime,
-            profile: "fixture-profile".into(),
             account_id: "acct-fixture".into(),
             region: "eu-west-1".into(),
             widget_name: "aws-cli".into(),
             inputs: json!({"command": "aws cloudformation list-stacks"}),
             policy,
+            cli: Some(crate::widgets::CliAccess {
+                credentials: aws_credential_types::Credentials::new(
+                    "CB_SYNTHETIC_KEY",
+                    "CB_SYNTHETIC_SECRET",
+                    Some("CB_SYNTHETIC_TOKEN".into()),
+                    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000)),
+                    "widget-test-only",
+                ),
+                cancellation: crate::process::ProcessCancellation::new(),
+            }),
         }
     }
 
@@ -746,7 +806,6 @@ mod tests {
             stdout: b"{}".to_vec(),
             stderr: Vec::new(),
             success: true,
-            status: "exit status: 0".into(),
         }));
         let policy = Policy::parse("statements:\n  - effect: Allow\n    action: ['*']\n")
             .map_err(|error| error.message);
@@ -769,7 +828,6 @@ mod tests {
             stdout: br#"{"StackSummaries":[{"StackName":"demo-stack"}]}"#.to_vec(),
             stderr: Vec::new(),
             success: true,
-            status: "exit status: 0".into(),
         }));
         let ctx = fetch_context(&dir, process.clone(), allowed_fetch_policy());
 
@@ -781,19 +839,14 @@ mod tests {
         assert_eq!(result["account_id"], "acct-fixture");
         assert_eq!(result["region"], "eu-west-1");
         assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+        let requests = process.requests.lock();
+        assert_eq!(requests.len(), 1);
         assert_eq!(
-            process.requests.lock().as_slice(),
-            &[CliRequest {
-                argv: vec![
-                    "cloudformation".into(),
-                    "list-stacks".into(),
-                    "--output".into(),
-                    "json".into(),
-                ],
-                profile: "fixture-profile".into(),
-                region: "eu-west-1".into(),
-            }],
+            requests[0].argv,
+            vec!["cloudformation", "list-stacks", "--output", "json"]
         );
+        assert_eq!(requests[0].region, "eu-west-1");
+        assert_eq!(requests[0].credentials.access_key_id(), "CB_SYNTHETIC_KEY");
     }
 
     #[tokio::test]
@@ -848,9 +901,8 @@ mod tests {
                     stdout: Vec::new(),
                     stderr: b" fixture failure \n".to_vec(),
                     success: false,
-                    status: "exit status: 7".into(),
                 }),
-                "aws exited with exit status: 7: fixture failure",
+                "AWS CLI command failed; check the selected account, permissions and inputs",
             ),
         ] {
             let dir = TestDir::new();
@@ -861,6 +913,68 @@ mod tests {
 
             assert_eq!(result, json!({"ok": false, "error": expected_error}));
             assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_expired_or_cancelled_cli_authority_never_reaches_process() {
+        for case in ["missing", "expired", "cancelled"] {
+            let dir = TestDir::new();
+            let process = Arc::new(FakeProcessRunner::default());
+            let mut ctx = fetch_context(&dir, process.clone(), allowed_fetch_policy());
+            match case {
+                "missing" => ctx.cli = None,
+                "expired" => {
+                    ctx.cli.as_mut().unwrap().credentials = aws_credential_types::Credentials::new(
+                        "CB_SYNTHETIC_KEY",
+                        "CB_SYNTHETIC_SECRET",
+                        Some("CB_SYNTHETIC_TOKEN".into()),
+                        Some(std::time::UNIX_EPOCH),
+                        "expired-widget-fixture",
+                    );
+                }
+                _ => ctx.cli.as_ref().unwrap().cancellation.cancel(),
+            }
+            assert_eq!(fetch(&ctx).await["ok"], false);
+            assert_eq!(process.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_diagnostics_and_results_do_not_expose_captured_credentials() {
+        let marker = "CB_SYNTHETIC_TOKEN";
+        for response in [
+            Err(format!("runner failure containing {marker}")),
+            Err("runner failure containing CB_SYNTHETIC_\nTOKEN".into()),
+            Ok(ProcessOutput {
+                stdout: Vec::new(),
+                stderr: format!("private diagnostic {marker}").into_bytes(),
+                success: false,
+            }),
+            Ok(ProcessOutput {
+                stdout: serde_json::to_vec(&json!({"unexpected": marker})).unwrap(),
+                stderr: Vec::new(),
+                success: true,
+            }),
+            Ok(ProcessOutput {
+                stdout: br#"{"unexpected":"\u0043B_SYNTHETIC_TOKEN"}"#.to_vec(),
+                stderr: Vec::new(),
+                success: true,
+            }),
+            Ok(ProcessOutput {
+                stdout: br#"{"\u0043B_SYNTHETIC_TOKEN":"unexpected key"}"#.to_vec(),
+                stderr: Vec::new(),
+                success: true,
+            }),
+        ] {
+            let dir = TestDir::new();
+            let process = FakeProcessRunner::with_response(response);
+            let ctx = fetch_context(&dir, process.clone(), allowed_fetch_policy());
+            let result = fetch(&ctx).await;
+            assert_eq!(result["ok"], false);
+            assert!(!result.to_string().contains(marker));
+            let audit = std::fs::read_to_string(ctx.runtime.paths.data_file("audit.log")).unwrap();
+            assert!(!audit.contains(marker));
         }
     }
 
@@ -910,7 +1024,6 @@ mod tests {
                 stdout: br#"[{"fixture":"ok"}]"#.to_vec(),
                 stderr: Vec::new(),
                 success: true,
-                status: "exit status: 0".into(),
             }));
             let policy = Policy::parse(&policy::default_yaml()).map_err(|error| error.message);
             let mut ctx = fetch_context(&dir, process.clone(), policy);
@@ -983,7 +1096,6 @@ mod tests {
                 stdout: b"[]".to_vec(),
                 stderr: Vec::new(),
                 success: true,
-                status: "exit status: 0".into(),
             }));
             let policy = Policy::parse("statements:\n  - effect: Allow\n    action: ['*']\n")
                 .map_err(|error| error.message);

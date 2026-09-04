@@ -3934,8 +3934,8 @@
   }
 
   // ===== Widget: AWS CLI Table =====
-  // The backend checks the exact mapping, arguments and policy. Desktop CLI
-  // execution is paused until the verified credential handoff is implemented.
+  // The backend checks the exact mapping, arguments and policy, then gives the
+  // constrained child the same temporary credentials verified for this context.
   // Commands can be pinned with the account/region they were saved under —
   // the same Live/Pinned tab and pin-card system as Pipeline Runs (and the
   // same pipeline-* CSS classes; cli-* classes are the JS hooks).

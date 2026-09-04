@@ -1,8 +1,8 @@
 # Cloud Burrito — From working tool to public beta
 
-**P1-01 through P1-03 complete locally. P1 remains in progress; P1-04 is next. P2–P4 remain planned. Device tests deferred.**
+**P1-01 through P1-04 complete locally. P1-05 is next. Full P1 remains incomplete. P2–P4 remain planned; device tests deferred.**
 
-Decision reference: 2026-09-03. Keep Rust + Tauri. The user subsequently authorized P1-01 through P1-03 implementation with local synthetic tests, without live AWS execution. Changes and checks are recorded in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). Laptop checks remain deferred, and no release state has changed.
+Decision reference: 2026-09-03. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
 
 ## The product we are building
 
@@ -26,8 +26,8 @@ Use one work ID per reviewable change where practical. A work ID may need multip
 | 1 | P1-01: inject storage, identity, transport and process boundaries — complete locally | Critical tests run without personal files, credentials or real AWS/CLI |
 | 2 | P1-02: exact capability and argument rules — complete locally | Forbidden operation stays denied under wildcard policy before execution |
 | 3 | P1-03: verify active/pinned identity and isolate configuration — complete locally | Synthetic identity mismatch, ordering, configuration/refresh and auth-status cases pass |
-| 4 | P1-04: constrain the CLI child — next | Verified credential handoff; controlled environment; bounded streams; timeout/cancel reaps child |
-| 5 | P1-05/06: bind results, validate commands, render safely and report audit outcomes | Late results cannot cross contexts; diagnostics accurately distinguish outcomes |
+| 4 | P1-04: constrain the CLI child — complete locally | Exact verified credential handoff; isolated child environment; streaming caps; supervised direct-child cleanup and visible cleanup failure |
+| 5 | P1-05 next, then P1-06: bind results, validate commands, render safely and report audit outcomes | Late results cannot cross tile/detail/selector owners; diagnostics accurately distinguish outcomes |
 | 6 | P2-01/02: durable storage, defaults, theme and save feedback | Failed saves remain failures; accepted settings survive reopen |
 | 7 | P2-03/04: first run, recovery and result states | Missing prerequisites, stale data and partial failures are visible and recoverable |
 | 8 | P2-05/06/07: connected investigation, honest beta surface and keyboard use | Synthetic flagship journey works; unknown relationships stay explicit |
@@ -40,7 +40,7 @@ A dependent unit may consume a reviewed interface fixture before a whole phase f
 
 ## Current implementation progress
 
-**P1-01–03 are complete locally. Full P1 is not complete.** No Windows or Ubuntu input was required for these offline implementation slices.
+**P1-01–04 are complete locally. P1-05 is next; full P1 is not complete.** No Windows or Ubuntu input was required for these offline implementation slices.
 
 P1-01 introduced explicit test storage and fake identity/process boundaries, isolated the pinned-context persistence test, and demonstrated delayed completions and zero-spawn denial. Its historical checks remain in [P1-01 evidence](p1-01-evidence.md).
 
@@ -48,18 +48,22 @@ P1-02 added exact operation/argument denial. Its forbidden-operation regression 
 
 P1-03 adds explicit legacy/named-session SSO configuration, supported named-session token renewal, frozen credentials shared by STS and resources, account/principal/expiry verification, refresh and configuration invalidation, latest-attempt connection state, independent pinned contexts, and frontend auth-status guards. **97 Rust library tests and 5 Node production-handler tests pass.** Expired legacy tokens require external SSO login. Live AWS/provider behavior, native GUI and Windows/Ubuntu validation were not exercised; see [P1-03 evidence](p1-03-evidence.md).
 
-**Next: P1-04.** The desktop CLI returns `CliContextUnavailable` until the verified credential snapshot can be handed to a child with a controlled environment, bounded streams and supervised termination. P1-05 still owns broader tile/detail/selector lifetime and result ownership. Run meaningful offline checks with each unit; device and live-provider acceptance remain attached to their later gates.
+**P1-04 complete locally.** The implementation replaces the temporary desktop CLI block with exact frozen STS credentials and an isolated environment/home/cwd/null AWS configuration. Executable support covers native installers plus a narrow Unix absolute-Python wrapper, launched with its validated native interpreter at the original absolute virtual-environment path and `[-I, canonical aws script, validated argv]`. Shell, environment-relative and batch wrappers are unsupported. AWS CLI v2 version and publisher trust remain local-installation requirements; no version probe was run.
+
+The child execution deadline is the earlier of 30 seconds or credential expiry; stdout/stderr have 2 MiB/256 KiB streaming caps. Affected-context invalidation is monitored every 100 ms, and cancellation/caller drop retain direct-child termination/reap ownership. Cleanup can outlast the execution deadline while awaiting OS-confirmed exit; only an empty isolated directory is removed, so a nonempty directory can remain. Raw stderr is withheld from the UI and exact credential values are redacted from runner errors. Cleanup failure survives a superseded context as the stable `CliCleanupFailed` UI/audit error; a controlled command regression covers that ordering.
+
+The full Rust library suite passes **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. Record the separate P1-04 local commit without pushing. **Next: P1-05**, broader tile/detail/selector lifetime and result ownership. Device and live-provider acceptance remain attached to their later gates.
 
 ## Validation ledger
 
-Existing P0 results remain recorded in [phase-0.md](phase-0.md#baseline-recorded-in-this-phase). P1-01–03 supply isolated boundaries, capability/argument denial and verified-context evidence; full journey, security and device acceptance remain pending as described below.
+Existing P0 results remain recorded in [phase-0.md](phase-0.md#baseline-recorded-in-this-phase). P1-01–04 supply isolated boundaries, capability/argument denial, verified-context and constrained-CLI evidence; full journey, security and device acceptance remain pending as described below.
 
 | ID | Pending evidence | Responsible stage | Dependency / effect of deferral |
 | --- | --- | --- | --- |
 | V01 | Windows and Ubuntu OS, architecture, tool/runtime inventory | User + P0 device checks | Needed to choose the actual support matrix; no planning blocker |
 | V02 | Early Windows/Ubuntu source build and controlled native launch | P0, with platform fixes in P4 | Reveals compatibility gaps; no support claim until evidence exists |
 | V03 | Native launch, CPU and memory baseline before relevant optimization | P0 / P3-01 | Required for native before/after claims; synthetic work can be designed now |
-| V04 | Remaining process, save-failure and broader result-generation cases | P1/P2 implementation | P1-01 boundary, P1-02 capability and P1-03 identity/configuration/connection-ordering cases pass locally; process supervision, save failures and broader tile ownership remain pending |
+| V04 | Native child behavior, save-failure and broader ownership cases | P1/P2 implementation | P1-01–04 cases pass locally; native child/process-tree behavior, save failures and broader tile ownership remain unverified |
 | V05 | Broader production frontend journeys through a synthetic bridge | P1/P2 implementation | P1-03 has 5 passing Node production-handler tests for auth-status behavior; these do not establish full browser, rendering or native GUI acceptance |
 | V06 | Scheduler, cancellation, cache and output stress fixtures | P3 implementation | Confirms budgets and preserves P1/P2 contracts |
 | V07 | Native build, artifact inventory, checksums and privacy inspection | P4 implementation | A created package is a candidate, not an installation pass |
@@ -75,9 +79,10 @@ Device checks will resume sequentially with one action, expected result and reco
 | --- | --- | --- |
 | Keep Rust + Tauri | Agreed | Improve current architecture; no Go/Wails migration |
 | Finish four phase plans before device testing | Agreed | Continue planning now; device evidence stays pending |
-| P1-01–03 local implementation and synthetic tests authorized | Complete locally | P1-04 is next; live AWS and publication remain outside the completed scope |
+| P1-01–03 local implementation and synthetic tests | Complete locally in `a879851` | Historical evidence remains unchanged |
+| P1-04 implementation, offline checks and separate local commit | Implementation and offline checks complete; separate local commit authorized | Native evidence remains pending; no push, live AWS or publication |
 | Unsigned, identity-free distribution | Repository requirement | No publisher certificates, Apple Developer IDs, notarization or personal publisher metadata |
-| Exact approved CLI operations and validated arguments | Implemented and locally validated in P1-02 | The 18 reviewed resource-read schemas remain; P1-03 temporarily blocks desktop execution until P1-04 provides verified credentials and child isolation |
+| Exact approved CLI operations and validated arguments | P1-02 and P1-04 validated locally | The same 18 resource-read schemas remain; desktop CLI is re-enabled with frozen verified credentials and isolated child execution |
 | Explicit legacy and named-session SSO support | Implemented and locally validated in P1-03 | Frozen STS-verified credentials serve resource calls; unsupported credential/endpoint indirection fails before provider work; live renewal and provider behavior remain unverified |
 | Retain the current frontend; hide unfinished AI/global-search controls in beta | Proposed P2 design | Focus effort on a complete investigation workflow |
 | Numeric performance/resource budgets | Provisional P3 experiments | Adjust from evidence before adopting as release gates; none achieved yet |
@@ -91,4 +96,4 @@ For each work ID, record: source revision/diff, intended behavior, acceptance ca
 
 Phase completion uses the exit criteria in that phase's document. A known context leak, forbidden execution, false save success or lost/hidden failure keeps its unit open. A pending native result remains attached to the candidate and blocks the corresponding platform/performance claim.
 
-P4 hands a candidate to P5. P5 establishes device evidence. P6 packages the portfolio explanation, recorded decisions, demo and release evidence. A GitHub action, tag, draft release or public publication remains a later explicit action governed by [AGENTS.md](../../AGENTS.md); P1-01–03 performed none of them.
+P4 hands a candidate to P5. P5 establishes device evidence. P6 packages the portfolio explanation, recorded decisions, demo and release evidence. A GitHub action, push, tag, draft release or public publication remains a later explicit action governed by [AGENTS.md](../../AGENTS.md). The authorized local P1 commits do not authorize any of those remote actions.

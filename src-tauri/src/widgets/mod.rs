@@ -28,19 +28,24 @@ use serde_json::{json, Map, Value};
 
 use crate::runtime::Runtime;
 
+/// Explicit per-request authority supplied only after connection verification.
+/// Do not derive Debug: AWS Credentials Debug includes the access-key ID.
+pub(crate) struct CliAccess {
+    pub credentials: aws_credential_types::Credentials,
+    pub cancellation: crate::process::ProcessCancellation,
+}
+
 /// The per-fetch execution surface a widget is allowed to use.
 pub struct WidgetCtx {
     pub runtime: Runtime,
     pub sdk: SdkConfig,
-    /// The `~/.aws/config` profile the context resolves credentials from —
-    /// what a spawned child process needs as AWS_PROFILE (aws_cli widget).
-    pub profile: String,
     pub account_id: String,
     pub region: String,
     pub widget_name: String,
     pub inputs: Value,
     /// Active read-only policy (Err = invalid file -> fail closed in preflight).
     pub policy: Result<crate::aws::policy::Policy, String>,
+    pub(crate) cli: Option<CliAccess>,
 }
 
 impl WidgetCtx {
@@ -506,12 +511,12 @@ mod capability_tests {
                 let ctx = WidgetCtx {
                     runtime: Runtime::for_test(dir.paths()),
                     sdk: test_aws::sdk_config_with_counters(counters.clone()),
-                    profile: "demo-profile".into(),
                     account_id: "acct-demo-fixture".into(),
                     region: "us-east-1".into(),
                     widget_name: widget.into(),
                     inputs: json!({"log_group": "/demo/test", "query": "fields @message"}),
                     policy: Policy::parse(policy_text).map_err(|e| e.message),
+                    cli: None,
                 };
                 let denied = fetch(widget, &ctx).await;
                 assert_eq!(denied["render"], "permission_denied", "{widget}");

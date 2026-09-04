@@ -32,7 +32,7 @@ query control and credential acquisition have distinct classifications.
 enable an operation outside that registry. Queries can incur AWS charges.
 
 The core uses the AWS SDK for Rust in-process, without Python or Node at runtime.
-The optional AWS CLI Table widget requires a separately installed AWS CLI.
+The optional AWS CLI Table widget requires a separately installed AWS CLI v2.
 
 ## Contents
 
@@ -168,18 +168,17 @@ resourcegroupstaggingapi:GetResources
 
 ### The AWS CLI Table widget and the registry
 
-**Temporarily unavailable in the desktop app:** CLI execution is blocked until
-P1-04 can pass verified credentials into a constrained child process. Existing
-pins remain saved. Internal SDK widgets use the verified connection described
-above.
+CLI execution uses the same temporary credentials already verified for the
+selected connection. Pinned accounts are verified independently. Credentials go
+only into the child environment, never command arguments or a credentials file.
 
-The retained CLI parser recognizes the **18 resource-read operations** above
+The CLI parser recognizes the **18 resource-read operations** above
 through exact CLI mappings, including `sts get-caller-identity`, `cloudformation
 list-stacks` and `codebuild batch-get-builds`. Each has a reviewed argument
 schema. Unknown, abbreviated or repeated switches, file-loading values,
 unreviewed structured inputs, and context/endpoint/output overrides are rejected
-before process execution. A recognized request still needs a policy allow and
-currently receives `CliContextUnavailable` at desktop dispatch.
+before process execution. A recognized request still needs a policy allow and a
+verified connection with unexpired temporary credentials.
 
 Examples:
 
@@ -194,11 +193,25 @@ cannot be enabled by adding policy wildcards. Existing pins are preserved, but
 unsupported commands show a rejection when run. Query start/stop and credential
 issuance must use their dedicated application workflows.
 
-Parsed commands become an argument vector, never a shell command. Pins retain
-their saved profile/account/region. Verified CLI credential handoff, child
-environment isolation and streaming output limits are P1-04 work. See the
-[P1-02 evidence](docs/roadmap/p1-02-evidence.md) for the parser contract and the
-[P1-03 evidence](docs/roadmap/p1-03-evidence.md) for the temporary execution block.
+Parsed commands become an argument vector, never a shell command. The runner
+resolves an absolute executable, clears the inherited environment and uses an
+isolated temporary home and working directory. Personal CLI aliases, models and
+configuration are not loaded. Native installers and Unix wrappers with an
+absolute Python interpreter are supported; the latter run Python in isolated
+mode, including Homebrew's current wrapper form. Shell, batch and PATH-based
+interpreter wrappers are rejected. A trusted CLI v2 installation is required;
+executable inspection does not verify its version or publisher.
+
+The child has a 30-second deadline, shortened when credentials expire sooner.
+Output is capped while reading: 2 MiB for stdout and 256 KiB for stderr.
+Cancellation, context invalidation, timeout and overflow request termination and
+await the direct child's exit; OS cleanup can take longer than the execution
+deadline. Raw child diagnostics are withheld from the UI. Native executable
+discovery and process behavior still require validation on each platform.
+
+See the [P1-02 evidence](docs/roadmap/p1-02-evidence.md) for the parser contract and
+[P1-04 evidence](docs/roadmap/p1-04-evidence.md) for the environment contract,
+supervision checks and remaining native acceptance.
 
 ## Widgets
 

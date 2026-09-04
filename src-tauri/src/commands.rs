@@ -437,6 +437,19 @@ pub async fn widget_fetch(state: State<'_, AppState>, params: Value) -> Result<V
     widget_fetch_impl(&state, params).await
 }
 
+fn retain_cli_cleanup_failure(ctx: &widgets::WidgetCtx, result: &Value) -> bool {
+    if result["error_type"] != "CliCleanupFailed" {
+        return false;
+    }
+    ctx.log(
+        "CLI process exit could not be confirmed",
+        json!({
+            "error_type": "CliCleanupFailed", "account_id": ctx.account_id, "region": ctx.region,
+        }),
+    );
+    true
+}
+
 async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, String> {
     let name = params
         .get("widget")
@@ -469,12 +482,6 @@ async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, Str
                 &reason,
             ));
         }
-        // Until P1-04 hands the verified credential snapshot to a constrained
-        // child, an inherited-env CLI cannot truthfully use this account label.
-        return Ok(request_error(
-            "CliContextUnavailable",
-            "This context cannot safely be passed to AWS CLI yet. Use the built-in widgets.",
-        ));
     }
     let resolved = match resolve_widget_ctx(state, &params) {
         Ok(context) => context,
@@ -498,18 +505,63 @@ async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, Str
         Ok(session) => session,
         Err(error) => return Ok(error),
     };
+    let cli = if name == "aws-cli" {
+        let credentials = match session.cli_credentials().await {
+            Ok(credentials) => credentials,
+            Err(error) => return Ok(request_error(error.error_type, &error.message)),
+        };
+        // The frozen provider is asynchronous. A superseded handoff must not
+        // start a child even when it resolved successfully.
+        if let Err(error) = validate_request_context(state, &resolved, &session) {
+            return Ok(error);
+        }
+        Some(widgets::CliAccess {
+            credentials,
+            cancellation: crate::process::ProcessCancellation::new(),
+        })
+    } else {
+        None
+    };
     let ctx = &resolved.context;
     let wctx = widgets::WidgetCtx {
         runtime: state.runtime.clone(),
         sdk: session.sdk.clone(),
-        profile: ctx.profile.clone(),
         account_id: session.identity.account_id.clone(),
         region: ctx.region.clone(),
         widget_name: name,
         inputs,
         policy,
+        cli,
     };
-    let result = widgets::fetch(&wctx.widget_name, &wctx).await;
+    let result = if let Some(cli) = &wctx.cli {
+        let work = widgets::fetch(&wctx.widget_name, &wctx);
+        tokio::pin!(work);
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                _ = tick.tick() => {
+                    if let Err(error) = validate_request_context(state, &resolved, &session) {
+                        cli.cancellation.cancel();
+                        // The process owner confirms termination/reaping before
+                        // this command reports that the context was superseded.
+                        let cleanup = work.await;
+                        if retain_cli_cleanup_failure(&wctx, &cleanup) {
+                            return Ok(cleanup);
+                        }
+                        return Ok(error);
+                    }
+                }
+                result = &mut work => break result,
+            }
+        }
+    } else {
+        widgets::fetch(&wctx.widget_name, &wctx).await
+    };
+    if retain_cli_cleanup_failure(&wctx, &result) {
+        return Ok(result);
+    }
     if let Err(error) = validate_request_context(state, &resolved, &session) {
         return Ok(error);
     }

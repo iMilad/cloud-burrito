@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use aws_config::SdkConfig;
+use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::Credentials;
 use parking_lot::Mutex;
 
 use super::config_file::SsoProfileSnapshot;
@@ -81,6 +83,36 @@ impl std::fmt::Debug for VerifiedSession {
             .field("provider_revision", &self.provider_revision)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
+    }
+}
+
+impl VerifiedSession {
+    /// Export only the fixed credential set already used for STS verification.
+    /// This provider cannot refresh, discover another source or run a process.
+    pub(crate) async fn cli_credentials(&self) -> Result<Credentials, ContextError> {
+        let unavailable = || {
+            ContextError::new(
+                "CliCredentialsUnavailable",
+                "Verified temporary credentials are unavailable; reconnect the account",
+            )
+        };
+        let credentials = self
+            .sdk
+            .credentials_provider()
+            .ok_or_else(unavailable)?
+            .provide_credentials()
+            .await
+            .map_err(|_| unavailable())?;
+        if credentials.access_key_id().trim().is_empty()
+            || credentials.secret_access_key().trim().is_empty()
+            || credentials
+                .session_token()
+                .is_none_or(|token| token.trim().is_empty())
+            || credentials.expiry() != Some(self.expires_at)
+        {
+            return Err(unavailable());
+        }
+        Ok(credentials)
     }
 }
 
