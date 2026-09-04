@@ -1,6 +1,6 @@
 # Cloud Burrito — From working tool to public beta
 
-**P1 and P2-01–04 complete locally. P2-05 next; subsequent P2 units and P3–P4 remain planned; device tests deferred.**
+**P1 and P2-01–05 complete locally. P2-06 next; subsequent P2 units and P3–P4 remain planned; device tests deferred.**
 
 Decision reference: 2026-09-03. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
 
@@ -40,7 +40,9 @@ A dependent unit may consume a reviewed interface fixture before a whole phase f
 
 ## Current implementation progress
 
-**P1 and P2-01–04 are complete locally. P2-05 is next.**
+**P1 and P2-01–05 are complete locally. P2-06 is next.**
+
+[P2-05 evidence](p2-05-evidence.md): evidence-bound investigation and exact same-context ownership pass 248 Rust, 17 Node and 84 browser cases.
 
 [P2-04 evidence](p2-04-evidence.md): explicit result states, retained partial evidence and coverage pass 235 Rust, 17 Node and 75 browser cases.
 
@@ -60,7 +62,7 @@ P1-03 adds explicit legacy/named-session SSO configuration, supported named-sess
 
 The child execution deadline is the earlier of 30 seconds or credential expiry; stdout/stderr have 2 MiB/256 KiB streaming caps. Affected-context invalidation is monitored every 100 ms, and cancellation/caller drop retain direct-child termination/reap ownership. Cleanup can outlast the execution deadline while awaiting OS-confirmed exit; only an empty isolated directory is removed, so a nonempty directory can remain. Raw stderr is withheld from the UI and exact credential values are redacted from runner errors. Cleanup failure survives a superseded context as the stable `CliCleanupFailed` UI/audit error; a controlled command regression covers that ordering.
 
-At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: P2-05**, connected investigation. Device and live-provider acceptance remain attached to their later gates.
+At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: P2-06**, honest beta controls. Device and live-provider acceptance remain attached to their later gates.
 
 ## Validation ledger
 

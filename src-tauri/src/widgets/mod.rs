@@ -16,6 +16,7 @@ mod codeartifact_packages;
 mod codebuild_log;
 pub(crate) mod coverage;
 mod errors_by_stack;
+mod handoff;
 mod log_tail;
 mod logs_insights;
 mod pipeline_execution_detail;

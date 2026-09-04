@@ -3,10 +3,23 @@
 
 use serde_json::{json, Value};
 
+use super::handoff::{self, Source};
 use super::{coverage::Coverage, err_msg, WidgetCtx};
 
 const PAGE_LIMIT: i32 = 10_000; // events per GetLogEvents call (API cap ~10k/1MB)
 const MAX_EVENTS: usize = 10_000; // stop after a whole page reaches this threshold
+
+fn with_handoffs(mut result: Value) -> Value {
+    let group = result["log_group"].as_str().unwrap_or("");
+    let stream = result["log_stream"].as_str().unwrap_or("");
+    let logs = if group.is_empty() || stream.is_empty() {
+        handoff::unavailable(Source::IdentifierUnavailable)
+    } else {
+        handoff::logs(group, Some(stream), Source::CodebuildLogs)
+    };
+    result["handoffs"] = json!({"logs":logs,"stack":handoff::manual_stack()});
+    result
+}
 
 fn level_for(message: &str) -> &'static str {
     let upper = message.to_uppercase();
@@ -26,7 +39,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     }
 
     if let Some(denied) = ctx.preflight("codebuild", "BatchGetBuilds") {
-        return denied;
+        return with_handoffs(denied);
     }
     let cb = aws_sdk_codebuild::Client::new(&ctx.sdk);
     let builds = match cb.batch_get_builds().ids(&build_id).send().await {
@@ -38,11 +51,20 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                 "Build log metadata could not be loaded.",
                 false,
             );
-            return coverage.attach(json!({"render": "log_stream", "build_id":build_id, "log_group": "", "events": [], "error": err_msg(e)}));
+            return with_handoffs(coverage.attach(json!({"render": "log_stream", "build_id":build_id, "log_group": "", "events": [], "error": err_msg(e)})));
         }
     };
     let build = builds.builds().iter().find(|build| {
-        build.id() == Some(build_id.as_str()) || build.arn() == Some(build_id.as_str())
+        (build.id() == Some(build_id.as_str()) || build.arn() == Some(build_id.as_str()))
+            && build.arn().is_none_or(|arn| {
+                handoff::valid_build(arn, ctx)
+                    && build.id().is_none_or(|id| {
+                        arn.splitn(6, ':')
+                            .nth(5)
+                            .and_then(|resource| resource.strip_prefix("build/"))
+                            == Some(id)
+                    })
+            })
     });
     let Some(build) = build else {
         let mut coverage = Coverage::unknown(0);
@@ -51,28 +73,46 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             "The requested build was not returned by AWS.",
             false,
         );
-        return coverage.attach(json!({"render":"log_stream", "build_id":build_id, "log_group":"", "log_stream":"", "events":[], "error":"The requested build was not returned by AWS."}));
+        return with_handoffs(coverage.attach(json!({"render":"log_stream", "build_id":build_id, "log_group":"", "log_stream":"", "events":[], "error":"The requested build was not returned by AWS."})));
     };
     let logs = build.logs();
     let group = logs.and_then(|l| l.group_name()).unwrap_or("").to_string();
     let stream = logs.and_then(|l| l.stream_name()).unwrap_or("").to_string();
-    if group.is_empty() || stream.is_empty() {
+    if logs
+        .and_then(|logs| logs.cloud_watch_logs_arn())
+        .is_some_and(|arn| {
+            !handoff::same_context_arn(arn, "logs", "log-group:", ctx)
+                || arn.splitn(6, ':').nth(5)
+                    != Some(format!("log-group:{group}:log-stream:{stream}").as_str())
+        })
+    {
+        let mut coverage = Coverage::unknown(0);
+        coverage.failure(
+            "log_context_mismatch",
+            "The build did not establish a log stream in the current context.",
+            false,
+        );
+        let mut result = with_handoffs(coverage.attach(json!({"render":"log_stream","build_id":build_id,"log_group":"","log_stream":"","events":[],"error":"The build did not establish a log stream in the current context."})));
+        result["handoffs"]["logs"] = handoff::unavailable(Source::ContextMismatch);
+        return result;
+    }
+    if handoff::logs(&group, Some(&stream), Source::CodebuildLogs)["status"] != "available" {
         let mut coverage = Coverage::unknown(0);
         coverage.unknown_reason(
             "cloudwatch_logs_unavailable",
             "The build has no available CloudWatch log group and stream.",
         );
-        return coverage.attach(json!({
+        return with_handoffs(coverage.attach(json!({
             "render": "log_stream", "build_id":build_id, "log_group": group, "log_stream":stream, "events": [],
             "error": "No CloudWatch logs for this build (it may use S3 logs, or logs are disabled)."
-        }));
+        })));
     }
 
     if let Some(mut denied) = ctx.preflight("logs", "GetLogEvents") {
         denied["build_id"] = json!(build_id);
         denied["log_group"] = json!(group);
         denied["log_stream"] = json!(stream);
-        return denied;
+        return with_handoffs(denied);
     }
     let cw = aws_sdk_cloudwatchlogs::Client::new(&ctx.sdk);
 
@@ -137,7 +177,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     if let Some(error) = failure {
         result["error"] = json!(error);
     }
-    coverage.attach(result)
+    with_handoffs(coverage.attach(result))
 }
 
 #[cfg(test)]
@@ -184,6 +224,15 @@ mod tests {
         );
         assert_eq!(result["build_id"], "synthetic-build:run");
         assert_eq!(result["log_stream"], "synthetic-stream");
+        assert_eq!(
+            result["handoffs"]["logs"]["inputs"],
+            json!({"mode":"events","log_group":"/synthetic/build","log_stream":"synthetic-stream"})
+        );
+        assert_eq!(result["handoffs"]["stack"]["status"], "manual");
+        assert_eq!(
+            result["handoffs"]["stack"]["source"],
+            "relationship_unknown"
+        );
         assert_eq!(result["partial"], true);
         assert_eq!(result["error_type"], "PartialFailure");
         assert_eq!(result["coverage"]["counts"]["returned"], 1);
@@ -272,5 +321,47 @@ mod tests {
         assert_eq!(result["ok"], false);
         assert_eq!(result["log_group"], "");
         assert!(!result.to_string().contains("unrelated-stream"));
+        assert_eq!(result["handoffs"]["logs"]["status"], "unavailable");
+    }
+
+    #[tokio::test]
+    async fn matching_build_id_with_foreign_arn_never_fetches_or_offers_logs() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![ExpectedRequest::json(
+            "CodeBuild_20161006.BatchGetBuilds",
+            json!({"ids":["synthetic-build:run"]}),
+            json!({"builds":[{"id":"synthetic-build:run","arn":"arn:aws:codebuild:eu-west-1:acct-other-fixture:build/synthetic-build:run","logs":{"groupName":"/synthetic/foreign","streamName":"synthetic-foreign-stream"}}]}),
+        )]);
+        let result = fetch(&script.context(
+            &dir,
+            "codebuild-log",
+            json!({"build_id":"synthetic-build:run"}),
+        ))
+        .await;
+        script.assert_finished();
+        assert_eq!(script.calls(), 1);
+        assert_eq!(result["handoffs"]["logs"]["status"], "unavailable");
+        assert!(!result.to_string().contains("synthetic-foreign-stream"));
+    }
+
+    #[tokio::test]
+    async fn contradictory_cloudwatch_log_arns_block_reads_and_navigation() {
+        for arn in [
+            "arn:aws:logs:eu-west-1:acct-producer-fixture:log-group:/synthetic/build:log-stream:synthetic-stream",
+            "arn:aws:logs:us-east-1:acct-other-fixture:log-group:/synthetic/build:log-stream:synthetic-stream",
+            "arn:aws:logs:us-east-1:acct-producer-fixture:log-group:/synthetic/other:log-stream:synthetic-stream",
+        ] {
+            let dir = TestDir::new();
+            let script = ScriptedHttp::new(vec![ExpectedRequest::json(
+                "CodeBuild_20161006.BatchGetBuilds",json!({"ids":["synthetic-build:run"]}),
+                json!({"builds":[{"id":"synthetic-build:run","logs":{"groupName":"/synthetic/build","streamName":"synthetic-stream","cloudWatchLogsArn":arn}}]}),
+            )]);
+            let result = fetch(&script.context(&dir,"codebuild-log",json!({"build_id":"synthetic-build:run"}))).await;
+            script.assert_finished();
+            assert_eq!(script.calls(),1);
+            assert_eq!(result["handoffs"]["logs"]["status"],"unavailable");
+            assert_eq!(result["handoffs"]["logs"]["source"],"context_mismatch");
+            assert_eq!(result["log_group"],"");
+        }
     }
 }

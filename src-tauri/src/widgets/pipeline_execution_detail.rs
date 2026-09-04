@@ -1,11 +1,61 @@
 //! Pipeline Execution Detail — the action-by-action breakdown ("log") of one
 //! CodePipeline execution, via ListActionExecutions. Read-only.
 
-use aws_sdk_codepipeline::types::ActionExecutionFilter;
+use aws_sdk_codepipeline::types::{ActionExecutionDetail, ActionExecutionFilter};
 use serde_json::{json, Value};
 
 use super::coverage::Coverage;
+use super::handoff::{self, Source};
 use super::{dt_iso, dt_secs, err_msg, WidgetCtx};
+
+fn action_handoffs(ctx: &WidgetCtx, execution_id: &str, action: &ActionExecutionDetail) -> Value {
+    let unavailable =
+        |source| json!({"build":handoff::unavailable(source),"stack":handoff::unavailable(source)});
+    let Some(input) = action.input() else {
+        return unavailable(Source::UnsupportedAction);
+    };
+    if action.pipeline_execution_id() != Some(execution_id)
+        || input.region().is_some_and(|region| region != ctx.region)
+        || input
+            .role_arn()
+            .is_some_and(|role| !handoff::same_context_arn(role, "iam", "role/", ctx))
+    {
+        return unavailable(Source::ContextMismatch);
+    }
+    let Some(kind) = input.action_type_id() else {
+        return unavailable(Source::UnsupportedAction);
+    };
+    if kind.owner().as_str() != "AWS" {
+        return unavailable(Source::UnsupportedAction);
+    }
+    match (kind.category().as_str(), kind.provider()) {
+        ("Build", "CodeBuild") => {
+            let id = action
+                .output()
+                .and_then(|output| output.execution_result())
+                .and_then(|result| result.external_execution_id())
+                .unwrap_or("");
+            json!({"build":if handoff::valid_build(id,ctx) { handoff::build(id) } else { handoff::unavailable(Source::IdentifierUnavailable) },"stack":handoff::manual_stack()})
+        }
+        ("Deploy", "CloudFormation") => {
+            // Project only reviewed fields; configuration can contain secrets.
+            let selected = |key: &str| {
+                input
+                    .resolved_configuration()
+                    .and_then(|values| values.get(key))
+                    .or_else(|| input.configuration().and_then(|values| values.get(key)))
+            };
+            if selected("RoleArn").is_some_and(|role| {
+                !role.is_empty() && !handoff::same_context_arn(role, "iam", "role/", ctx)
+            }) {
+                return unavailable(Source::ContextMismatch);
+            }
+            let stack = selected("StackName").map(String::as_str).unwrap_or("");
+            json!({"build":handoff::unavailable(Source::UnsupportedAction),"stack":if handoff::valid_stack(stack,ctx) { handoff::stack(stack,Source::PipelineStackConfiguration) } else { handoff::unavailable(Source::IdentifierUnavailable) }})
+        }
+        _ => unavailable(Source::UnsupportedAction),
+    }
+}
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let pipeline_name = ctx.input_str("pipeline_name", "");
@@ -92,6 +142,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                 "external_url": url,
                 "external_execution_id": result.and_then(|r| r.external_execution_id()).unwrap_or("").to_string(),
                 "error": error,
+                "handoffs": action_handoffs(ctx,&execution_id,d),
             }),
         ));
     }
@@ -111,4 +162,121 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         "execution_id": execution_id,
         "actions": out,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        test_aws::{ExpectedRequest, ScriptedHttp},
+        test_support::TestDir,
+    };
+
+    fn action(category: &str, provider: &str) -> Value {
+        json!({"pipelineExecutionId":"synthetic-execution","actionName":"synthetic-action","input":{"actionTypeId":{"category":category,"owner":"AWS","provider":provider,"version":"1"},"region":"us-east-1"}})
+    }
+
+    async fn fetch_actions(actions: Value) -> Value {
+        let directory = TestDir::new();
+        let http = ScriptedHttp::new(vec![ExpectedRequest::json(
+            "CodePipeline_20150709.ListActionExecutions",
+            json!({"pipelineName":"synthetic-pipeline","filter":{"pipelineExecutionId":"synthetic-execution"}}),
+            json!({"actionExecutionDetails":actions,"nextToken":"synthetic-unloaded"}),
+        )]);
+        let result = fetch(&http.context(
+            &directory,
+            "pipeline-execution-detail",
+            json!({"pipeline_name":"synthetic-pipeline","execution_id":"synthetic-execution"}),
+        ))
+        .await;
+        http.assert_finished();
+        assert_eq!(http.calls(), 1);
+        assert_eq!(result["coverage"]["has_more"], true);
+        result
+    }
+
+    #[tokio::test]
+    async fn only_reviewed_execution_fields_become_build_and_configured_stack_targets() {
+        let mut build = action("Build", "CodeBuild");
+        build["output"] =
+            json!({"executionResult":{"externalExecutionId":"synthetic-project:synthetic-run"}});
+        build["input"]["configuration"] = json!({"Unreviewed":"SYNTHETIC_PRIVATE_CONFIG_MARKER"});
+        let mut stack = action("Deploy", "CloudFormation");
+        stack["input"]["configuration"] = json!({"StackName":"#{synthetic.stack}","ParameterOverrides":"SYNTHETIC_PRIVATE_CONFIG_MARKER"});
+        stack["input"]["resolvedConfiguration"] = json!({"StackName":"synthetic-resolved-stack","ParameterOverrides":"SYNTHETIC_PRIVATE_CONFIG_MARKER"});
+        let mut literal = action("Deploy", "CloudFormation");
+        literal["input"]["configuration"] = json!({"StackName":"synthetic-literal-stack"});
+        let result = fetch_actions(json!([build, stack, literal])).await;
+        assert_eq!(
+            result["actions"][0]["handoffs"]["build"]["inputs"],
+            json!({"build_id":"synthetic-project:synthetic-run"})
+        );
+        assert_eq!(
+            result["actions"][0]["handoffs"]["stack"]["status"],
+            "manual"
+        );
+        assert_eq!(
+            result["actions"][1]["handoffs"]["stack"]["source"],
+            "pipeline_stack_configuration"
+        );
+        assert_eq!(
+            result["actions"][1]["handoffs"]["stack"]["inputs"],
+            json!({"stack_name":"synthetic-resolved-stack"})
+        );
+        assert_eq!(
+            result["actions"][2]["handoffs"]["stack"]["inputs"],
+            json!({"stack_name":"synthetic-literal-stack"})
+        );
+        assert!(!result
+            .to_string()
+            .contains("SYNTHETIC_PRIVATE_CONFIG_MARKER"));
+        assert!(!result.to_string().contains("ParameterOverrides"));
+    }
+
+    #[tokio::test]
+    async fn foreign_execution_owner_region_role_and_unresolved_targets_never_link() {
+        let mut rows = Vec::new();
+        for mutation in [
+            "execution",
+            "missing_execution",
+            "owner",
+            "provider",
+            "category",
+            "region",
+            "role",
+            "build_arn",
+        ] {
+            let mut value = action("Build", "CodeBuild");
+            value["output"] = json!({"executionResult":{"externalExecutionId":"synthetic-project:synthetic-run"}});
+            match mutation {
+                "execution" => value["pipelineExecutionId"] = json!("synthetic-other-execution"),
+                "missing_execution" => { value.as_object_mut().unwrap().remove("pipelineExecutionId"); },
+                "owner" => value["input"]["actionTypeId"]["owner"] = json!("Custom"),
+                "provider" => value["input"]["actionTypeId"]["provider"] = json!("SyntheticCustomBuild"),
+                "category" => value["input"]["actionTypeId"]["category"] = json!("Test"),
+                "region" => value["input"]["region"] = json!("eu-west-1"),
+                "role" => value["input"]["roleArn"] = json!("arn:aws:iam::acct-other-fixture:role/synthetic-role"),
+                "build_arn" => value["output"]["executionResult"]["externalExecutionId"] = json!("arn:aws:codebuild:us-east-1:acct-other-fixture:build/synthetic-project:synthetic-run"),
+                _ => unreachable!(),
+            }
+            rows.push(value);
+        }
+        for target in ["#{synthetic.stack}","arn:aws:cloudformation:eu-west-1:acct-producer-fixture:stack/synthetic-stack/synthetic-id"] {
+            let mut stack = action("Deploy","CloudFormation");
+            stack["input"]["configuration"] = json!({"StackName":target});
+            rows.push(stack);
+        }
+        let mut role = action("Deploy", "CloudFormation");
+        role["input"]["configuration"] = json!({"StackName":"synthetic-stack","RoleArn":"arn:aws:iam::acct-other-fixture:role/synthetic-role"});
+        rows.push(role);
+        let result = fetch_actions(json!(rows)).await;
+        for row in result["actions"].as_array().unwrap() {
+            assert_ne!(row["handoffs"]["build"]["status"], "available");
+            assert_ne!(row["handoffs"]["stack"]["status"], "available");
+            assert!(row["handoffs"]["build"]["inputs"]
+                .as_object()
+                .unwrap()
+                .is_empty());
+        }
+    }
 }

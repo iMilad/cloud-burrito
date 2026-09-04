@@ -1,6 +1,6 @@
 # P2 — Make the core dependable
 
-Status: **P2-01–04 complete locally; P2-05 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
+Status: **P2-01–05 complete locally; P2-06 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
 Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
 
@@ -109,6 +109,8 @@ P2 must preserve and propagate partial/truncated/error metadata for existing cap
 **Review units:** shared rendering/state contract, existing producer-metadata propagation, then migrate the flagship widgets before other retained beta widgets. Avoid independent per-widget state conventions.
 
 ### P2-05 — Complete the flagship investigation without invented links
+
+**Complete locally:** [implementation and validation evidence](p2-05-evidence.md).
 
 **Scope:** Pipeline → Build → Stack → Logs and lookup; CB-J03, with CB-J02 context guarantees. Depends on P2-04.
 

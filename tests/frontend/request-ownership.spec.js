@@ -87,6 +87,8 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
               ok: true,
               functions: ["one", "two"].map((name) => ({
                 name: `synthetic-function-${name}`, log_group: `/synthetic/lambda/${name}`,
+                handoffs: { logs: { status: "available", source: "lambda_logging_config", widget: "log-tail",
+                  inputs: { mode: "streams", log_group: `/synthetic/lambda/${name}` }, reason: "Log group from Lambda logging configuration; existence is unverified." } },
                 arn: `arn:aws:lambda:eu-west-1:${context.account_id}:function:synthetic-${name}`,
                 runtime: "synthetic", state: "Active",
               })),
@@ -371,6 +373,8 @@ test("nested execution and log reopenings ignore results for closed detail surfa
   const detail = (action) => ({ render: "execution_detail", actions: [{
     stage: "Build", action, status: "Succeeded", category: "Build", provider: "CodeBuild",
     external_execution_id: "synthetic-build-id",
+    handoffs: { build: { status: "available", source: "pipeline_build_execution", widget: "codebuild-log",
+      inputs: { build_id: "synthetic-build-id" }, reason: "CodeBuild execution identifier returned by the pipeline action." } },
   }] });
   await reply(page, newDetail, detail("new-detail"));
   await reply(page, oldDetail, detail("obsolete-detail"));

@@ -2653,3 +2653,22 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Source-bound investigation stays inside the originating result. */
+.evidence-handoff {
+  margin-block: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.evidence-reason, .evidence-context, .evidence-choice, .evidence-stale { margin-block: 5px; }
+.evidence-stale { color: var(--text); }
+.evidence-result { margin-top: 9px; min-width: 0; }
+.evidence-content, .evidence-manual-stack, .evidence-log-output { max-width: 100%; overflow-x: auto; }
+.evidence-lookup-form, .evidence-stream-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 8px; }
+.evidence-lookup-form input, .evidence-stream-select { min-width: 120px; max-width: 100%; flex: 1 1 190px; }
+.evidence-log-output { margin-top: 8px; max-height: 350px; }
+.stack-resource-handoff-row > td { white-space: normal; padding: 0 8px 8px; }
+.evidence-open:disabled { opacity: 0.65; cursor: default; }

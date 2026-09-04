@@ -1,8 +1,8 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1 and P2-01–04 complete locally. P2-05 next; P2-05–07 and P3–P4 remain planned. Device evidence remains open.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
+Status: **P1 and P2-01–05 complete locally. P2-06 next; P2-06–07 and P3–P4 remain planned. Device evidence remains open.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
 
-Latest completed unit: [P2-04](p2-04-evidence.md) preserves partial evidence and makes freshness, context and coverage explicit (235 Rust, 17 Node and 75 browser cases). [P2-03](p2-03-evidence.md) adds fresh profile discovery, visible identity recovery and optional CLI availability (200 Rust, 17 Node, full 60-case browser run plus 14 final focused recovery cases). [P2-02](p2-02-evidence.md) establishes authoritative settings, valid region selection and persistent theme previews (186 Rust, 15 Node and 48 browser cases). [P2-01](p2-01-evidence.md) makes persistence truthful. P2 continues in order with separate local commits. Historical [P1 evidence](phase-1.md) remains unchanged. Live AWS and native platform acceptance remain pending.
+Latest completed unit: [P2-05](p2-05-evidence.md) connects evidence-bound investigation and exact stack associations (248 Rust, 17 Node and 84 browser cases). [P2-04](p2-04-evidence.md) preserves partial evidence and makes freshness, context and coverage explicit (235 Rust, 17 Node and 75 browser cases). [P2-03](p2-03-evidence.md) adds fresh profile discovery, visible identity recovery and optional CLI availability (200 Rust, 17 Node, full 60-case browser run plus 14 final focused recovery cases). [P2-02](p2-02-evidence.md) establishes authoritative settings, valid region selection and persistent theme previews (186 Rust, 15 Node and 48 browser cases). [P2-01](p2-01-evidence.md) makes persistence truthful. P2 continues in order with separate local commits. Historical [P1 evidence](phase-1.md) remains unchanged. Live AWS and native platform acceptance remain pending.
 
 P1-03 adds explicit SSO snapshots, STS account/principal verification, frozen resource credentials, refresh/expiry checks, independent pinned contexts and configuration/auth-status guards. P1-04 hands those exact verified temporary credentials to an isolated CLI child, caps both output streams and supervises cancellation and direct-child cleanup. Cleanup failures survive a superseded context as the stable `CliCleanupFailed` UI/audit error. The P1-03 temporary CLI block is removed. Broader tile/detail ownership is now covered by P1-05; process-tree and native OS behavior remain unverified.
 
@@ -22,7 +22,7 @@ Use **P0–P6** for work items and acceptance evidence. The presentation's five 
 | --- | --- | --- | --- |
 | [P0 — Establish the truth](phase-0.md) | Scope, operation inventory, five journey contracts, baseline and early platform checks | First-party execution paths mapped; baseline and gaps recorded; Windows/Ubuntu build-and-launch attempts documented; initial support matrix frozen | Scope recorded / device and native evidence pending |
 | [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–06 complete locally / native evidence pending |
-| [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | P2-01–04 complete locally / subsequent units planned |
+| [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | P2-01–05 complete locally / subsequent units planned |
 | [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Startup, result latency, memory and request counts measured; published claims reproducible | Plan complete / implementation not started |
 | [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | Plan complete / implementation not started |
 | P5 — Validate on real machines | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Outline only / not started |
@@ -53,7 +53,7 @@ Deferred: Go/Wails rewrite, plugin SDK, full AI assistant, infrastructure mutati
 
 ## Start here
 
-1. Continue with P2-05 connected investigation using the [P2-04 evidence](p2-04-evidence.md) and [execution plan](execution-plan.md).
+1. Continue with P2-06 honest beta controls using the [P2-05 evidence](p2-05-evidence.md) and [execution plan](execution-plan.md).
 2. Use the phase plans in order: [P1](phase-1.md) → [P2](phase-2.md) → [P3](phase-3.md) → [P4](phase-4.md).
 3. Keep evidence against the [journey contracts](phase-0.md) and [operation inventory](aws-operation-inventory.md).
 4. Resume [device checks](device-checks.md) when the laptops are available; final support and native acceptance remain conditional until then.

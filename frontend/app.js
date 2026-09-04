@@ -422,7 +422,8 @@
         return owner.isConnected && owner._ownedRequest === request
           && configuration === configurationGeneration
           && (independent || selection === currentSelectionId)
-          && ancestors.every(([node, generation]) => (node._requestGeneration || 0) === generation);
+          && ancestors.every(([node, generation]) => (node._requestGeneration || 0) === generation
+            && (!node._evidenceSourceCurrent || node._evidenceSourceCurrent()));
       },
       accept(result) {
         if (!request.current()) return false;
@@ -575,6 +576,176 @@
       if (!confirmed && cleanup.remote_queries_may_still_run === true) status.appendChild(el("div", {}, "Remote queries may still be running."));
     } else if (state === "cancelled" || resultState(spec) === "cancelled") status.appendChild(el("div", { class: "result-cleanup" }, "The request is no longer awaited. This does not confirm that remote work stopped."));
     host.prepend(status);
+    updateEvidenceLinks(host);
+  }
+
+  // Handoffs are reviewed backend facts, not names from which the UI guesses
+  // another resource. The source request and its verified context stay attached
+  // to every nested view; an inherited tile still expires with its selection.
+  const HANDOFF_SOURCES = new Set([
+    "pipeline_build_execution", "pipeline_stack_configuration", "codebuild_logs", "cfn_log_group",
+    "cfn_ownership", "lambda_logging_config", "lambda_default_convention", "relationship_unknown",
+    "context_mismatch", "unsupported_action", "identifier_unavailable", "ownership_ambiguous",
+    "ownership_failed", "ownership_not_found", "ownership_unsupported", "ownership_not_attempted", "ownership_denied",
+  ]);
+
+  function evidenceOrigin(host, spec) {
+    const request = host._activeResultRequest;
+    const meta = spec?._request;
+    if (!request || !meta || ["context_id", "provider_revision", "settings_revision", "profile", "account_id", "region"]
+      .some(key => typeof meta[key] !== "string" || !meta[key])) return null;
+    const context = { mode: "pinned", profile: meta.profile, account_id: meta.account_id, region: meta.region };
+    return { context, current: () => request.current() && request.owner._resultContext?.id === meta.id };
+  }
+
+  function reviewedHandoff(value, kind) {
+    if (!value || !["available", "manual", "unavailable"].includes(value.status)
+        || !HANDOFF_SOURCES.has(value.source) || typeof value.reason !== "string" || value.reason.length > 500
+        || !value.inputs || typeof value.inputs !== "object" || Array.isArray(value.inputs)) return null;
+    if (value.status === "unavailable") return { ...value, widget: null, inputs: {} };
+    const fields = {
+      "codebuild-log": ["build_id"], "cfn-stack-detail": ["stack_name"],
+      "resource-lookup": [], "log-tail": ["mode", "log_group", "log_stream"],
+    }[value.widget];
+    const routes = { build: ["codebuild-log"], stack: ["cfn-stack-detail", "resource-lookup"], logs: ["log-tail"] };
+    if (!fields || !routes[kind]?.includes(value.widget) || Object.keys(value.inputs).some(key => !fields.includes(key))) return null;
+    const text = name => typeof value.inputs[name] === "string" && value.inputs[name].length > 0
+      && value.inputs[name].length <= 2048 && !/[\u0000-\u001f\u007f]/u.test(value.inputs[name]);
+    if (value.widget === "codebuild-log" && !text("build_id")) return null;
+    if (value.widget === "cfn-stack-detail" && !text("stack_name")) return null;
+    if (value.widget === "log-tail" && (!text("log_group") || !["streams", "events"].includes(value.inputs.mode)
+        || (value.inputs.mode === "events" && !text("log_stream"))
+        || (value.inputs.mode === "streams" && Object.hasOwn(value.inputs, "log_stream")))) return null;
+    return { ...value, inputs: { ...value.inputs } };
+  }
+
+  function updateEvidenceLinks(host) {
+    if (!host) return;
+    host.querySelectorAll(".evidence-handoff").forEach(card => {
+      if (!card._evidenceOrigin) return;
+      const current = card._evidenceOrigin.current();
+      card.querySelectorAll(":scope > .evidence-open").forEach(button => { button.disabled = !current; });
+      if (!current) card.querySelectorAll("button, input, select").forEach(control => { control.disabled = true; });
+      const stale = card.querySelector(":scope > .evidence-stale");
+      if (stale) stale.hidden = current;
+    });
+    host.querySelectorAll(".evidence-navigation").forEach(controls => {
+      const current = controls._evidenceCurrent?.() === true;
+      controls.querySelectorAll("button, select").forEach(control => { control.disabled = !current; });
+      const stale = controls.querySelector(".evidence-stale");
+      if (stale) stale.hidden = current;
+    });
+  }
+
+  function appendEvidenceHandoffs(container, handoffs, sourceHost, sourceSpec) {
+    if (!handoffs || typeof handoffs !== "object" || Array.isArray(handoffs)) return;
+    const origin = evidenceOrigin(sourceHost, sourceSpec);
+    for (const kind of ["build", "stack", "logs"]) {
+      if (!Object.hasOwn(handoffs, kind)) continue;
+      const target = reviewedHandoff(handoffs[kind], kind);
+      const card = el("div", { class: "evidence-handoff", "data-kind": kind,
+        "data-source": target?.source || "invalid" },
+        el("strong", { class: "small" }, { build: "Build execution", stack: "Stack relationship", logs: "Log evidence" }[kind]),
+        el("div", { class: "small evidence-reason" }, target?.reason || "Linked evidence is unavailable: the response did not establish a reviewed target."));
+      if (!target?.widget || !origin) { container.appendChild(card); continue; }
+      card._evidenceOrigin = origin;
+      card.appendChild(el("div", { class: "small muted evidence-context" },
+        `Source context: ${origin.context.profile} · ${origin.context.account_id} · ${origin.context.region}`));
+      const label = target.widget === "codebuild-log" ? "View log"
+        : target.widget === "resource-lookup" ? "Find a stack manually"
+        : target.widget === "cfn-stack-detail" ? target.status === "manual" ? "Inspect stack candidate"
+          : target.source === "pipeline_stack_configuration" ? "Inspect configured stack" : "Open matched stack"
+        : target.source === "lambda_default_convention" ? "Try conventional log group"
+        : target.inputs.mode === "events" ? "Open log events" : "Browse log streams";
+      const button = el("button", { class: "exec-btn small evidence-open", type: "button", "aria-expanded": "false" }, label);
+      const stale = el("div", { class: "small evidence-stale", hidden: true }, "Refresh the source before opening linked evidence.");
+      const nested = el("div", { class: `evidence-result${target.widget === "codebuild-log" ? " exec-log" : ""}`, hidden: true });
+      // This override is ephemeral. It never changes a tile's saved inherit/pin setting.
+      nested._widgetContextOverride = origin.context;
+      nested._evidenceSourceCurrent = origin.current;
+      button.addEventListener("click", () => {
+        if (!origin.current() || !button.isConnected) { updateEvidenceLinks(card.parentNode); return; }
+        if (button.getAttribute("aria-expanded") === "true") {
+          invalidateRequests(nested);
+          clear(nested);
+          nested.hidden = true;
+          button.setAttribute("aria-expanded", "false");
+          button.textContent = label;
+          return;
+        }
+        button.setAttribute("aria-expanded", "true");
+        button.textContent = target.widget === "codebuild-log" ? "Hide log" : "Close linked evidence";
+        nested.hidden = false;
+        if (target.status === "manual") nested.appendChild(el("div", { class: "small evidence-choice" },
+          target.widget === "resource-lookup" ? "Manual investigation in the source context. A search match does not establish a relationship to this build."
+            : "User-selected candidate. This does not establish ownership or a relationship to the source."));
+        const content = el("div", { class: "evidence-content" });
+        nested.appendChild(content);
+        if (target.widget === "resource-lookup") return renderEvidenceLookup(content, origin);
+        if (target.widget === "log-tail" && target.inputs.mode === "streams") return loadEvidenceStreams(content, target.inputs, origin);
+        return fetchWidgetInto(content, target.widget, target.inputs, origin.context);
+      });
+      card.append(button, stale, nested);
+      container.appendChild(card);
+    }
+    updateEvidenceLinks(container);
+  }
+
+  function renderEvidenceLookup(host, origin) {
+    const input = el("input", { class: "lookup-input", type: "search", "aria-label": "Resource query in source context",
+      placeholder: "Resource name, ARN or partial id", maxlength: "2048" });
+    const search = el("button", { class: "exec-btn", type: "submit" }, "Search resources");
+    const form = el("form", { class: "evidence-lookup-form" }, input, search);
+    const results = el("div", { class: "lookup-results evidence-lookup-results" });
+    form.addEventListener("input", () => { invalidateRequests(results); clear(results); });
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      if (!origin.current() || !form.isConnected) return;
+      const query = input.value.trim();
+      if (!query) { clear(results); results.appendChild(el("div", { class: "small" }, "Enter a resource query first.")); input.focus(); return; }
+      return fetchWidgetInto(results, "resource-lookup", { query }, origin.context);
+    });
+    const stackInput = el("input", { type: "text", class: "evidence-stack-input", "aria-label": "Stack name or ARN for manual inspection",
+      placeholder: "Stack name or ARN", maxlength: "2048" });
+    const stackOutput = el("div", { class: "evidence-manual-stack" });
+    const stackForm = el("form", { class: "evidence-lookup-form" }, stackInput,
+      el("button", { class: "exec-btn", type: "submit" }, "Inspect chosen stack"));
+    stackForm.addEventListener("input", () => { invalidateRequests(stackOutput); clear(stackOutput); });
+    stackForm.addEventListener("submit", event => {
+      event.preventDefault();
+      if (!origin.current() || !stackForm.isConnected) return;
+      const stackName = stackInput.value.trim();
+      if (!stackName) { stackInput.focus(); return; }
+      return fetchWidgetInto(stackOutput, "cfn-stack-detail", { stack_name: stackName }, origin.context);
+    });
+    host.append(form, results,
+      el("div", { class: "small evidence-choice" }, "Or inspect a stack you choose. Your selection does not establish a relationship to the source build."),
+      stackForm, stackOutput);
+    input.focus();
+  }
+
+  async function loadEvidenceStreams(host, inputs, origin) {
+    if (!origin.current()) return;
+    const request = beginOwnedRequest(host, origin.context);
+    try {
+      const result = await fetchWidgetData("log-tail", { ...inputs, max_streams: 50 }, host, origin.context, request);
+      if (!request.accept(result)) return;
+      renderArrayResult(host, result, "streams", streams => {
+        clear(host);
+        host.appendChild(el("div", { class: "small evidence-log-group" }, `Log group: ${inputs.log_group}`));
+        if (!streams.length) { host.appendChild(el("div", { class: "small" }, "No streams were returned for this log group.")); return; }
+        const select = el("select", { "aria-label": "Linked log stream", class: "evidence-stream-select" });
+        streams.forEach(stream => { if (typeof stream.name === "string" && stream.name) select.appendChild(el("option", { value: stream.name }, stream.name)); });
+        const view = el("button", { class: "exec-btn", type: "button" }, "View linked log");
+        const output = el("div", { class: "evidence-log-output log-stream" });
+        select.addEventListener("change", () => { invalidateRequests(output); clear(output); });
+        view.addEventListener("click", () => {
+          if (!origin.current() || !request.current() || !view.isConnected || !select.value) return;
+          return fetchWidgetInto(output, "log-tail", { mode: "events", log_group: inputs.log_group, log_stream: select.value, limit: 500 }, origin.context);
+        });
+        host.append(el("div", { class: "evidence-stream-controls" }, select, view), output);
+      });
+    } catch (error) { if (request.current()) failResult(host, request, String(error)); }
   }
 
   function failResult(host, request, message, spec) {
@@ -3110,12 +3281,16 @@
           el("th", {}, tableHeaderLabel("type")),
           el("th", {}, tableHeaderLabel("status")),
           el("th", {}, tableHeaderLabel("physical_id")))),
-        el("tbody", {}, ...resources.map((r) => el("tr", {},
-          el("td", { class: "stack-resource-logical", title: r.logical_id || undefined }, breakableIdentifier(r.logical_id)),
-          el("td", { class: "stack-resource-type", title: r.type || undefined }, r.type || ""),
-          el("td", { class: "stack-resource-status" }, el("span", { class: "badge " + statusToBadge(r.status) }, formatStatusLabel(r.status))),
-          el("td", { class: "stack-resource-physical", title: r.physical_id || undefined }, r.physical_id || ""),
-        ))),
+        el("tbody", {}, ...resources.flatMap((r) => {
+          const row = el("tr", {},
+            el("td", { class: "stack-resource-logical", title: r.logical_id || undefined }, breakableIdentifier(r.logical_id)),
+            el("td", { class: "stack-resource-type", title: r.type || undefined }, r.type || ""),
+            el("td", { class: "stack-resource-status" }, el("span", { class: "badge " + statusToBadge(r.status) }, formatStatusLabel(r.status))),
+            el("td", { class: "stack-resource-physical", title: r.physical_id || undefined }, r.physical_id || ""));
+          const detail = el("td", { colspan: "4" });
+          appendEvidenceHandoffs(detail, r.handoffs, host, spec);
+          return detail.childNodes.length ? [row, el("tr", { class: "stack-resource-handoff-row" }, detail)] : [row];
+        })),
       ));
     }
 
@@ -3240,14 +3415,9 @@
       } else if (a.external_url) {
         actionsRow.appendChild(el("span", { class: "muted small" }, "External link unavailable: unsupported console URL."));
       }
-      const logHost = el("div", { class: "exec-log" });
-      if (a.provider === "CodeBuild" && a.external_execution_id) {
-        const logBtn = el("button", { class: "exec-btn small", type: "button" }, "View log");
-        logBtn.addEventListener("click", () => toggleActionLog(logBtn, logHost, a.external_execution_id, host));
-        actionsRow.appendChild(logBtn);
-      }
       if (actionsRow.childNodes.length) block.appendChild(actionsRow);
-      block.appendChild(logHost);
+      appendEvidenceHandoffs(block, a.handoffs, host, spec);
+      if (!a.handoffs) block.appendChild(el("div", { class: "muted small" }, "Linked targets are unknown for this action."));
       list.appendChild(block);
     });
     host.appendChild(list);
@@ -3277,19 +3447,6 @@
     try { document.execCommand("copy"); } catch (_e) { /* ignore */ }
     document.body.removeChild(ta);
     done();
-  }
-
-  function toggleActionLog(btn, logHost, buildId, detailHost) {
-    if (!btn.isConnected) return;
-    if (logHost.childNodes.length) {
-      invalidateRequests(logHost);
-      clear(logHost);
-      btn.textContent = "View log";
-      return;
-    }
-    btn.textContent = "Hide log";
-    logHost.appendChild(el("div", { class: "muted small" }, "Loading log…"));
-    return fetchWidgetInto(logHost, "codebuild-log", { build_id: buildId }, contextOverrideFromElement(detailHost));
   }
 
   // ===== Render dispatcher =====
@@ -3329,7 +3486,10 @@
   }
 
   function dispatchRender(host, spec) {
-    return renderWithResultState(host, spec, () => dispatchRenderContent(host, spec));
+    return renderWithResultState(host, spec, () => {
+      dispatchRenderContent(host, spec);
+      appendEvidenceHandoffs(host, spec?.handoffs, host, spec);
+    });
   }
 
   function dispatchRenderContent(host, spec) {
@@ -3469,17 +3629,17 @@
       return;
     }
     matches.forEach(m => {
-      const stack = m.stack || "—";
       const type = m.type || "";
-      host.appendChild(
-        el("div", { class: "lookup-row" },
+      const link = reviewedHandoff(m.handoffs?.stack, "stack");
+      const confirmed = link?.status === "available" && link.source === "cfn_ownership";
+      const row = el("div", { class: "lookup-row" },
           el("div", {},
             el("div", { class: "resource" }, m.arn || ""),
-            el("div", { class: "meta" }, `Owned by ${stack} · ${type}`),
+            el("div", { class: "meta" }, confirmed ? `Matched stack: ${link.inputs.stack_name}${type ? ` · ${type}` : ""}` : "Stack ownership is unknown."),
           ),
-          el("span", { class: "badge " + (m.stack ? "badge-success" : "badge-neutral") }, m.stack ? "In Stack" : "No Stack"),
-        )
-      );
+          el("span", { class: "badge " + (confirmed ? "badge-success" : "badge-neutral") }, confirmed ? "Matched Stack" : "Unknown"));
+      host.appendChild(row);
+      appendEvidenceHandoffs(host, m.handoffs, host, spec);
     });
   }
 
@@ -3619,8 +3779,12 @@
 
         const copyBtn = el("button", { class: "exec-btn small", type: "button" }, "Copy log group");
         copyBtn.addEventListener("click", () => copyToClipboard(fn.log_group || "", copyBtn));
-        const loadStreamsBtn = el("button", { class: "exec-btn small", type: "button" }, "Load streams");
-        loadStreamsBtn.addEventListener("click", () => loadStreams(fn));
+        const logs = reviewedHandoff(fn.handoffs?.logs, "logs");
+        const origin = evidenceOrigin(listHost, state.sourceSpec);
+        const loadStreamsBtn = el("button", { class: "exec-btn small", type: "button" },
+          logs?.status === "manual" ? "Try conventional log group" : "Load streams");
+        loadStreamsBtn.disabled = !logs?.widget || !origin?.current();
+        loadStreamsBtn.addEventListener("click", () => loadStreams(fn, true));
 
         detailHost.appendChild(
           el("div", { class: "lambda-detail-card" },
@@ -3632,6 +3796,8 @@
               ),
               el("div", { class: "lambda-detail-actions" }, copyBtn, loadStreamsBtn),
             ),
+            el("div", { class: "small evidence-reason" }, !origin?.current() ? "Refresh the function list before opening linked logs."
+              : logs?.reason || "Log-group provenance is unavailable. Reload the function list before opening linked logs."),
             el("div", { class: "lambda-info-grid" },
               infoField("ARN", fn.arn, { mono: true }),
               infoField("Last updated", fn.last_modified),
@@ -3669,17 +3835,18 @@
           clear(logHost);
           logHost.hidden = true;
         });
+        const producedBy = streamHost._activeResultRequest;
         const viewBtn = el("button", { class: "btn btn-primary", type: "button" }, "View log");
-        viewBtn.addEventListener("click", () => { if (select.isConnected) loadEvents(select.value); });
-        streamHost.appendChild(
-          el("div", { class: "lambda-stream-controls" },
+        viewBtn.addEventListener("click", () => { if (select.isConnected) loadEvents(select.value, producedBy); });
+        const controls = el("div", { class: "lambda-stream-controls evidence-navigation" },
             el("label", {},
               el("span", {}, "Log stream"),
               select,
             ),
             viewBtn,
-          )
-        );
+            el("div", { class: "small evidence-stale", hidden: true }, "Refresh the source before opening linked evidence."));
+        controls._evidenceCurrent = () => producedBy?.current() && streamHost._resultContext?.id === producedBy.id;
+        streamHost.appendChild(controls);
       }
 
       async function loadFunctions() {
@@ -3699,6 +3866,7 @@
           if (!request.accept(result)) return;
           setStatus("");
           renderArrayResult(listHost, result, "functions", functions => {
+            state.sourceSpec = result;
             state.functions = functions;
             state.selected = null;
             state.streams = [];
@@ -3720,19 +3888,22 @@
         await loadStreams(fn);
       }
 
-      async function loadStreams(fn) {
-        if (!fn || !fn.log_group) return;
+      async function loadStreams(fn, manual = false) {
+        const logs = reviewedHandoff(fn?.handoffs?.logs, "logs");
+        const origin = evidenceOrigin(listHost, state.sourceSpec);
+        if (!logs?.widget || !origin?.current() || (logs.status === "manual" && !manual)) return;
         if (state.selected !== fn) return;
         invalidateRequests(logHost);
         renderStreams("Loading streams...");
         clear(logHost);
         logHost.hidden = true;
-        const request = beginOwnedRequest(streamHost);
+        streamHost._evidenceSourceCurrent = origin.current;
+        const request = beginOwnedRequest(streamHost, origin.context);
         try {
           const result = await fetchWidgetData(
             "log-tail",
-            { mode: "streams", log_group: fn.log_group, max_streams: 50 },
-            streamHost, null, request,
+            { ...logs.inputs, max_streams: 50 },
+            streamHost, origin.context, request,
           );
           if (!request.accept(result)) return;
           renderArrayResult(streamHost, result, "streams", streams => {
@@ -3745,18 +3916,23 @@
         }
       }
 
-      async function loadEvents(streamName) {
+      async function loadEvents(streamName, streamRequest) {
         const fn = state.selected;
-        if (!fn || !fn.log_group || !streamName) return;
+        const logs = reviewedHandoff(fn?.handoffs?.logs, "logs");
+        const origin = evidenceOrigin(listHost, state.sourceSpec);
+        if (!logs?.widget || !streamName || !origin?.current() || !streamRequest?.current()
+            || streamHost._activeResultRequest !== streamRequest
+            || streamHost._resultContext?.id !== streamRequest.id) return;
         clear(logHost);
         logHost.hidden = false;
         logHost.appendChild(el("div", { class: "muted small" }, "Loading log events..."));
-        const request = beginOwnedRequest(logHost);
+        logHost._evidenceSourceCurrent = () => origin.current() && streamRequest.current();
+        const request = beginOwnedRequest(logHost, origin.context);
         try {
           const result = await fetchWidgetData(
             "log-tail",
-            { mode: "events", log_group: fn.log_group, log_stream: streamName, limit: 500 },
-            logHost, null, request,
+            { mode: "events", log_group: logs.inputs.log_group, log_stream: streamName, limit: 500 },
+            logHost, origin.context, request,
           );
           if (!request.accept(result)) return;
           dispatchRender(logHost, result);
@@ -4193,7 +4369,7 @@
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       clear(results);
       results.appendChild(el("div", { class: "lookup-empty" },
-        "Type a resource name, ARN, or partial id to find its owning stack."));
+        "Search tagged resources by name, ARN or partial id; stack ownership may remain unknown."));
       input.addEventListener("input", () => {
         if (input._lookupDebounceTimer) clearTimeout(input._lookupDebounceTimer);
         const request = beginOwnedRequest(results);
@@ -4202,7 +4378,7 @@
         clear(results);
         if (!q) {
           results.appendChild(el("div", { class: "lookup-empty" },
-            "Type a resource name, ARN, or partial id to find its owning stack."));
+            "Search tagged resources by name, ARN or partial id; stack ownership may remain unknown."));
           return;
         }
         input._lookupDebounceTimer = setTimeout(async () => {
@@ -4231,7 +4407,7 @@
         clear(results);
         if (!q) {
           results.appendChild(el("div", { class: "lookup-empty" },
-            "Type a resource name, ARN, or partial id to find its owning stack."));
+            "Search tagged resources by name, ARN or partial id; stack ownership may remain unknown."));
           return;
         }
         const matches = Mock.allResources.filter(r =>
@@ -5207,7 +5383,7 @@
     { name: "Pipeline Runs",           desc: "Recent CodePipeline executions with status color.",        gsId: "pipeline-runs",           phase: 1 },
     { name: "CodeArtifact Packages",   desc: "Latest CodeArtifact package versions by prefix.",          gsId: "codeartifact-packages",   phase: 1 },
     { name: "CloudFormation Stacks",   desc: "Browse stacks, resources, and recent events.",              gsId: "cfn-stacks",              phase: 2 },
-    { name: "Resource Reverse Lookup", desc: "Find the stack that owns a resource.",                     gsId: "resource-lookup",         phase: 2 },
+    { name: "Resource Reverse Lookup", desc: "Search resources and inspect confirmed stack associations.",                     gsId: "resource-lookup",         phase: 2 },
     { name: "Errors by Stack",         desc: "CloudWatch errors by stack over the last 24 hours.",       gsId: "errors-by-stack",         phase: 2 },
     { name: "Logs Insights Query",     desc: "Run your own Logs Insights query on any log group.",       gsId: "logs-insights",           phase: 2 },
     { name: "AWS CLI Table",           desc: "Supported AWS read commands rendered as a table.",       gsId: "aws-cli",                 phase: 2 },
@@ -5330,7 +5506,7 @@
         }),
         el("div", { class: "lookup-results" }),
       ),
-      { refresh: false, sub: "Find the stack that owns a resource" },
+      { refresh: false, sub: "Search resources; inspect confirmed stack associations" },
     );
   }
 

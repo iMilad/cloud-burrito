@@ -490,7 +490,9 @@ mod producer_tests {
     {
         for extra in [false, true] {
             let directory = TestDir::new();
-            let mut mappings = vec![json!({"ResourceARN":"arn:aws:s3:::synthetic-one","Tags":[]})];
+            let mut mappings = vec![
+                json!({"ResourceARN":"arn:aws:lambda:us-east-1:acct-producer-fixture:function:synthetic-one","Tags":[]}),
+            ];
             if extra {
                 mappings.push(json!({"ResourceARN":"arn:aws:s3:::synthetic-two","Tags":[]}));
             }

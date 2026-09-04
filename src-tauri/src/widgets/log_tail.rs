@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_sdk_cloudwatchlogs::types::OrderBy;
 use serde_json::{json, Value};
 
+use super::handoff::{self, Source};
 use super::{coverage::Coverage, err_msg, WidgetCtx};
 
 const DEFAULT_TAIL_EVENTS: i32 = 200;
@@ -88,17 +89,36 @@ async fn fetch_lambdas(ctx: &WidgetCtx) -> Value {
             // Functions can log to a custom group via LoggingConfig (e.g. CDK's
             // logGroup prop); only fall back to the /aws/lambda/<name> convention
             // when no custom group is configured.
-            let log_group = f
+            let configured_group = f
                 .logging_config()
                 .and_then(|lc| lc.log_group())
-                .filter(|g| !g.is_empty())
+                .filter(|g| !g.is_empty());
+            let log_group = configured_group
                 .map(str::to_string)
                 .unwrap_or_else(|| lambda_log_group(&name));
+            let source = if configured_group.is_some() {
+                Source::LambdaLoggingConfig
+            } else {
+                Source::LambdaDefaultConvention
+            };
+            let logs = if f.function_arn().is_some_and(|arn| {
+                !handoff::same_context_arn(arn, "lambda", "function:", ctx)
+                    || arn
+                        .splitn(6, ':')
+                        .nth(5)
+                        .and_then(|resource| resource.strip_prefix("function:"))
+                        != Some(name.as_str())
+            }) {
+                handoff::unavailable(Source::ContextMismatch)
+            } else {
+                handoff::logs(&log_group, None, source)
+            };
             functions.push(json!({
                 "name": name,
                 "arn": f.function_arn().unwrap_or(""),
                 "last_modified": f.last_modified().unwrap_or(""),
                 "log_group": log_group,
+                "handoffs": {"logs":logs},
                 "runtime": runtime,
                 "handler": f.handler().unwrap_or(""),
                 "description": f.description().unwrap_or(""),
@@ -398,6 +418,44 @@ mod tests {
         test_aws::{ExpectedRequest, ScriptedHttp},
         test_support::TestDir,
     };
+
+    #[tokio::test]
+    async fn lambda_configured_group_and_default_convention_have_distinct_provenance() {
+        let dir = TestDir::new();
+        let script = ScriptedHttp::new(vec![ExpectedRequest::rest(
+            "GET",
+            "/2015-03-31/functions",
+            json!({"Marker":null}),
+            json!({"Functions":[
+                {"FunctionName":"synthetic-a-custom","FunctionArn":"arn:aws:lambda:us-east-1:acct-producer-fixture:function:synthetic-a-custom","LoggingConfig":{"LogGroup":"/synthetic/custom/exact"}},
+                {"FunctionName":"synthetic-b-default"},
+                {"FunctionName":"synthetic-c-foreign","FunctionArn":"arn:aws:lambda:eu-west-1:acct-other-fixture:function:synthetic-c-foreign","LoggingConfig":{"LogGroup":"/synthetic/foreign"}},
+                {"FunctionName":"synthetic-d-mismatch","FunctionArn":"arn:aws:lambda:us-east-1:acct-producer-fixture:function:synthetic-other"}
+            ]}),
+        )]);
+        let result = fetch(&script.context(&dir, "log-tail", json!({"mode":"list"}))).await;
+        script.assert_finished();
+        assert_eq!(script.calls(), 1);
+        let custom = &result["functions"][0]["handoffs"]["logs"];
+        assert_eq!(custom["status"], "available");
+        assert_eq!(custom["source"], "lambda_logging_config");
+        assert_eq!(
+            custom["inputs"],
+            json!({"mode":"streams","log_group":"/synthetic/custom/exact"})
+        );
+        let default = &result["functions"][1]["handoffs"]["logs"];
+        assert_eq!(default["status"], "manual");
+        assert_eq!(default["source"], "lambda_default_convention");
+        assert_eq!(
+            default["inputs"]["log_group"],
+            "/aws/lambda/synthetic-b-default"
+        );
+        assert!(default["reason"].as_str().unwrap().contains("not verified"));
+        for row in &result["functions"].as_array().unwrap()[2..] {
+            assert_eq!(row["handoffs"]["logs"]["status"], "unavailable");
+            assert_eq!(row["handoffs"]["logs"]["source"], "context_mismatch");
+        }
+    }
 
     #[tokio::test]
     async fn lambda_listing_failure_retains_functions_and_custom_log_group() {

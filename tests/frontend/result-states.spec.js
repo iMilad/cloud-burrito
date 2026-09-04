@@ -94,6 +94,8 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
               ok: true,
               functions: ["one", "two"].map((name) => ({
                 name: `synthetic-function-${name}`, log_group: `/synthetic/lambda/${name}`,
+                handoffs: { logs: { status: "available", source: "lambda_logging_config", widget: "log-tail",
+                  inputs: { mode: "streams", log_group: `/synthetic/lambda/${name}` }, reason: "Log group from Lambda logging configuration; existence is unverified." } },
                 arn: `arn:aws:lambda:eu-west-1:${context.account_id}:function:synthetic-${name}`,
                 runtime: "synthetic", state: "Active",
               })),
@@ -326,7 +328,9 @@ for (const kind of ["log-tail", "cloudwatch-logs"]) {
     await expect(list.locator(".lambda-row").first()).toBeVisible();
     const mode = kind === "log-tail" ? "list" : "groups";
     const key = kind === "log-tail" ? "functions" : "groups";
-    const item = kind === "log-tail" ? { name: "partial-function", log_group: "/synthetic/group" } : { name: "/synthetic/group" };
+    const item = kind === "log-tail" ? { name: "partial-function", log_group: "/synthetic/group",
+      handoffs: { logs: { status: "available", source: "lambda_logging_config", widget: "log-tail",
+        inputs: { mode: "streams", log_group: "/synthetic/group" }, reason: "Log group from Lambda logging configuration; existence is unverified." } } } : { name: "/synthetic/group" };
     await hold(page, requestFor(kind));
     await refreshReply(page, surface, kind, partial({ [key]: [item] }));
     await expect(status(list)).toHaveAttribute("data-state", "partial");
@@ -337,6 +341,13 @@ for (const kind of ["log-tail", "cloudwatch-logs"]) {
     await expect(status(list)).toHaveAttribute("data-state", "stale");
     expect(await received(list)).toBe(original);
     await list.locator(".lambda-row").click();
+    if (kind === "log-tail") {
+      await expect(surface.getByRole("button", { name: "Load streams", exact: true })).toBeDisabled();
+      await expect(surface).toContainText("Refresh the function list before opening linked logs.");
+      await surface.getByRole("button", { name: "Reload", exact: true }).click();
+      await reply(page, await next(page, requestFor(kind, { inputs: { mode } })), partial({ [key]: [item] }));
+      await list.locator(".lambda-row").click();
+    }
     await reply(page, await next(page, requestFor(kind, { inputs: { mode: "streams" } })), partial({ streams: [{ name: "partial-stream" }] }));
     const streams = surface.locator(".lambda-stream-panel");
     await expect(status(streams)).toHaveAttribute("data-state", "partial");
@@ -346,7 +357,7 @@ for (const kind of ["log-tail", "cloudwatch-logs"]) {
     const logs = surface.locator(".lambda-log-events");
     await expect(status(logs)).toHaveAttribute("data-state", "partial");
     await expect(logs).toContainText("retained-log-event");
-    await expect(status(list)).toHaveAttribute("data-state", "stale");
+    await expect(status(list)).toHaveAttribute("data-state", kind === "log-tail" ? "partial" : "stale");
   });
 }
 
