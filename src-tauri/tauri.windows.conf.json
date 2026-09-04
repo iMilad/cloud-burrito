@@ -1,7 +1,27 @@
 {
   "bundle": {
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "createUpdaterArtifacts": false,
-    "useLocalToolsDir": true
+    "useLocalToolsDir": true,
+    "windows": {
+      "allowDowngrades": false,
+      "certificateThumbprint": null,
+      "signCommand": null,
+      "timestampUrl": null,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "languages": [
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

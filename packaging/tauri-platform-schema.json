@@ -1,0 +1,413 @@
+{
+  "provenance": {
+    "tauri_cli": "2.11.4",
+    "tauri_bundler": "2.9.4",
+    "tauri_utils": "2.9.3",
+    "source": "tauri-cli-2.11.4/config.schema.json",
+    "source_sha256": "923a41898c978c93616b9c1b6ae4d346f5586987459cfa877bacea21e7c85f1a",
+    "crate_sha256": "fedac57c0291926f6c46e17a4ddd84711d026725e4becbd73573cb8cd924ba75",
+    "scope": "Exact property constraints projected from the pinned CLI schema; only approved overlay fields are included. This is not the complete upstream schema."
+  },
+  "type": "object",
+  "properties": {
+    "bundle": {
+      "$ref": "#/definitions/BundleConfig"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BundleConfig": {
+      "type": "object",
+      "properties": {
+        "targets": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BundleTarget"
+            }
+          ]
+        },
+        "createUpdaterArtifacts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Updater"
+            }
+          ]
+        },
+        "useLocalToolsDir": {
+          "type": "boolean"
+        },
+        "windows": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WindowsConfig"
+            }
+          ]
+        },
+        "linux": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LinuxConfig"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WindowsConfig": {
+      "type": "object",
+      "properties": {
+        "allowDowngrades": {
+          "type": "boolean"
+        },
+        "certificateThumbprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signCommand": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CustomSignCommandConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timestampUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "webviewInstallMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebviewInstallMode"
+            }
+          ]
+        },
+        "nsis": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NsisConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "NsisConfig": {
+      "type": "object",
+      "properties": {
+        "installMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NSISInstallerMode"
+            }
+          ]
+        },
+        "installerIcon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "languages": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "displayLanguageSelector": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LinuxConfig": {
+      "type": "object",
+      "properties": {
+        "deb": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/DebConfig"
+            }
+          ]
+        },
+        "appimage": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppImageConfig"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DebConfig": {
+      "type": "object",
+      "properties": {
+        "section": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AppImageConfig": {
+      "type": "object",
+      "properties": {
+        "bundleMediaFramework": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BundleTarget": {
+      "anyOf": [
+        {
+          "const": "all"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BundleType"
+          }
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BundleType"
+            }
+          ]
+        }
+      ]
+    },
+    "BundleType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "deb"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "rpm"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "appimage"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "msi"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "nsis"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "app"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "dmg"
+          ]
+        }
+      ]
+    },
+    "Updater": {
+      "anyOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/V1Compatible"
+            }
+          ]
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "CustomSignCommandConfig": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "cmd"
+          ],
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "WebviewInstallMode": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "skip"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "downloadBootstrapper"
+              ]
+            },
+            "silent": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "embedBootstrapper"
+              ]
+            },
+            "silent": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "offlineInstaller"
+              ]
+            },
+            "silent": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "path",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "fixedRuntime"
+              ]
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NSISInstallerMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "currentUser"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "perMachine"
+          ]
+        },
+        {
+          "type": "string",
+          "enum": [
+            "both"
+          ]
+        }
+      ]
+    },
+    "V1Compatible": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "v1Compatible"
+          ]
+        }
+      ]
+    }
+  }
+}
