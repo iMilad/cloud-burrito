@@ -111,3 +111,16 @@ full upstream schema's SHA-256 and CLI crate SHA-256. It contains the exact
 constraints for approved overlay fields and their references; it is not a
 replacement for Tauri's complete schema. Changing the CLI pin requires a fresh
 review. [Tauri configuration reference](https://v2.tauri.app/reference/config/)
+
+## Post-build byte verification
+
+The builder retains the preflight report in memory and checks the same reviewed
+inventory after native packaging. Every helper must remain unchanged except the
+pinned Linuxdeploy transformation: bytes 8 through 10 become zero. Preflight
+computes that exact expected digest; postflight also restores the original three
+bytes in a hash stream and requires the original reviewed digest. Unrelated edits,
+changed inventory, missing tools and new Windows helper files fail acceptance.
+Post-build relative file hashes are retained in the manifest. The checker neither
+repairs nor approves the cache. Later builds require reviewed effective inputs or
+restoration of the original reviewed bytes. Observations cannot detect transient
+changes undone between checks, or replace separate network isolation.

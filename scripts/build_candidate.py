@@ -2,6 +2,7 @@
 """Build one local unsigned candidate, without installing, launching or publishing it."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -189,6 +190,20 @@ def only_match(directory, pattern):
     return matches[0]
 
 
+def stage_app_zip(app, destination):
+    # The pinned DMG helper removes group/other write bits. Apply the same
+    # packaging policy to a copy, preserving executable bits and relative links.
+    # Generated host xattrs/ACLs/resource-fork sidecars are not application data.
+    with tempfile.TemporaryDirectory(prefix='burrito-app-zip-') as directory:
+        copied = Path(directory) / app.name
+        shutil.copytree(app, copied, symlinks=True)
+        for path in [copied, *copied.rglob('*')]:
+            if not path.is_symlink():
+                path.chmod(path.stat().st_mode & 0o755)
+        run(['ditto', '-c', '-k', '--norsrc', '--noextattr', '--noacl', '--keepParent',
+             str(copied), str(destination)])
+
+
 def stage_artifacts(row, release_dir, output, version):
     bundle = release_dir / 'bundle'
     for artifact in row['artifacts']:
@@ -198,7 +213,7 @@ def stage_artifacts(row, release_dir, output, version):
             app = bundle / 'macos/Cloud Burrito.app'
             if app.is_symlink() or not app.is_dir():
                 raise BuildError('Expected app bundle is missing')
-            run(['ditto', '-c', '-k', '--keepParent', str(app), str(destination)])
+            stage_app_zip(app, destination)
         else:
             directory, pattern = {'dmg': ('dmg', '*.dmg'), 'nsis': ('nsis', '*-setup.exe'),
                                   'deb': ('deb', '*.deb'), 'appimage': ('appimage', '*.AppImage')}[fmt]
@@ -218,7 +233,7 @@ def build(row, output, helper_inventory=None):
         raise BuildError('Compiler target directory must not be redirected')
     release_dir = target_dir / row['target'] / 'release'
     with tempfile.TemporaryDirectory(prefix='cloud-burrito-candidate-') as temporary:
-        source_root = Path(temporary) / 'source'; source_root.mkdir()
+        source_root = Path(temporary).resolve() / 'source'; source_root.mkdir()
         export_source(source_root, identity['source_commit'])
         if not (source_root / 'scripts/artifact_inspection.py').is_file():
             raise BuildError('Format-aware inspection is required before candidate builds (P4-07)')
@@ -244,7 +259,6 @@ def build(row, output, helper_inventory=None):
                 raise BuildError('Pre-provisioned, verified native helper inventory is required; automatic downloads are disabled')
             helper_report = json.loads(run([sys.executable, str(checker), '--target', row['target'],
                 '--cargo-target-dir', str(target_dir), '--inventory', str(helper_inventory), '--json'], cwd=source_root, capture=True))
-            helper_report['inventory_sha256'] = sha256(helper_inventory)
         output.mkdir()
         previous = release_dir / 'bundle'
         if previous.exists():
@@ -259,6 +273,11 @@ def build(row, output, helper_inventory=None):
             # application launch is needed; this fence denies network traffic.
             command = ['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny network*)', *command]
         run(command, cwd=source_root / 'src-tauri', env=env)
+        if helper_report is not None:
+            spec = importlib.util.spec_from_file_location('candidate_helpers', checker)
+            helper_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(helper_module)
+            helper_report['post_build'] = helper_module.verify_after(target_dir, helper_inventory, helper_report)
         version = release_version(source_root)
         stage_artifacts(row, release_dir, output, version)
         # P4-07 supplies format-aware inspectors. A partial implementation must

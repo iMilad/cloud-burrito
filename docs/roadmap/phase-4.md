@@ -1,6 +1,6 @@
 # P4 — Native artifacts from one source candidate
 
-**P4-01–08 implemented locally; P4-09 is next. Native artifact and device evidence remain pending.**
+**P4-01–09 local implementation recorded; native candidate acceptance remains explicit. Native artifact and device evidence remain pending.**
 
 The original plan was source-reviewed on 2026-09-03 against v0.2.9 (`095d1ad`). Implementation follows the completed P3 source at `e82dcb5`; each unit has a separate local commit and evidence. [P4-01](p4-01-evidence.md) defines the versioned candidate matrix. Rust/Tauri remains the application stack.
 
@@ -134,7 +134,7 @@ Acceptance: a local or future CI candidate can be assembled without a release ta
 ## Completion and release boundary
 
 - [x] P4 planning is complete: ordered work, provisional decisions, dependencies, build evidence, and P5 handoff are defined.
-- [ ] P4 implementation has begun and the platform adapters/configuration changes are reviewed.
+- [x] All nine P4 local implementation/handoff units are recorded; actual artifact acceptance remains separate.
 - [ ] P0 device inventory and build/launch evidence have frozen the declared matrix.
 - [ ] P1–P3 acceptance evidence is attached to the candidate.
 - [ ] Every declared artifact is built and inspected from one source commit; checksums/privacy/provenance gates pass.

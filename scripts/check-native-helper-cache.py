@@ -27,6 +27,7 @@ PLUGIN_PATH = 'NSIS/Plugins/x86-unicode/additional/nsis_tauri_utils.dll'
 PLUGIN_SHA1 = '75197fee3c6a814fe035788d1c34ead39349b860'  # pragma: allowlist secret - public upstream checksum
 MAX_FILES = 10000
 MAX_BYTES = 1024 * 1024 * 1024
+LINUXDEPLOY = 'linuxdeploy-x86_64.AppImage'
 
 
 def is_redirect(path):
@@ -53,7 +54,7 @@ def regular_path(root, relative):
     return current, before
 
 
-def verify_cache(target, cargo_target_dir, inventory_path, matrix=None):
+def verify_cache(target, cargo_target_dir, inventory_path, matrix=None, *, _preflight=None):
     row = target_for(target, matrix or load_matrix())
     if row['platform'] not in ('windows', 'linux'):
         raise ValueError('This preflight is for the Windows and Linux native helpers')
@@ -71,6 +72,7 @@ def verify_cache(target, cargo_target_dir, inventory_path, matrix=None):
     if len(encoded) > 2 * 1024 * 1024:
         raise ValueError('Helper inventory exceeds its read budget')
     inventory = json.loads(encoded)
+    inventory_sha256 = hashlib.sha256(encoded).hexdigest()
     if not isinstance(inventory, dict):
         raise ValueError('Helper inventory must be an object')
     if (inventory.get('schema_version'), inventory.get('tauri_cli'), inventory.get('tauri_bundler'), inventory.get('target')) != (1, '2.11.4', '2.9.4', row['target']):
@@ -78,7 +80,13 @@ def verify_cache(target, cargo_target_dir, inventory_path, matrix=None):
     entries = inventory.get('files')
     if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_FILES:
         raise ValueError('A nonempty reviewed helper inventory is required')
-    listed, total = set(), 0
+    after_build = _preflight is not None
+    if after_build:
+        if not isinstance(_preflight, dict) or _preflight.get('target') != row['target'] or _preflight.get('inventory_sha256') != inventory_sha256 or _preflight.get('phase') != 'before-build':
+            raise ValueError('Post-build check requires the matching original preflight report')
+        if row['platform'] == 'windows' and _preflight.get('expected_mutations') != []:
+            raise ValueError('No Windows helper mutation is permitted')
+    listed, total, mutations, observed = set(), 0, [], []
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != {'path', 'size', 'sha256'}:
             raise ValueError('Invalid inventory entry')
@@ -95,27 +103,72 @@ def verify_cache(target, cargo_target_dir, inventory_path, matrix=None):
         helper, before = regular_path(cache, name)
         if before.st_size != entry['size']:
             raise ValueError('Helper byte size differs from reviewed inventory')
-        digest, upstream = hashlib.sha256(), hashlib.sha1()
+        digest, upstream, transformed = hashlib.sha256(), hashlib.sha1(), hashlib.sha256()
+        original_bytes, allowed = None, None
+        if name == LINUXDEPLOY:
+            if entry['size'] < 11:
+                raise ValueError('Linuxdeploy is too short for its defined transformation')
+            if after_build:
+                allowed_mutations = _preflight.get('expected_mutations')
+                if not isinstance(allowed_mutations, list) or len(allowed_mutations) != 1:
+                    raise ValueError('Expected exactly one declared Linuxdeploy transformation')
+                allowed = allowed_mutations[0]
+                if not isinstance(allowed, dict) or set(allowed) != {'path', 'size', 'before_sha256', 'after_sha256', 'original_bytes_8_10', 'rule'}:
+                    raise ValueError('Malformed Linuxdeploy transformation')
+                if (allowed['path'], allowed['size'], allowed['before_sha256'], allowed['rule']) != (LINUXDEPLOY, entry['size'], entry['sha256'], 'zero-bytes-8-10'):
+                    raise ValueError('Linuxdeploy transformation identity mismatch')
+                if not isinstance(allowed['after_sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', allowed['after_sha256']) or not isinstance(allowed['original_bytes_8_10'], str) or not re.fullmatch(r'[0-9a-f]{6}', allowed['original_bytes_8_10']):
+                    raise ValueError('Malformed Linuxdeploy transformation digest or byte record')
+                original_bytes = bytes.fromhex(allowed['original_bytes_8_10'])
         with helper.open('rb') as stream:
             opened = os.fstat(stream.fileno())
             if (opened.st_dev, opened.st_ino, opened.st_size) != (before.st_dev, before.st_ino, before.st_size):
                 raise ValueError('Helper changed during inspection')
             remaining = entry['size']
             while remaining:
+                offset = entry['size'] - remaining
                 block = stream.read(min(1024 * 1024, remaining))
                 if not block:
                     raise ValueError('Helper ended before its declared size')
                 remaining -= len(block)
                 digest.update(block)
                 upstream.update(block)
+                if name == LINUXDEPLOY:
+                    if offset < 11 and offset + len(block) > 8:
+                        start, end = max(0, 8 - offset), min(len(block), 11 - offset)
+                        if not after_build:
+                            # The first bounded read contains the complete three-byte field.
+                            original_bytes = block[8:11]
+                            replacement = b'\0' * 3
+                        else:
+                            if block[start:end] != b'\0' * (end - start):
+                                raise ValueError('AppImage build did not apply its exact Linuxdeploy byte patch')
+                            replacement = original_bytes
+                        transformed.update(block[:start] + replacement[offset + start - 8:offset + end - 8] + block[end:])
+                    else:
+                        transformed.update(block)
             if stream.read(1):
                 raise ValueError('Helper grew during inspection')
             after = os.fstat(stream.fileno())
-        if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino) or digest.hexdigest() != entry['sha256']:
+        if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise ValueError('Helper changed during inspection')
+        expected_digest = allowed['after_sha256'] if allowed else entry['sha256']
+        if digest.hexdigest() != expected_digest:
             raise ValueError('Helper hash differs from reviewed inventory')
+        if name == LINUXDEPLOY:
+            if after_build:
+                # Restoring only the recorded three original bytes must reproduce
+                # the reviewed input hash. A forged report cannot permit other edits.
+                if transformed.hexdigest() != entry['sha256']:
+                    raise ValueError('Linuxdeploy changed outside its permitted three-byte field')
+            else:
+                mutations.append({'path': name, 'size': entry['size'], 'before_sha256': entry['sha256'],
+                                  'after_sha256': transformed.hexdigest(), 'original_bytes_8_10': original_bytes.hex(),
+                                  'rule': 'zero-bytes-8-10'})
         if name == PLUGIN_PATH and upstream.hexdigest() != PLUGIN_SHA1:
             raise ValueError('NSIS plugin would trigger an upstream redownload')
         listed.add(name)
+        observed.append({'path': name, 'size': entry['size'], 'sha256': digest.hexdigest()})
     required = NSIS_REQUIRED if row['platform'] == 'windows' else APPIMAGE_REQUIRED
     if not required <= listed:
         raise ValueError('Required native helper files are absent from the inventory')
@@ -130,8 +183,26 @@ def verify_cache(target, cargo_target_dir, inventory_path, matrix=None):
                     raise ValueError('NSIS cache exceeds the file budget')
         if actual != listed:
             raise ValueError('Every NSIS toolchain file must match the reviewed inventory')
-    return {'target': row['target'], 'files': len(listed), 'bytes': total, 'cache_relative_to_cargo_target': '.tauri',
-            'network_enforced': False, 'executed': False}
+    report = {'target': row['target'], 'files': len(listed), 'bytes': total, 'cache_relative_to_cargo_target': '.tauri',
+              'inventory_sha256': inventory_sha256, 'phase': 'after-build' if after_build else 'before-build',
+              'network_enforced': False, 'executed': False}
+    if after_build:
+        report['observed_files'] = sorted(observed, key=lambda item: item['path'])
+    else:
+        report['expected_mutations'] = mutations
+    return report
+
+
+def verify_after(cargo_target_dir, inventory_path, preflight_report):
+    """Verify post-build helper bytes, accepting only the exact precomputed patch.
+
+    This reads the original reviewed inventory and emits relative-file digests.
+    It neither writes cache entries nor edits/approves the inventory. The caller
+    keeps the report in memory across its build and records this result afterward.
+    """
+    if not isinstance(preflight_report, dict):
+        raise ValueError('Original preflight report is required')
+    return verify_cache(preflight_report.get('target'), cargo_target_dir, inventory_path, _preflight=preflight_report)
 
 
 def main():

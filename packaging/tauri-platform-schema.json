@@ -4,8 +4,8 @@
     "tauri_bundler": "2.9.4",
     "tauri_utils": "2.9.3",
     "source": "tauri-cli-2.11.4/config.schema.json",
-    "source_sha256": "923a41898c978c93616b9c1b6ae4d346f5586987459cfa877bacea21e7c85f1a", "source_sha256_note": "pragma: allowlist secret - verified public build input checksum",
-    "crate_sha256": "fedac57c0291926f6c46e17a4ddd84711d026725e4becbd73573cb8cd924ba75", "crate_sha256_note": "pragma: allowlist secret - verified public build input checksum",
+    "source_sha256": "923a41898c978c93616b9c1b6ae4d346f5586987459cfa877bacea21e7c85f1a", "source_sha256_note": "# pragma: allowlist secret - verified public build input checksum",
+    "crate_sha256": "fedac57c0291926f6c46e17a4ddd84711d026725e4becbd73573cb8cd924ba75", "crate_sha256_note": "# pragma: allowlist secret - verified public build input checksum",
     "scope": "Exact property constraints projected from the pinned CLI schema; only approved overlay fields are included. This is not the complete upstream schema."
   },
   "type": "object",

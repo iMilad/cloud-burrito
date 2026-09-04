@@ -1,8 +1,8 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1–P3 complete locally. P4-01–08 implemented locally; P4-09 is next.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
+Status: **P1–P3 complete locally. P4-01–09 local implementation recorded; native candidate acceptance remains explicit.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
 
-Latest completed unit: [P4-08](p4-08-evidence.md) — Inactive candidate orchestration. Native package/device evidence remains separate.
+Latest completed unit: [P4-09](p4-09-evidence.md) — Native candidate handoff. Native package/device evidence remains separate.
 
 [P3 exit evidence](p3-exit-evidence.md) records all eight separate local work units, final checks, before/after measurements and remaining native gates.
 
@@ -28,8 +28,8 @@ Use **P0–P6** for work items and acceptance evidence. The presentation's five 
 | [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–06 complete locally / native evidence pending |
 | [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | Complete locally / native acceptance pending |
 | [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Synthetic timings and resource limits recorded; native startup/memory and public performance claims remain pending | P3-01–08 complete locally / native evidence pending |
-| [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | P4-01–08 complete locally / native artifact evidence pending |
-| P5 — Validate on real machines | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Outline only / not started |
+| [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | P4-01–09 complete locally / native artifact evidence pending |
+| [P5 — Validate on real machines](phase-5.md) | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Planned / not started |
 | P6 — Build the portfolio launch package | English documentation, demo, decisions and release evidence | Privacy/history and dependency review complete; independent feedback recorded; explicit publication decision | Outline only / not started |
 
 P0 probes platform compatibility early when devices become available. Pending device evidence does not block planning or future isolated P1 source work. It does block final support claims; comparable performance measurements must precede optimization claims. P4 produces candidate packages after trust, product and performance work. P5 tests those packages; a source build or Chromium test cannot substitute for this gate.
@@ -57,7 +57,7 @@ Deferred: Go/Wails rewrite, plugin SDK, full AI assistant, infrastructure mutati
 
 ## Start here
 
-1. Start [P4-01](phase-4.md#p4-01--freeze-the-artifact-and-compatibility-contract), using the [P3 exit evidence](p3-exit-evidence.md) to freeze the unsigned artifact and compatibility contract.
+1. Read the [P4 final evidence](p4-exit-evidence.md). Close the missing native-build gates before accepting a complete candidate; then begin [P5-01](phase-5.md) with one identified laptop.
 2. Use the phase plans in order: [P1](phase-1.md) → [P2](phase-2.md) → [P3](phase-3.md) → [P4](phase-4.md).
 3. Keep evidence against the [journey contracts](phase-0.md) and [operation inventory](aws-operation-inventory.md).
 4. Resume [device checks](device-checks.md) when the laptops are available; final support and native acceptance remain conditional until then.

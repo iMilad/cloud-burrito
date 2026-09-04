@@ -34,3 +34,11 @@ and removal belong to P5. Do not disable macOS security globally to test them.
 
 The bundler's embedded helper and system SDK are build inputs. Compiler/SDK
 versions are recorded in each manifest; this is not a bit-reproducibility claim.
+
+The first actual P4 build exposed a packaging difference: `ditto` included host
+AppleDouble metadata and the DMG helper removed group/other write bits. ZIP
+staging now uses a copy with the same write-bit policy and omits generated host
+resource-fork/xattr/ACL metadata. Executable bits, application files and relative
+links remain intact. The original built app is unchanged. Native comparison still
+requires every application file, mode and link to match; it does not ignore the
+difference in its acceptance logic.

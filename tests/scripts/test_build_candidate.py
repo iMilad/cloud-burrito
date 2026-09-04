@@ -87,6 +87,20 @@ class BuildCandidateTests(unittest.TestCase):
             self.assertEqual((root / 'folder/tool').read_bytes(), b'synthetic')
             self.assertTrue((root / 'folder/tool').stat().st_mode & 0o111)
 
+    def test_app_zip_normalizes_copy_without_changing_built_app(self):
+        with TemporaryDirectory(prefix='burrito-zip-policy-') as directory:
+            root = Path(directory); app = root / 'Cloud Burrito.app'
+            app.mkdir(); binary = app / 'program'; binary.write_bytes(b'synthetic')
+            binary.chmod(0o775)
+            def archive(command, **kwargs):
+                copied = Path(command[-2])
+                self.assertEqual((copied / 'program').stat().st_mode & 0o777, 0o755)
+                for option in ('--norsrc', '--noextattr', '--noacl', '--keepParent'):
+                    self.assertIn(option, command)
+            with patch.object(BUILD, 'run', side_effect=archive):
+                BUILD.stage_app_zip(app, root / 'output.zip')
+            self.assertEqual(binary.stat().st_mode & 0o777, 0o775)
+
     def test_wrong_native_host_fails_before_build(self):
         with patch.object(BUILD.platform, 'system', return_value='Darwin'):
             with self.assertRaises(BUILD.BuildError): BUILD.check_host(target_for('windows-x86_64'))
