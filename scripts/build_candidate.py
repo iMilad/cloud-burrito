@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one local unsigned candidate. Never install, launch, fetch or publish it."""
+"""Build one local unsigned candidate, without installing, launching or publishing it."""
 import argparse
 import hashlib
 import json
@@ -67,7 +67,10 @@ def candidate_source():
         path = ROOT / name
         if path.is_symlink() or not path.is_file():
             raise BuildError('Build input must be a tracked regular file')
-        hashes[name] = sha256(path)
+        # Git archive uses repository bytes, not a checkout's CRLF conversion.
+        blob = subprocess.run(['git', 'cat-file', 'blob', f'{revision}:{name}'],
+                              cwd=ROOT, check=True, stdout=subprocess.PIPE)
+        hashes[name] = hashlib.sha256(blob.stdout).hexdigest()
     identity = {'source_commit': revision, 'source_tree': tree, 'inputs_sha256': hashes}
     identity['candidate_input_sha256'] = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -87,13 +90,24 @@ def export_source(destination, revision):
                 path = Path(member.name)
                 if path.is_absolute() or '..' in path.parts or member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
                     raise BuildError('Source export contains a link or unsafe member')
-            tar.extractall(destination, filter='data')
+            # Python 3.10 (Ubuntu 22.04) has no guaranteed extraction-filter API.
+            # Only the prevalidated regular files/directories are materialized.
+            for member in tar.getmembers():
+                path = destination / member.name
+                if member.isdir():
+                    path.mkdir(parents=True, exist_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with tar.extractfile(member) as source, path.open('xb') as output:
+                        shutil.copyfileobj(source, output)
+                    path.chmod(member.mode & 0o777)
 
 
 def build_environment(source_root, target_dir, row, inherited=None):
     env = dict(os.environ if inherited is None else inherited)
     for key in list(env):
-        if key.startswith(('APPLE_', 'AWS_', 'TAURI_SIGNING_', 'TAURI_PRIVATE_', 'CARGO_PROFILE_')) or key in (
+        if key.startswith(('APPLE_', 'AWS_', 'TAURI_SIGNING_', 'TAURI_PRIVATE_', 'CARGO_PROFILE_',
+                           'CARGO_BUILD_', 'CARGO_TARGET_')) or key in (
             'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_TARGET', 'MACOSX_DEPLOYMENT_TARGET',
             'TAURI_CONFIG', 'TAURI_BUNDLER_SIGN', 'TAURI_BUNDLER_SIGNING_IDENTITY',
             'TAURI_BUNDLER_DMG_IGNORE_CI',
@@ -109,6 +123,7 @@ def build_environment(source_root, target_dir, row, inherited=None):
     ])
     env['CARGO_TARGET_DIR'] = str(target_dir)
     env['CARGO_NET_OFFLINE'] = 'true'
+    env['RUSTUP_AUTO_INSTALL'] = '0'
     env['AWS_EC2_METADATA_DISABLED'] = 'true'
     env['CI'] = 'true'
     if row['platform'] == 'macos':
@@ -124,6 +139,11 @@ def build_command(row):
 def check_host(row):
     if platform.system() != row['host_os']:
         raise BuildError(f"Target {row['id']} needs its declared native {row['host_os']} build host")
+    if row['platform'] == 'macos' and int(platform.mac_ver()[0].split('.')[0]) < 15:
+        raise BuildError('macOS candidate requires the declared macOS 15 or newer build host')
+    if row['platform'] == 'windows' and (platform.machine().lower() not in ('amd64', 'x86_64')
+            or sys.getwindowsversion().build < 22000):
+        raise BuildError('Windows candidate requires the declared Windows 11 x64 build host')
     if row['platform'] == 'linux':
         values = {}
         for line in Path('/etc/os-release').read_text().splitlines():
@@ -133,22 +153,32 @@ def check_host(row):
             raise BuildError('Linux candidate requires the declared Ubuntu 22.04 x64 build baseline')
 
 
-def tool_versions(source_root):
+def tool_versions(source_root, env):
     pins = dict(line.split('=', 1) for line in (source_root / 'scripts/tool-versions.env').read_text().splitlines()
                 if line and not line.startswith('#'))
-    tauri = run(['cargo', 'tauri', '--version'], cwd=source_root, capture=True)
+    tauri = run(['cargo', 'tauri', '--version'], cwd=source_root, env=env, capture=True)
     if tauri != f"tauri-cli {pins['TAURI_CLI_VERSION']}":
         raise BuildError('Installed Tauri CLI differs from the repository pin')
-    rust = run(['rustc', '--version'], cwd=source_root, capture=True)
+    rust = run(['rustc', '--version'], cwd=source_root, env=env, capture=True)
     pin = re.search(r'channel\s*=\s*"([^"]+)"', (source_root / 'rust-toolchain.toml').read_text())[1]
     if rust.split()[1] != pin:
         raise BuildError('Installed Rust differs from the repository pin')
-    versions = {'rustc': rust, 'cargo': run(['cargo', '--version'], cwd=source_root, capture=True),
+    versions = {'rustc': rust, 'cargo': run(['cargo', '--version'], cwd=source_root, env=env, capture=True),
                 'tauri': tauri, 'python': platform.python_version(), 'os': platform.system(),
                 'os_release': platform.release(), 'host_architecture': platform.machine()}
     if platform.system() == 'Darwin':
-        versions['sdk'] = run(['xcrun', '--show-sdk-version'], capture=True)
-        versions['clang'] = run(['xcrun', 'clang', '--version'], capture=True).splitlines()[0]
+        versions['sdk'] = run(['xcrun', '--show-sdk-version'], env=env, capture=True)
+        versions['clang'] = run(['xcrun', 'clang', '--version'], env=env, capture=True).splitlines()[0]
+        versions['macos'] = platform.mac_ver()[0]
+    elif platform.system() == 'Windows':
+        for name in ('VCToolsVersion', 'WindowsSDKVersion'):
+            value = env.get(name, '').strip('\\/')
+            if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)+', value):
+                raise BuildError('Use a provisioned VS 2022 developer environment with recorded compiler and SDK versions')
+            versions[name] = value
+    elif platform.system() == 'Linux':
+        versions['compiler'] = run(['cc', '--version'], env=env, capture=True).splitlines()[0]
+        versions['glibc'] = run(['ldd', '--version'], env=env, capture=True).splitlines()[0]
     return versions
 
 
@@ -192,8 +222,8 @@ def build(row, output, helper_inventory=None):
         export_source(source_root, identity['source_commit'])
         if not (source_root / 'scripts/artifact_inspection.py').is_file():
             raise BuildError('Format-aware inspection is required before candidate builds (P4-07)')
-        versions = tool_versions(source_root)
         env = build_environment(source_root, target_dir, row)
+        versions = tool_versions(source_root, env)
         run([sys.executable, str(source_root / 'scripts/check-release-version.py')], cwd=source_root)
         run([sys.executable, str(ROOT / 'scripts/check-release-privacy.py')], cwd=ROOT)
         run([sys.executable, str(source_root / 'scripts/check-tauri-commands.py')], cwd=source_root)
@@ -201,13 +231,20 @@ def build(row, output, helper_inventory=None):
                                   cwd=source_root / 'src-tauri', env=env, capture=True))
         if Path(metadata['target_directory']).resolve() != target_dir.resolve():
             raise BuildError('Cargo target directory differs from the verified native helper cache')
+        from dependency_inventory import from_metadata
+        dependencies = json.loads(run(['cargo', 'metadata', '--format-version=1', '--filter-platform', row['target'],
+                                      '--offline', '--locked'], cwd=source_root / 'src-tauri', env=env, capture=True))
+        dependency_report = from_metadata(dependencies, json.loads((source_root / 'package-lock.json').read_text()))
         helper_report = None
         if row['platform'] != 'macos':
+            run([sys.executable, str(source_root / 'scripts/platform_config.py'),
+                 '--platform', row['platform']], cwd=source_root, env=env)
             checker = source_root / 'scripts/check-native-helper-cache.py'
             if not checker.is_file() or not helper_inventory:
                 raise BuildError('Pre-provisioned, verified native helper inventory is required; automatic downloads are disabled')
             helper_report = json.loads(run([sys.executable, str(checker), '--target', row['target'],
                 '--cargo-target-dir', str(target_dir), '--inventory', str(helper_inventory), '--json'], cwd=source_root, capture=True))
+            helper_report['inventory_sha256'] = sha256(helper_inventory)
         output.mkdir()
         previous = release_dir / 'bundle'
         if previous.exists():
@@ -216,7 +253,12 @@ def build(row, output, helper_inventory=None):
             backup = ROOT / 'dist/build-backups' / (row['id'] + '-' + uuid.uuid4().hex[:10])
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(previous), str(backup))
-        run(build_command(row), cwd=source_root / 'src-tauri', env=env)
+        command = build_command(row)
+        if row['platform'] == 'macos':
+            # Includes nested build/bundler children. No Finder formatting or
+            # application launch is needed; this fence denies network traffic.
+            command = ['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny network*)', *command]
+        run(command, cwd=source_root / 'src-tauri', env=env)
         version = release_version(source_root)
         stage_artifacts(row, release_dir, output, version)
         # P4-07 supplies format-aware inspectors. A partial implementation must
@@ -230,8 +272,9 @@ def build(row, output, helper_inventory=None):
                     'source_clean': True, 'source_export': 'immutable tracked Git tree; no local ignored inputs',
                     'tool_versions': versions, 'build_arguments': build_command(row),
                     'path_remapping': ['source=.', 'cargo=.cargo', 'rustup=.rustup'],
-                    'network_policy': 'Cargo offline; verified native helper cache required; helper network isolation is separate',
-                    'native_helpers': helper_report, 'inspection': inspection}
+                    'network_policy': ('macOS sandbox-exec denies build-child network; Cargo offline; rustup auto-install disabled'
+                        if row['platform'] == 'macos' else 'Cargo offline; rustup auto-install disabled; verified native helper cache required; helper network isolation is separate'),
+                    'native_helpers': helper_report, 'dependency_inventory': dependency_report, 'inspection': inspection}
         (output / f"build-manifest-{row['id']}.json").write_text(json.dumps(manifest, indent=2) + '\n')
         print(f"Inspected local candidate: {row['id']} at source {identity['source_commit'][:12]}")
 

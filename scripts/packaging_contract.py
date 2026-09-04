@@ -29,6 +29,9 @@ def load_matrix(path=MATRIX):
         platform, host, formats = EXPECTED[row["target"]]
         if row.get("platform") != platform or row.get("host_os") != host:
             raise ValueError("Target platform/host mismatch")
+        bundles = {"macos": ["app", "dmg"], "windows": ["nsis"], "linux": ["deb", "appimage"]}
+        if row.get("bundle_targets") != bundles[platform]:
+            raise ValueError("Unexpected native bundle selection")
         if row.get("id") in identifiers or not re.fullmatch(r"[a-z0-9_-]+", row.get("id", "")):
             raise ValueError("Duplicate or invalid target ID")
         identifiers.add(row["id"])

@@ -24,7 +24,7 @@ APPIMAGE_REQUIRED = {
     'linuxdeploy-plugin-gstreamer.sh', 'linuxdeploy-plugin-appimage.AppImage',
 }
 PLUGIN_PATH = 'NSIS/Plugins/x86-unicode/additional/nsis_tauri_utils.dll'
-PLUGIN_SHA1 = '75197fee3c6a814fe035788d1c34ead39349b860'
+PLUGIN_SHA1 = '75197fee3c6a814fe035788d1c34ead39349b860'  # pragma: allowlist secret - public upstream checksum
 MAX_FILES = 10000
 MAX_BYTES = 1024 * 1024 * 1024
 

@@ -7,7 +7,7 @@ import re
 from packaging_contract import ROOT, load_matrix
 
 CLI_VERSION = '2.11.4'
-SCHEMA_SHA256 = '923a41898c978c93616b9c1b6ae4d346f5586987459cfa877bacea21e7c85f1a'
+SCHEMA_SHA256 = '923a41898c978c93616b9c1b6ae4d346f5586987459cfa877bacea21e7c85f1a'  # pragma: allowlist secret - public upstream checksum
 
 
 def schema_accepts(value, schema, definitions):

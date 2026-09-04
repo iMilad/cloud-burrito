@@ -30,6 +30,7 @@ class ContractTests(unittest.TestCase):
         data = copy.deepcopy(base); data['targets'][0]['status'] = 'device-validated'; variants.append(data)
         data = copy.deepcopy(base); data['targets'][0]['bundle_config'] = '../outside.json'; variants.append(data)
         data = copy.deepcopy(base); data['targets'][3]['artifacts'].pop(); variants.append(data)
+        data = copy.deepcopy(base); data['targets'][0]['bundle_targets'] = ['updater']; variants.append(data)
         with TemporaryDirectory(prefix='cloud-burrito-contract-') as directory:
             path = Path(directory) / 'matrix.json'
             for data in variants:
