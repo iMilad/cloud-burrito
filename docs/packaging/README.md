@@ -91,6 +91,17 @@ checks pass locally, but their native build machines and reviewed helper
 inventories have not been supplied in this task. No device acceptance has been
 claimed. Rebuild the final selected design before testing it.
 
+On committed source `205303c`, both `macos-aarch64 --check` and
+`macos-x86_64 --check` passed on this Mac. Each reported `built: false` and
+`device_validated: false`; version, offline input/tool checks, the 17-command
+registry and the scoped 295-file privacy scan passed. The helper regression
+suite passed 116 tests, including the new preflight cases. This records build
+input readiness for the applied Studio/logo source; the alternative design
+studies are separate documents. Selecting and integrating a variation requires
+a new committed-source check and build. Windows and Ubuntu native preflights
+remain pending on their declared hosts; this documentation update adds no
+application changes to that checked source.
+
 The existing GitHub Release workflow remains macOS-only. The four-target
 [CI example](ci-orchestration.md) is inactive; these local instructions do not
 enable a workflow, push code, release files or connect to AWS.
