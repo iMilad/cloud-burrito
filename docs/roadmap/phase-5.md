@@ -1,6 +1,6 @@
 # P5 — Give Cloud Burrito a distinctive creative interface
 
-**Implementing locally.** Approved on 2026-09-04. This phase introduces the Studio design while keeping the existing Classic experience available. The original device-validation phase moves to [P6](phase-6.md), and the portfolio phase moves to [P7](phase-7.md). Existing P1–P4 commits, results and artifact identities remain historical evidence.
+**Complete locally.** Approved and implemented on 2026-09-04; see [P5 exit evidence](p5-exit-evidence.md) for local commits, checks and the preserved source. This phase introduces the Studio design while keeping the existing Classic experience available. The original device-validation phase moves to [P6](phase-6.md), and the portfolio phase moves to [P7](phase-7.md). Existing P1–P4 commits, results and artifact identities remain historical evidence.
 
 ## Design direction
 
