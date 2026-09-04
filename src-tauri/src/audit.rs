@@ -17,12 +17,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use serde_json::{json, Map, Value};
 
+use crate::paths::AppPaths;
+
 /// Serializes concurrent appends so interleaved widget fan-out never produces
 /// a half-written line.
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-fn log_path() -> PathBuf {
-    crate::paths::data_file("audit.log")
+fn log_path(paths: &AppPaths) -> PathBuf {
+    paths.data_file("audit.log")
 }
 
 /// Epoch seconds as a float, matching Python's `time.time()` so the frontend's
@@ -35,7 +37,7 @@ pub fn now_epoch() -> f64 {
 }
 
 /// Append one entry. A `ts` field is injected; any `ts` in `entry` is overwritten.
-pub fn append(entry: Value) {
+pub fn append(paths: &AppPaths, entry: Value, timestamp: f64) {
     let mut obj: Map<String, Value> = match entry {
         Value::Object(m) => m,
         other => {
@@ -44,13 +46,13 @@ pub fn append(entry: Value) {
             m
         }
     };
-    obj.insert("ts".into(), json!(now_epoch()));
+    obj.insert("ts".into(), json!(timestamp));
     let line = match serde_json::to_string(&Value::Object(obj)) {
         Ok(s) => s,
         Err(_) => return,
     };
     let _g = WRITE_LOCK.lock();
-    let p = log_path();
+    let p = log_path(paths);
     if let Some(parent) = p.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -61,8 +63,8 @@ pub fn append(entry: Value) {
 
 /// Return the last `limit` well-formed entries, oldest-first. Malformed lines
 /// are skipped — a corrupted log never propagates to the UI.
-pub fn tail(limit: usize) -> Vec<Value> {
-    let p = log_path();
+pub fn tail(paths: &AppPaths, limit: usize) -> Vec<Value> {
+    let p = log_path(paths);
     let file = match fs::File::open(&p) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
@@ -85,26 +87,23 @@ pub fn tail(limit: usize) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
 
     #[test]
     fn append_injects_ts_and_tail_roundtrips() {
-        let _g = crate::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _prev_home = std::env::var_os("HOME");
-        // Point at a temp HOME so we don't touch the real audit log.
-        let tmp = std::env::temp_dir().join(format!("acc-audit-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&tmp);
-        std::env::set_var("HOME", &tmp);
+        let tmp = TestDir::new();
+        let paths = tmp.paths();
 
-        append(json!({"kind": "lifecycle", "event": "unit_test"}));
-        let entries = tail(50);
+        append(
+            &paths,
+            json!({"kind": "lifecycle", "event": "unit_test", "ts": 1.0}),
+            42.5,
+        );
+        let entries = tail(&paths, 50);
         assert!(!entries.is_empty());
         let last = entries.last().unwrap();
         assert_eq!(last["kind"], json!("lifecycle"));
         assert_eq!(last["event"], json!("unit_test"));
-        assert!(last["ts"].as_f64().unwrap() > 0.0);
-        match _prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
+        assert_eq!(last["ts"], json!(42.5));
     }
 }

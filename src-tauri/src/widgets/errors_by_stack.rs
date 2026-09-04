@@ -18,10 +18,14 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     let hours = ctx.input_i64("hours", 24).max(1);
     let pattern = ctx.input_str("log_group_pattern", "/aws/lambda/");
 
-    let client = Client::new(&ctx.sdk);
-    if let Some(denied) = ctx.preflight("logs", "DescribeLogGroups") {
-        return denied;
+    // Authorize the complete workflow before discovery or SDK construction.
+    // StartQuery also requires the local StopQuery cleanup capability.
+    for operation in ["DescribeLogGroups", "StartQuery", "GetQueryResults"] {
+        if let Some(denied) = ctx.preflight("logs", operation) {
+            return denied;
+        }
     }
+    let client = Client::new(&ctx.sdk);
     let mut req = client.describe_log_groups();
     if !pattern.is_empty() {
         req = req.log_group_name_prefix(&pattern);
@@ -51,14 +55,6 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         .unwrap_or(0);
     let start = now - hours * 3600;
 
-    if !group_names.is_empty() {
-        if let Some(denied) = ctx.preflight("logs", "StartQuery") {
-            return denied;
-        }
-        if let Some(denied) = ctx.preflight("logs", "GetQueryResults") {
-            return denied;
-        }
-    }
     let futs = group_names.iter().map(|g| {
         let client = client.clone();
         let g = g.clone();

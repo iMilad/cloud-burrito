@@ -1,13 +1,16 @@
 //! User-editable read-only allowlist (`~/.cloud_burrito/policy.yaml`).
 //!
-//! IAM-statement-style YAML that can only *narrow* what the app calls — it is
-//! intersected with the structural read-only floor in `gate()`, never widening
-//! it. Evaluation: explicit Deny > matching Allow > default-deny.
+//! IAM-statement-style YAML that can only narrow the exact operation registry.
+//! Evaluation: explicit Deny > matching Allow > default-deny. Query starts also
+//! require the user's policy to allow the registered cleanup operation.
 
 use std::fs;
 use std::path::PathBuf;
 
 use serde::Deserialize;
+
+use super::guard::{self, OperationEffect};
+use crate::paths::AppPaths;
 
 /// Glob match supporting `*` (any run, incl. empty) and `?` (one char).
 /// Case-sensitive.
@@ -157,34 +160,9 @@ impl Policy {
     }
 }
 
-/// Every (service, operation) the app can call. Single source of truth for the
-/// auto-generated default policy and the coverage test. NOTE: keep in sync when
-/// any command or widget gains a new AWS call.
+/// Existing credential-provider preflight proxy. This does not enumerate or
+/// intercept all SDK credential-provider activity.
 pub const CREDENTIAL_OP: (&str, &str) = ("sso", "GetRoleCredentials");
-
-pub const APP_OPS: &[(&str, &str)] = &[
-    CREDENTIAL_OP,
-    ("sts", "GetCallerIdentity"),
-    ("cloudformation", "ListStacks"),
-    ("cloudformation", "DescribeStackResources"),
-    ("cloudformation", "DescribeStackEvents"),
-    ("logs", "DescribeLogGroups"),
-    ("logs", "StartQuery"),
-    ("logs", "GetQueryResults"),
-    ("logs", "StopQuery"),
-    ("logs", "FilterLogEvents"),
-    ("codepipeline", "ListPipelines"),
-    ("codepipeline", "ListPipelineExecutions"),
-    ("codepipeline", "ListActionExecutions"),
-    ("codebuild", "BatchGetBuilds"),
-    ("codeartifact", "ListPackages"),
-    ("codeartifact", "ListPackageVersions"),
-    ("codeartifact", "DescribePackageVersion"),
-    ("lambda", "ListFunctions"),
-    ("logs", "GetLogEvents"),
-    ("logs", "DescribeLogStreams"),
-    ("resourcegroupstaggingapi", "GetResources"),
-];
 
 /// Previous generated default policy. This is migration-only: if a user still
 /// has this exact unedited file, replace it with `default_yaml()`. These are
@@ -274,12 +252,6 @@ const PRE_BYO_WIDGETS_DEFAULT_OPS: &[(&str, &str)] = &[
     ("resourcegroupstaggingapi", "GetResources"),
 ];
 
-fn is_registered_app_op(service: &str, operation: &str) -> bool {
-    APP_OPS
-        .iter()
-        .any(|(svc, op)| svc.eq_ignore_ascii_case(service) && *op == operation)
-}
-
 pub fn is_credential_op(service: &str, operation: &str) -> bool {
     service.eq_ignore_ascii_case(CREDENTIAL_OP.0) && operation == CREDENTIAL_OP.1
 }
@@ -333,8 +305,8 @@ pub fn default_yaml() -> String {
          # Delete lines to scope down; everything not allowed shows as a locked tile.\n\
          statements:\n  - effect: Allow\n    action:\n",
     );
-    for (svc, op) in APP_OPS {
-        s.push_str(&format!("      - {svc}:{op}\n"));
+    for spec in guard::APP_OPS {
+        s.push_str(&format!("      - {}:{}\n", spec.service, spec.operation));
     }
     s
 }
@@ -364,8 +336,8 @@ fn upgrade_legacy_default_text(text: &str) -> Option<String> {
     }
 }
 
-pub fn policy_path() -> PathBuf {
-    crate::paths::data_file("policy.yaml")
+pub fn policy_path(paths: &AppPaths) -> PathBuf {
+    paths.data_file("policy.yaml")
 }
 
 fn ensure_parent(path: &std::path::Path) -> std::io::Result<()> {
@@ -376,8 +348,8 @@ fn ensure_parent(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Read the raw policy text, creating the default file only when it is missing.
-pub fn raw_text() -> Result<String, PolicyError> {
-    let path = policy_path();
+pub fn raw_text(paths: &AppPaths) -> Result<String, PolicyError> {
+    let path = policy_path(paths);
     match fs::read_to_string(&path) {
         Ok(text) => {
             if let Some(upgraded) = upgrade_legacy_default_text(&text) {
@@ -406,14 +378,14 @@ pub fn raw_text() -> Result<String, PolicyError> {
 }
 
 /// Read + parse the active policy (creating the default on first run).
-pub fn load() -> Result<Policy, PolicyError> {
-    Policy::parse(&raw_text()?)
+pub fn load(paths: &AppPaths) -> Result<Policy, PolicyError> {
+    Policy::parse(&raw_text(paths)?)
 }
 
 /// Validate + write candidate text. Does not write when invalid.
-pub fn write_text(text: &str) -> Result<Policy, PolicyError> {
+pub fn write_text(paths: &AppPaths, text: &str) -> Result<Policy, PolicyError> {
     let policy = Policy::parse(text)?;
-    let path = policy_path();
+    let path = policy_path(paths);
     ensure_parent(&path).map_err(|e| PolicyError {
         message: e.to_string(),
     })?;
@@ -423,44 +395,42 @@ pub fn write_text(text: &str) -> Result<Policy, PolicyError> {
     Ok(policy)
 }
 
-/// Compose the structural read-only floor with the user policy.
+/// Intersect the exact registry with user policy, including query cleanup.
 /// `Ok(())` = allowed; `Err(reason)` = denied (reason is user-facing).
 pub fn gate(policy: &Result<Policy, String>, service: &str, operation: &str) -> Result<(), String> {
-    if !is_registered_app_op(service, operation) {
-        return Err("not in the compiled AWS call registry".to_string());
+    let spec = guard::operation(service, operation)
+        .ok_or_else(|| "not in the compiled AWS call registry".to_string())?;
+    let policy = policy
+        .as_ref()
+        .map_err(|msg| format!("policy file invalid: {msg}"))?;
+    if policy.decision(spec.service, spec.operation) != Effect::Allow {
+        return Err("not allowed by your read-only policy".to_string());
     }
-    if !super::guard::is_read_only(operation) {
-        return Err("blocked by the structural read-only guard".to_string());
+    if spec.effect == OperationEffect::QueryStart
+        && policy.decision(spec.service, "StopQuery") != Effect::Allow
+    {
+        return Err(format!(
+            "query cleanup capability missing: {}:StopQuery must be allowed before {}:{}",
+            spec.service, spec.service, spec.operation
+        ));
     }
-    match policy {
-        Err(msg) => Err(format!("policy file invalid: {msg}")),
-        Ok(p) => match p.decision(service, operation) {
-            Effect::Allow => Ok(()),
-            Effect::Deny => Err("not allowed by your read-only policy".to_string()),
-        },
-    }
+    Ok(())
 }
 
-/// CLI-path gate: same composition as `gate` minus the compiled registry.
-/// User-supplied `aws` commands cannot be pre-registered, so the structural
-/// read-only guard is the floor and policy.yaml narrows from there. Because
-/// the default policy lists only registry ops, every CLI action outside the
-/// registry is deny-by-default until the user allows it in policy.yaml.
+/// CLI table calls require an explicitly mapped resource read and a narrowing
+/// user policy. Query control and credential acquisition are app-owned paths.
 pub fn gate_cli(
     policy: &Result<Policy, String>,
     service: &str,
     operation: &str,
 ) -> Result<(), String> {
-    if !super::guard::is_read_only(operation) {
-        return Err("blocked by the structural read-only guard".to_string());
+    let spec = guard::operation(service, operation)
+        .filter(|spec| spec.service == service)
+        .ok_or_else(|| "not in the approved CLI operation registry".to_string())?;
+    if spec.effect != OperationEffect::ResourceRead || spec.cli_command.is_none() {
+        return Err("operation is not approved for the CLI table".to_string());
     }
-    match policy {
-        Err(msg) => Err(format!("policy file invalid: {msg}")),
-        Ok(p) => match p.decision(service, operation) {
-            Effect::Allow => Ok(()),
-            Effect::Deny => Err("not allowed by your read-only policy".to_string()),
-        },
-    }
+    gate(policy, spec.service, spec.operation)
 }
 
 /// Lowercase only the part before the first ':' so `CloudFormation:List*`
@@ -475,6 +445,7 @@ fn lower_service_segment(pattern: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
 
     #[test]
     fn glob_matches() {
@@ -558,14 +529,48 @@ mod tests {
 
     #[test]
     fn default_allows_every_app_op() {
-        let p = Policy::parse(&default_yaml()).unwrap();
-        for (svc, op) in APP_OPS {
-            assert_eq!(
-                p.decision(svc, op),
-                Effect::Allow,
-                "default must allow {svc}:{op}"
+        let p = Ok(Policy::parse(&default_yaml()).unwrap());
+        for spec in guard::APP_OPS {
+            assert!(
+                gate(&p, spec.service, spec.operation).is_ok(),
+                "default must allow {}:{}",
+                spec.service,
+                spec.operation
             );
         }
+    }
+
+    #[test]
+    fn generated_default_preserves_existing_text_and_action_order() {
+        let expected = concat!(
+            "# Cloud Burrito read-only policy.\n",
+            "# IAM-style: explicit Deny > Allow > default-deny. Globs * and ? work.\n",
+            "# This file can only NARROW what the app calls; it can never enable a write.\n",
+            "# Delete lines to scope down; everything not allowed shows as a locked tile.\n",
+            "statements:\n  - effect: Allow\n    action:\n",
+            "      - sso:GetRoleCredentials\n",
+            "      - sts:GetCallerIdentity\n",
+            "      - cloudformation:ListStacks\n",
+            "      - cloudformation:DescribeStackResources\n",
+            "      - cloudformation:DescribeStackEvents\n",
+            "      - logs:DescribeLogGroups\n",
+            "      - logs:StartQuery\n",
+            "      - logs:GetQueryResults\n",
+            "      - logs:StopQuery\n",
+            "      - logs:FilterLogEvents\n",
+            "      - codepipeline:ListPipelines\n",
+            "      - codepipeline:ListPipelineExecutions\n",
+            "      - codepipeline:ListActionExecutions\n",
+            "      - codebuild:BatchGetBuilds\n",
+            "      - codeartifact:ListPackages\n",
+            "      - codeartifact:ListPackageVersions\n",
+            "      - codeartifact:DescribePackageVersion\n",
+            "      - lambda:ListFunctions\n",
+            "      - logs:GetLogEvents\n",
+            "      - logs:DescribeLogStreams\n",
+            "      - resourcegroupstaggingapi:GetResources\n",
+        );
+        assert_eq!(default_yaml(), expected);
     }
 
     #[test]
@@ -618,25 +623,62 @@ mod tests {
     }
 
     #[test]
-    fn gate_cli_uses_guard_floor_and_policy_without_registry() {
-        // Read-only op outside the compiled registry, explicitly allowed by policy.
-        let p = Ok(
-            Policy::parse("statements:\n  - effect: Allow\n    action: [ec2:Describe*]\n").unwrap(),
-        );
-        assert!(gate_cli(&p, "ec2", "DescribeInstances").is_ok());
-        // Write ops stay blocked even with a wildcard policy.
+    fn wildcard_policy_cannot_add_unreviewed_operations() {
         let permissive =
             Ok(Policy::parse("statements:\n  - effect: Allow\n    action: [\"*\"]\n").unwrap());
-        assert!(gate_cli(&permissive, "ec2", "TerminateInstances").is_err());
-        assert!(gate_cli(&permissive, "s3", "PutObject").is_err());
-        // The default policy only lists registry ops -> CLI ops outside it are
-        // deny-by-default, while registry ops pass.
+        for (service, operation) in [
+            ("ecr", "BatchDeleteImage"),
+            ("dynamodb", "BatchWriteItem"),
+            ("rds-data", "ExecuteStatement"),
+            ("ec2", "TerminateInstances"),
+            ("s3", "PutObject"),
+            ("ec2", "DescribeInstances"),
+            ("logs", "GetUnknownResource"),
+            ("logs", "StartQueryExtra"),
+            ("logs", "ListStacks"),
+            ("sts", "AssumeRole"),
+            ("sts", "GetSessionToken"),
+            ("sts", "GetFederationToken"),
+        ] {
+            assert!(
+                gate(&permissive, service, operation).is_err(),
+                "SDK must deny unregistered {service}:{operation}"
+            );
+            assert!(
+                gate_cli(&permissive, service, operation).is_err(),
+                "CLI must deny unregistered {service}:{operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_accepts_registered_reads_but_not_query_control_or_credentials() {
         let default = Ok(Policy::parse(&default_yaml()).unwrap());
-        assert!(gate_cli(&default, "ec2", "DescribeInstances").is_err());
-        assert!(gate_cli(&default, "cloudformation", "ListStacks").is_ok());
-        // Invalid policy fails closed.
-        let broken: Result<Policy, String> = Err("boom".to_string());
-        assert!(gate_cli(&broken, "ec2", "DescribeInstances").is_err());
+        let permissive =
+            Ok(Policy::parse("statements:\n  - effect: Allow\n    action: [\"*\"]\n").unwrap());
+        for spec in guard::APP_OPS {
+            for policy in [&default, &permissive] {
+                assert_eq!(
+                    gate_cli(policy, spec.service, spec.operation).is_ok(),
+                    spec.effect == OperationEffect::ResourceRead,
+                    "CLI approval for {}:{} must follow its reviewed effect",
+                    spec.service,
+                    spec.operation
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sdk_service_aliases_remain_case_insensitive_but_cli_spelling_is_exact() {
+        let allow = Ok(Policy::parse(&default_yaml()).unwrap());
+        assert!(gate(&allow, "CloudFormation", "ListStacks").is_ok());
+        assert!(gate(&allow, "LOGS", "StartQuery").is_ok());
+        assert!(gate(&allow, "cloudformation", "liststacks").is_err());
+        assert!(gate_cli(&allow, "CloudFormation", "ListStacks").is_err());
+        assert!(gate_cli(&allow, "cloudformation", "liststacks").is_err());
+        assert!(gate_cli(&allow, "cloudformation", "list-stacks").is_err());
+        assert!(gate_cli(&allow, "cloudformation", "ListStacks").is_ok());
     }
 
     #[test]
@@ -651,17 +693,79 @@ mod tests {
     }
 
     #[test]
-    fn gate_composes_floor_and_policy() {
-        let allow = Ok(Policy::parse(&default_yaml()).unwrap());
-        assert!(gate(&allow, "cloudformation", "ListStacks").is_ok());
-        // unregistered operations are denied even if policy text allowed them
-        let permissive =
-            Ok(Policy::parse("statements:\n  - effect: Allow\n    action: [\"*\"]\n").unwrap());
-        assert!(gate(&permissive, "cloudformation", "DeleteStack").is_err());
-        assert!(gate(&permissive, "s3", "ListBuckets").is_err());
-        // invalid policy => fail closed
-        let broken: Result<Policy, String> = Err("boom".to_string());
-        assert!(gate(&broken, "logs", "FilterLogEvents").is_err());
+    fn registered_operations_still_require_valid_policy_and_explicit_allow() {
+        for yaml in [
+            "statements:\n  - effect: Allow\n    action: [\"*\"]\n  - effect: Deny\n    action: [logs:FilterLogEvents]\n",
+            "statements:\n  - effect: Deny\n    action: [logs:FilterLogEvents]\n  - effect: Allow\n    action: [\"*\"]\n",
+            "statements: []\n",
+        ] {
+            let policy = Ok(Policy::parse(yaml).unwrap());
+            assert!(gate(&policy, "logs", "FilterLogEvents").is_err());
+            assert!(gate_cli(&policy, "logs", "FilterLogEvents").is_err());
+        }
+        for yaml in [
+            "statements: [ : : :",
+            "statements:\n  - effect: Maybe\n    action: [\"*\"]\n",
+            "statements:\n  - effect: Allow\n    action: [nocolon]\n",
+        ] {
+            let policy = Policy::parse(yaml).map_err(|error| error.message);
+            assert!(policy.is_err());
+            for operation in ["FilterLogEvents", "StartQuery"] {
+                assert!(gate(&policy, "logs", operation)
+                    .unwrap_err()
+                    .starts_with("policy file invalid:"));
+            }
+            assert!(gate_cli(&policy, "logs", "FilterLogEvents")
+                .unwrap_err()
+                .starts_with("policy file invalid:"));
+        }
+    }
+
+    #[test]
+    fn start_query_requires_allowed_cleanup_without_widening_policy() {
+        for yaml in [
+            "statements:\n  - effect: Allow\n    action: [logs:StartQuery]\n",
+            "statements:\n  - effect: Allow\n    action: [\"*\"]\n  - effect: Deny\n    action: [logs:StopQuery]\n",
+            "statements:\n  - effect: Deny\n    action: [logs:StopQuery]\n  - effect: Allow\n    action: [logs:*]\n",
+        ] {
+            let policy = Ok(Policy::parse(yaml).unwrap());
+            assert_eq!(
+                gate(&policy, "logs", "StartQuery").unwrap_err(),
+                "query cleanup capability missing: logs:StopQuery must be allowed before logs:StartQuery"
+            );
+            assert_eq!(
+                policy.as_ref().unwrap().decision("logs", "StopQuery"),
+                Effect::Deny
+            );
+            assert!(gate(&policy, "logs", "StopQuery").is_err());
+        }
+
+        let both = Ok(Policy::parse(
+            "statements:\n  - effect: Allow\n    action: [logs:StartQuery, logs:StopQuery]\n",
+        )
+        .unwrap());
+        assert!(gate(&both, "logs", "StartQuery").is_ok());
+        assert!(gate(&both, "logs", "StopQuery").is_ok());
+
+        let stop_only = Ok(Policy::parse(
+            "statements:\n  - effect: Allow\n    action: [logs:StopQuery]\n",
+        )
+        .unwrap());
+        assert!(gate(&stop_only, "logs", "StopQuery").is_ok());
+        assert_eq!(
+            gate(&stop_only, "logs", "StartQuery").unwrap_err(),
+            "not allowed by your read-only policy"
+        );
+
+        let denied_start = Ok(Policy::parse(
+            "statements:\n  - effect: Allow\n    action: [logs:*]\n  - effect: Deny\n    action: [logs:StartQuery]\n",
+        )
+        .unwrap());
+        assert_eq!(
+            gate(&denied_start, "logs", "StartQuery").unwrap_err(),
+            "not allowed by your read-only policy"
+        );
+        assert!(gate(&denied_start, "logs", "StopQuery").is_ok());
     }
 
     #[test]
@@ -705,32 +809,31 @@ mod tests {
 
     #[test]
     fn raw_text_writes_default_when_missing() {
-        let _g = crate::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _prev_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!("acc-policy-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::env::set_var("HOME", &tmp);
-        let text = raw_text().unwrap();
+        let tmp = TestDir::new();
+        let paths = tmp.paths();
+        let text = raw_text(&paths).unwrap();
         assert!(text.contains("cloudformation:ListStacks"));
         assert!(text.contains("sso:GetRoleCredentials"));
         assert!(text.contains("sts:GetCallerIdentity"));
         assert!(text.contains("codepipeline:ListPipelines"));
         assert!(text.contains("lambda:ListFunctions"));
         assert!(text.contains("logs:DescribeLogStreams"));
-        assert!(policy_path().exists());
+        assert!(policy_path(&paths).exists());
         // round-trip a narrowed policy
-        write_text("statements:\n  - effect: Allow\n    action: [logs:*]\n").unwrap();
+        write_text(
+            &paths,
+            "statements:\n  - effect: Allow\n    action: [logs:*]\n",
+        )
+        .unwrap();
         assert_eq!(
-            load().unwrap().decision("cloudformation", "ListStacks"),
+            load(&paths)
+                .unwrap()
+                .decision("cloudformation", "ListStacks"),
             Effect::Deny
         );
         assert_eq!(
-            load().unwrap().decision("logs", "StartQuery"),
+            load(&paths).unwrap().decision("logs", "StartQuery"),
             Effect::Allow
         );
-        match _prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
     }
 }

@@ -38,6 +38,7 @@ shell-words = "1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
 aws-smithy-types = "1"
+aws-sdk-sso = { version = "=1.102.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }
 aws-sdk-cloudformation = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-codepipeline = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
@@ -46,3 +47,7 @@ aws-sdk-codeartifact = { version = "1", default-features = false, features = ["d
 aws-sdk-cloudwatchlogs = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-lambda = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-resourcegroupstagging = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+
+[dev-dependencies]
+# Already locked transitively; exposes the test-only fail-closed HTTP fence.
+aws-smithy-runtime-api = { version = "=1.12.3", features = ["client"] }

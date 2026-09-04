@@ -26,13 +26,13 @@ Cloud Burrito is a small native desktop app for engineers who want a quick,
 **safe** window into their AWS estate — pipeline runs, CloudFormation stacks, log
 tails, error aggregates — without the risk of fat-fingering a destructive action.
 
-It is **read-only by construction**: the binary has a closed registry of AWS
-operations, every request path passes a structural read-only guard, and
-`policy.yaml` must explicitly allow the operation before the SDK call is issued.
-Admin credentials do not give the app a generic "run any AWS call" escape hatch.
+The binary has a **closed operation registry**: resource reads, Logs Insights
+query control and credential acquisition have distinct classifications.
+`policy.yaml` can restrict these capabilities; even a wildcard allow cannot
+enable an operation outside that registry. Queries can incur AWS charges.
 
-No Python, no Node, no sidecar process, no runtime dependencies — just one
-compiled binary that talks to AWS in-process via the AWS SDK for Rust.
+The core uses the AWS SDK for Rust in-process, without Python or Node at runtime.
+The optional AWS CLI Table widget requires a separately installed AWS CLI.
 
 ## Contents
 
@@ -50,11 +50,11 @@ compiled binary that talks to AWS in-process via the AWS SDK for Rust.
 
 ## Highlights
 
-- **Read-only, guaranteed.** Write operations aren't in the binary. Admin
-  credentials grant the app no powers it doesn't have code for.
+- **Exact operation boundaries.** Only reviewed operations can pass the local
+  gate; query control and credentials are distinct from resource reads.
 - **User-narrowable policy.** An IAM-style `policy.yaml` allowlist (edited from
   the Settings panel, with live YAML syntax highlighting) further restricts which
-  read operations may run — and can only narrow, never widen.
+  supported operations may run — and cannot expand the compiled registry.
 - **Full audit trail.** Every allowed or blocked AWS call preflight is appended
   to a JSONL audit log and shown live in an in-app Audit panel, tagged `aws`,
   `aws-blocked`, or lifecycle.
@@ -62,14 +62,14 @@ compiled binary that talks to AWS in-process via the AWS SDK for Rust.
   search for a default account/region from the top bar, or pin account/region per widget.
 - **Customizable dashboard.** Drag/resize widget tiles (GridStack); the layout
   and per-tile config persist across launches.
-- **Single binary.** Pure Rust + a webview UI. No interpreter, no helper process.
+- **Native core.** Rust + a webview UI; AWS CLI is optional for the CLI widget.
 - **Offline demo mode.** Open the frontend in a plain browser to explore the UI
   with mock data — no AWS account required.
 
 ## Security model
 
-The read-only guarantee is enforced as a hierarchy. Every gate must pass before
-the app issues an AWS SDK request; any failure stops the call locally:
+Application-requested operations pass the following local checks. These gates
+do not intercept every internal action of the SDK credential provider:
 
 ```
   requested AWS operation
@@ -79,23 +79,26 @@ the app issues an AWS SDK request; any failure stops the call locally:
      Is this exact service:Operation built into the app?
             │ yes
             ▼
-  2. Structural read-only guard
-     Is the operation classified as read-only / non-mutating?
+  2. Supported execution path
+     SDK capability, or reviewed CLI read + validated arguments?
             │ yes
             ▼
   3. policy.yaml
      explicit Deny > matching Allow > default-deny
             │ yes
             ▼
-  AWS SDK request is issued
+  SDK call or CLI child may proceed
 ```
 
-1. **Compiled registry.** Only operations listed in `src-tauri/src/aws/policy.rs`
-   can run. Wildcards in `policy.yaml` never add new capabilities; they only
-   match this closed set.
-2. **Structural read-only guard.** The operation name must pass the local
-   read-only classifier. This blocks mutating verbs even if someone adds them to
-   `policy.yaml` by mistake.
+1. **Compiled registry.** Exact records in `src-tauri/src/aws/guard.rs` define
+   18 resource reads, two query-control operations and one credential operation.
+   Operation prefixes such as `Get` or `Batch` grant no authority. Application
+   action names are not a ready-to-attach IAM policy.
+2. **Execution path.** CLI names have explicit mappings and per-command argument
+   rules. Credential acquisition and query start/stop are excluded from the CLI
+   table. SDK query workflows require both `logs:StartQuery` and `logs:StopQuery`
+   in the local policy before starting; this does not guarantee AWS IAM grants
+   cleanup permission or that remote cleanup succeeds.
 3. **`policy.yaml` allowlist.** A familiar IAM-statement-style file you control:
 
    ```yaml
@@ -122,13 +125,17 @@ the app issues an AWS SDK request; any failure stops the call locally:
    falling back to permissive — and is auto-seeded on first run with exactly the
    operations the app uses, so it works out of the box and you delete lines to
    scope down. Remove a service and the corresponding widget shows a clear
-   "missing permission" tile instead of making the call.
+   "request blocked" tile instead of making the call.
 
-SSO credential resolution is part of the hierarchy too. The AWS SDK can refresh
-role credentials before a service call, so every service-call path also requires
-`sso:GetRoleCredentials` to be allowed before the service request can proceed.
-If you remove that action from `policy.yaml`, set-account and later widget
-refreshes stop locally before a service call is issued.
+Service-call paths also require `sso:GetRoleCredentials` in the local policy.
+This is a credential preflight, not evidence that a request reached AWS.
+The app resolves only the selected SSO profile, verifies its account and principal
+with STS, and supplies the same fixed, expiring credentials to resource clients.
+Renewed credentials must be verified again. Credential and endpoint settings do
+not fall back to the environment or the default SDK provider chain. Named SSO
+sessions can still renew their cached token through the SDK's OIDC provider;
+these provider-internal requests are not individually represented in the local
+operation registry. See the [P1-03 evidence](docs/roadmap/p1-03-evidence.md).
 
 Current compiled registry:
 
@@ -161,20 +168,37 @@ resourcegroupstaggingapi:GetResources
 
 ### The AWS CLI Table widget and the registry
 
-The `aws-cli` widget runs a user-supplied read-only `aws` command, which by
-nature cannot be pre-registered. For that one path the compiled registry gate is
-replaced by the structural read-only guard as the floor: the command's
-`service:Operation` (derived from the CLI names, e.g. `ec2 describe-instances`
-→ `ec2:DescribeInstances`) must pass the read-only classifier **and** be
-allowed by `policy.yaml`. Because the auto-seeded policy only lists registry
-operations, every CLI action outside the registry is **deny-by-default** — you
-opt in per service by adding a line such as `- ec2:Describe*` in Settings. The
-command is tokenized and spawned as an argument vector (never a shell),
-`--profile`/`--output` are rejected, and the child runs under the tile's
-account context via `AWS_PROFILE`/`AWS_REGION`. Every run and every denial is
-audited like SDK calls. Like pipelines, commands can be pinned: each pin saves
-the command together with the profile/account/region it was created under and
-always reruns in that context, side by side on the widget's Pinned tab.
+**Temporarily unavailable in the desktop app:** CLI execution is blocked until
+P1-04 can pass verified credentials into a constrained child process. Existing
+pins remain saved. Internal SDK widgets use the verified connection described
+above.
+
+The retained CLI parser recognizes the **18 resource-read operations** above
+through exact CLI mappings, including `sts get-caller-identity`, `cloudformation
+list-stacks` and `codebuild batch-get-builds`. Each has a reviewed argument
+schema. Unknown, abbreviated or repeated switches, file-loading values,
+unreviewed structured inputs, and context/endpoint/output overrides are rejected
+before process execution. A recognized request still needs a policy allow and
+currently receives `CliContextUnavailable` at desktop dispatch.
+
+Examples:
+
+```text
+aws cloudformation list-stacks
+aws cloudformation describe-stack-resources --stack-name demo-stack
+aws codepipeline list-pipeline-executions --pipeline-name demo-pipeline
+```
+
+**Compatibility change:** EC2, S3 and other commands outside this finite list
+cannot be enabled by adding policy wildcards. Existing pins are preserved, but
+unsupported commands show a rejection when run. Query start/stop and credential
+issuance must use their dedicated application workflows.
+
+Parsed commands become an argument vector, never a shell command. Pins retain
+their saved profile/account/region. Verified CLI credential handoff, child
+environment isolation and streaming output limits are P1-04 work. See the
+[P1-02 evidence](docs/roadmap/p1-02-evidence.md) for the parser contract and the
+[P1-03 evidence](docs/roadmap/p1-03-evidence.md) for the temporary execution block.
 
 ## Widgets
 
@@ -191,7 +215,7 @@ stack details, pipeline execution details, and CodeBuild logs:
 | `pipeline-runs` | Recent CodePipeline executions with expandable detail, plus pinned pipelines across accounts and regions |
 | `codeartifact-packages` | Latest package versions in CodeArtifact filtered by package prefix |
 | `logs-insights` | Your own CloudWatch Logs Insights query against any log group, rendered as a table |
-| `aws-cli` | A read-only `aws` CLI command run under the tile's account context, JSON output rendered as a table |
+| `aws-cli` | A supported resource-read `aws` command with reviewed arguments, JSON output rendered as a table |
 
 Widget payloads may use stable machine keys such as `latest_version`,
 `last_published`, or `execution_id`, but the UI must not show those raw names as
@@ -247,9 +271,10 @@ tags; a maintainer reviews and publishes each draft. See
 
 ## Configuration
 
-Search for your default account and region in the top bar, and set your SSO
-session in the Settings panel. Individual widgets can inherit the default or pin
-their own account/region.
+Search for your default account and region in the top bar. The selected profile
+in the configured AWS file determines the SSO session. Individual widgets can
+inherit the verified connection or pin their own profile/account/region; pinned
+connections are verified independently.
 State lives in your home directory:
 
 | Path | Purpose |
@@ -260,10 +285,15 @@ State lives in your home directory:
 | `~/.cloud_burrito/dashboard.json` | Saved dashboard layout and per-tile config |
 | `~/.cloud_burrito/audit.log` | Append-only JSONL log of AWS call preflights and blocked calls |
 
-Authentication uses the standard SSO flow: `aws-config` resolves your profile's
-cached SSO token into short-lived role credentials that the SDK auto-refreshes.
-When the token expires, the app detects it and prompts you to re-run
-`aws sso login`. The default region is `eu-west-1` (allowed regions are
+Authentication supports inline SSO profiles and profiles referencing an
+`[sso-session]` section. Static keys, credential processes, role chains and
+endpoint overrides are rejected in the selected profile. The app reads the
+selected cached SSO token and obtains short-lived role credentials, then verifies
+them with STS before allowing resource work. Named sessions retain supported
+token renewal; expired legacy tokens or failed renewal require another
+`aws sso login`. Credential renewal is verified before reuse. A changed identity
+or selected profile configuration requires reconnecting. The default region is
+`eu-west-1` (allowed regions are
 `eu-west-1` and `us-east-1`, adjustable in `src-tauri/src/settings.rs`).
 
 ## Architecture
@@ -284,7 +314,7 @@ and an HTML/CSS/JS dashboard rendered in the OS webview.
 ```
 frontend/    Vanilla HTML/CSS/JS dashboard (open index.html for the offline demo)
 src-tauri/   Tauri 2 (Rust) app — all AWS calls happen in-process
-  src/aws/   Credentials/SSO context, config parsing, read-only guard + policy
+  src/aws/   Credentials/SSO context, config parsing, exact operation registry + policy
   src/widgets/  The compiled-in widgets
 scripts/     Development, release-build, version, privacy, and security checks
 tests/       Browser-mode Playwright tests

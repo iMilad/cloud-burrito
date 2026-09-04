@@ -37,7 +37,7 @@
         </select>
       </div>
       <span class="sr-only" id="topbar-picker-status" aria-live="polite"></span>
-      <span class="ro-badge" title="This app assumes a read-only AWS role. It cannot create, modify, or delete resources.">
+      <span class="ro-badge" title="Browses resources through approved operations. Logs Insights queries can incur AWS charges. Use a least-privilege role.">
         <span class="ro-dot"></span>READ-ONLY
       </span>
       <span class="core-status" id="core-status" data-state="unknown" title="Backend core status">
@@ -299,9 +299,9 @@
             <input id="settings-default-region" type="text" placeholder="eu-west-1" />
           </label>
           <p class="muted small">
-            Read-only enforcement is unconditional: every AWS service call is
-            checked against the structural read-only guard and your policy below
-            before it runs, including identity checks and the pipeline picker.
+            The app checks requested operations against its supported list and
+            your policy before execution. Logs Insights requires permission to
+            both start and stop queries; queries can incur AWS charges.
             Blocked calls show up in the Audit log panel.
           </p>
           <p class="muted small" id="settings-status"></p>
@@ -316,7 +316,7 @@
         <p class="muted small">
           IAM-style allowlist. Explicit Deny &gt; Allow &gt; default-deny; globs
           <code>*</code> and <code>?</code> work. It can only narrow what the app
-          calls — it can never enable a write.
+          calls — it cannot enable unsupported operations.
         </p>
         <p class="muted small" id="policy-path"></p>
         <p class="small" id="policy-status"></p>
@@ -342,10 +342,9 @@
     <div class="side-panel-body">
       <p class="muted small">
         Last 300 entries, newest first. Auto-refreshes every 2 seconds while
-        open. Captures lifecycle events, set-account attempts, every AWS service
-        call the Rust core makes, and any call blocked by the read-only guard or
-        policy. Request params aren't recorded; AWS calls log only service +
-        operation + account + region.
+        open. Captures lifecycle events, set-account attempts, operation
+        preflights and widget diagnostics. A preflight records permission to
+        proceed, not confirmation that an AWS request succeeded.
         On disk: <code>~/.cloud_burrito/audit.log</code>.
       </p>
       <div id="audit-table-wrap"></div>

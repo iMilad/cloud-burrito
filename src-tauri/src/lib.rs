@@ -13,15 +13,18 @@ mod aws;
 mod commands;
 mod dashboard;
 mod paths;
+mod process;
+mod runtime;
 mod settings;
 mod state;
 mod widgets;
 
 use state::AppState;
 
-/// Serializes tests that mutate the process-global HOME env var.
 #[cfg(test)]
-pub(crate) static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+mod test_aws;
+#[cfg(test)]
+mod test_support;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

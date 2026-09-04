@@ -119,8 +119,8 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
     }
 }
 
-/// Stop a timed-out query so it stops scanning (and billing). Denial by
-/// policy just means the query expires server-side instead.
+/// Attempt to stop a timed-out query. Startup requires the local cleanup
+/// capability; recheck here before sending. AWS can still reject the request.
 async fn stop_query_best_effort(
     ctx: &WidgetCtx,
     client: &aws_sdk_cloudwatchlogs::Client,

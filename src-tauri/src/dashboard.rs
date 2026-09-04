@@ -11,13 +11,15 @@ use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
 
-fn layout_path() -> PathBuf {
-    crate::paths::data_file("dashboard.json")
+use crate::paths::AppPaths;
+
+fn layout_path(paths: &AppPaths) -> PathBuf {
+    paths.data_file("dashboard.json")
 }
 
-pub fn load() -> Value {
+pub fn load(paths: &AppPaths) -> Value {
     let default = json!({"version": 1, "tiles": []});
-    let text = match fs::read_to_string(layout_path()) {
+    let text = match fs::read_to_string(layout_path(paths)) {
         Ok(t) => t,
         Err(_) => return default,
     };
@@ -32,7 +34,7 @@ pub fn load() -> Value {
     json!({"version": 1, "tiles": data.get("tiles").cloned().unwrap_or_else(|| json!([]))})
 }
 
-pub fn save(tiles: &Value) -> Value {
+pub fn save(paths: &AppPaths, tiles: &Value) -> Value {
     let mut cleaned: Vec<Value> = Vec::new();
     if let Some(arr) = tiles.as_array() {
         for t in arr {
@@ -58,7 +60,7 @@ pub fn save(tiles: &Value) -> Value {
         }
     }
     let out = json!({"version": 1, "tiles": cleaned});
-    let p = layout_path();
+    let p = layout_path(paths);
     if let Some(parent) = p.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -74,29 +76,27 @@ pub fn save(tiles: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
 
     #[test]
     fn save_filters_to_known_fields() {
-        let _g = crate::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _prev_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!("acc-dash-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&tmp);
-        std::env::set_var("HOME", &tmp);
+        let tmp = TestDir::new();
+        let paths = tmp.paths();
 
-        let out = save(&json!([
-            {"id": "t1", "widget": "pipeline-runs", "x": 0, "y": 0, "w": 4, "h": 3, "config": {"header_color": "blue"}, "junk": 1},
-            {"x": 1, "y": 1},                 // no id -> dropped
-            "not-an-object"                    // dropped
-        ]));
+        let out = save(
+            &paths,
+            &json!([
+                {"id": "t1", "widget": "pipeline-runs", "x": 0, "y": 0, "w": 4, "h": 3, "config": {"header_color": "blue"}, "junk": 1},
+                {"x": 1, "y": 1},                 // no id -> dropped
+                "not-an-object"                    // dropped
+            ]),
+        );
         let tiles = out["tiles"].as_array().unwrap();
         assert_eq!(tiles.len(), 1);
         assert_eq!(tiles[0]["id"], json!("t1"));
         assert_eq!(tiles[0]["widget"], json!("pipeline-runs"));
         assert!(tiles[0].get("junk").is_none());
         assert_eq!(tiles[0]["config"]["header_color"], json!("blue"));
-        match _prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
+        assert_eq!(load(&paths), out);
     }
 }

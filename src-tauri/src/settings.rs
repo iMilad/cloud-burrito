@@ -10,12 +10,12 @@ use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
 
-use crate::paths;
+use crate::paths::AppPaths;
 
 pub const ALLOWED_REGIONS: [&str; 2] = ["eu-west-1", "us-east-1"];
 
-fn settings_path() -> PathBuf {
-    paths::data_file("settings.json")
+fn settings_path(paths: &AppPaths) -> PathBuf {
+    paths.data_file("settings.json")
 }
 
 pub fn defaults() -> Map<String, Value> {
@@ -27,9 +27,9 @@ pub fn defaults() -> Map<String, Value> {
     m
 }
 
-pub fn load() -> Value {
+pub fn load(paths: &AppPaths) -> Value {
     let mut merged = defaults();
-    if let Ok(text) = fs::read_to_string(settings_path()) {
+    if let Ok(text) = fs::read_to_string(settings_path(paths)) {
         if let Ok(Value::Object(data)) = serde_json::from_str::<Value>(&text) {
             for (k, v) in data {
                 if merged.contains_key(&k) {
@@ -41,7 +41,7 @@ pub fn load() -> Value {
     Value::Object(merged)
 }
 
-pub fn save(values: &Value) -> Value {
+pub fn save(paths: &AppPaths, values: &Value) -> Value {
     let mut cleaned = defaults();
     if let Some(obj) = values.as_object() {
         for (k, v) in obj {
@@ -60,7 +60,7 @@ pub fn save(values: &Value) -> Value {
         }
     }
     let out = Value::Object(cleaned);
-    let p = settings_path();
+    let p = settings_path(paths);
     if let Some(parent) = p.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -82,29 +82,26 @@ pub fn get_str(settings: &Value, key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
 
     #[test]
     fn save_drops_unknown_keys_and_blanks() {
-        let _g = crate::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _prev_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!("acc-settings-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&tmp);
-        std::env::set_var("HOME", &tmp);
+        let tmp = TestDir::new();
+        let paths = tmp.paths();
 
-        let saved = save(&json!({
-            "default_region": "us-east-1",
-            "sso_session_name": "   ",          // blank -> default ""
-            "bogus": "nope",                      // unknown -> dropped
-        }));
+        let saved = save(
+            &paths,
+            &json!({
+                "default_region": "us-east-1",
+                "sso_session_name": "   ",          // blank -> default ""
+                "bogus": "nope",                      // unknown -> dropped
+            }),
+        );
         assert_eq!(saved["default_region"], json!("us-east-1"));
         assert_eq!(saved["sso_session_name"], json!(""));
         assert!(saved.get("bogus").is_none());
 
-        let loaded = load();
+        let loaded = load(&paths);
         assert_eq!(loaded["default_region"], json!("us-east-1"));
-        match _prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
     }
 }

@@ -585,7 +585,7 @@
       case "aws-blocked":
         kindLabel = "aws-BLOCKED";
         primary = `${entry.service || "?"}.${entry.operation || "?"}`;
-        detail = "blocked by read-only guard";
+        detail = "blocked by the app's operation rules";
         kindClass += " audit-fail";
         break;
       case "widget":
@@ -949,6 +949,9 @@
     const opt = accSel.options[accSel.selectedIndex];
     if (!opt || !opt.value) return;
     const myId = ++currentSelectionId;
+    lastSetAccountResult = null;
+    lastAuthStatus = { has_context: false, logged_in: false, connection_state: "verifying" };
+    if ($("#identity-panel")?.classList.contains("open")) renderIdentityPanel(lastAuthStatus);
 
     const fromProfile = opts && opts.fromProfile;
     const profileRegion = opt.dataset.region || "";
@@ -1224,6 +1227,7 @@
   // Cached aws_auth_status result so the Identity panel can render without
   // re-issuing an RPC if it was just refreshed.
   let lastAuthStatus = null;
+  let currentAuthStatusId = 0;
 
   async function refreshAuthStatus() {
     if (!isTauri) return;
@@ -1231,15 +1235,20 @@
     if (!pill) return;
     pill.hidden = false;
     const label = pill.querySelector(".core-label");
+    const selectionId = currentSelectionId;
+    const requestId = ++currentAuthStatusId;
     let info;
     try {
       info = await tauriInvoke("aws_auth_status");
     } catch (e) {
+      if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId) return;
       pill.dataset.state = "offline";
       label.textContent = "auth: rpc error";
       pill.title = String(e);
       return;
     }
+    if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId
+        || info.error_type === "Superseded") return;
     // If aws_set_account just failed, prefer that immediate result while there
     // is no active context. It carries the concrete policy/credential reason.
     if (lastSetAccountResult && !lastSetAccountResult.ok && !info.has_context) {
@@ -1251,7 +1260,10 @@
     }
     lastAuthStatus = info;
     const remaining = formatRemaining(info.expires_at);
-    if (info.logged_in || info.has_context) {
+    if (info.connection_state === "verifying") {
+      pill.dataset.state = "checking";
+      label.textContent = "auth: verifying account …";
+    } else if (info.logged_in || info.has_context) {
       pill.dataset.state = info.logged_in ? "online" : "checking";
       const parts = [info.logged_in ? "auth: ok" : "auth: active"];
       if (info.account_id) parts.push(info.account_id);
@@ -1291,9 +1303,9 @@
     $("#scrim").classList.add("open");
     $("#scrim").hidden = false;
     // Refresh from the backend so the panel always reflects current state.
-    refreshAuthStatus().then(() => {
-      if (lastAuthStatus) renderIdentityPanel(lastAuthStatus);
-    });
+    // Only an accepted, current poll may render identity data. A discarded
+    // response must not revive a previously cached account through a callback.
+    return refreshAuthStatus();
   }
   function closeIdentityPanel() {
     const panel = $("#identity-panel");
@@ -1327,13 +1339,13 @@
       ["Region", info.region],
       ["SSO session", info.sso_session],
       ["Caller ARN", info.caller_arn || "(resolved on next refresh)"],
-      ["SSO token expires", info.expires_at || "(unknown)"],
+      ["Verified credentials expire", info.expires_at || "(unknown)"],
       ["Last set-account succeeded at",
         info.set_account_at ? new Date(info.set_account_at * 1000).toLocaleString() : "(never)"],
-      ["Client-side read-only guard",
+      ["Application operation checks",
         info.read_only_guard_active === false
           ? "DISABLED (this should never happen)"
-          : "ACTIVE — every AWS call is allowlist-checked before it is issued"],
+          : "ACTIVE — requested operations must be supported and allowed by policy"],
     ];
     const dl = el("dl", { class: "identity-kv" });
     rows.forEach(([k, v]) => {
@@ -2570,14 +2582,12 @@
   function renderPermissionDenied(host, spec) {
     clear(host);
     const action = (spec && spec.action) || "unknown:Action";
-    const reason = (spec && spec.reason) || "not allowed by your read-only policy";
+    const reason = (spec && spec.reason) || "This request is not allowed by the app or its policy.";
     host.appendChild(
       el("div", { class: "permission-denied" },
         el("div", { class: "permission-denied-icon" }, "🔒"),
-        el("div", { class: "permission-denied-action" }, "Missing permission: " + action),
-        el("div", { class: "permission-denied-reason muted small" }, reason),
-        el("div", { class: "permission-denied-hint muted small" },
-          "Edit policy.yaml in Settings to enable this read action.")
+        el("div", { class: "permission-denied-action" }, "Request blocked: " + action),
+        el("div", { class: "permission-denied-reason muted small" }, reason)
       )
     );
   }
@@ -3924,8 +3934,8 @@
   }
 
   // ===== Widget: AWS CLI Table =====
-  // A read-only `aws` command; the backend derives and gates its
-  // service:Operation, runs the binary (no shell), and maps JSON to a table.
+  // The backend checks the exact mapping, arguments and policy. Desktop CLI
+  // execution is paused until the verified credential handoff is implemented.
   // Commands can be pinned with the account/region they were saved under —
   // the same Live/Pinned tab and pin-card system as Pipeline Runs (and the
   // same pipeline-* CSS classes; cli-* classes are the JS hooks).
@@ -3940,11 +3950,11 @@
     return item._cliPinExpand;
   }
 
-  function deriveCliAction(command) {
+  // Display only. The backend owns the reviewed operation/argument registry.
+  function describeCliCommand(command) {
     const m = command.trim().match(/^aws\s+([a-z0-9-]+)\s+([a-z0-9-]+)/);
     if (!m) return "";
-    const pascal = m[2].split("-").map(s => (s ? s[0].toUpperCase() + s.slice(1) : "")).join("");
-    return `${m[1]}:${pascal}`;
+    return `${m[1]} ${m[2]}`;
   }
 
   function cliPinKey(pin) {
@@ -4029,7 +4039,7 @@
       if (errorEl) errorEl.textContent = "Type a command first.";
       return;
     }
-    if (!deriveCliAction(command)) {
+    if (!describeCliCommand(command)) {
       if (errorEl) errorEl.textContent = "Expected `aws <service> <operation> …`.";
       return;
     }
@@ -4291,9 +4301,9 @@
         if (inputs.command) cmdInput.value = inputs.command;
       }
       const updateChip = () => {
-        const action = deriveCliAction(cmdInput.value);
-        chip.textContent = action
-          ? `runs as ${action} — must be read-only and allowed by policy.yaml`
+        const command = describeCliCommand(cmdInput.value);
+        chip.textContent = command
+          ? `${command} — checked by the app before execution`
           : "";
       };
       updateChip();
@@ -4340,7 +4350,7 @@
     { name: "Resource Reverse Lookup", desc: "Find the stack that owns a resource.",                     gsId: "resource-lookup",         phase: 2 },
     { name: "Errors by Stack",         desc: "CloudWatch errors by stack over the last 24 hours.",       gsId: "errors-by-stack",         phase: 2 },
     { name: "Logs Insights Query",     desc: "Run your own Logs Insights query on any log group.",       gsId: "logs-insights",           phase: 2 },
-    { name: "AWS CLI Table",           desc: "Read-only aws CLI command rendered as a table.",           gsId: "aws-cli",                 phase: 2 },
+    { name: "AWS CLI Table",           desc: "Supported AWS read commands rendered as a table.",       gsId: "aws-cli",                 phase: 2 },
   ];
 
   function setTileIdentity(tile, widgetType, tileId) {

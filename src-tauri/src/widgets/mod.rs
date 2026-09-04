@@ -5,9 +5,10 @@
 //! arbitrary-code execution surface (originally ported from the Python sidecar's
 //! runtime `importlib` widget loader). The one deliberate exception is the
 //! AWS CLI Table widget (`aws_cli.rs`), which spawns the local `aws` binary —
-//! never a shell — after the command passes the read-only gate.
+//! never a shell — after exact operation, argument and policy checks.
 
 mod aws_cli;
+pub(crate) use aws_cli::parse_cli_command;
 mod cfn_stack_detail;
 mod cfn_stacks;
 mod cloudwatch_logs;
@@ -25,10 +26,11 @@ use aws_smithy_types::date_time::Format;
 use aws_smithy_types::DateTime;
 use serde_json::{json, Map, Value};
 
-use crate::audit;
+use crate::runtime::Runtime;
 
 /// The per-fetch execution surface a widget is allowed to use.
 pub struct WidgetCtx {
+    pub runtime: Runtime,
     pub sdk: SdkConfig,
     /// The `~/.aws/config` profile the context resolves credentials from —
     /// what a spawned child process needs as AWS_PROFILE (aws_cli widget).
@@ -85,9 +87,8 @@ impl WidgetCtx {
     }
 
     /// Preflight one user-supplied CLI call: same credential check and
-    /// auditing as `preflight`, but gated by `policy::gate_cli` — the
-    /// structural read-only guard is the floor instead of the compiled
-    /// registry, which cannot list user-supplied commands.
+    /// auditing as `preflight`, plus an explicit CLI mapping in the compiled
+    /// registry. The CLI parser validates the operation's arguments first.
     pub fn preflight_cli(&self, service: &str, operation: &str) -> Option<Value> {
         if let Some(denied) = self.preflight_credentials(service, operation) {
             return Some(denied);
@@ -137,7 +138,7 @@ impl WidgetCtx {
         if let Some(r) = reason {
             entry["reason"] = json!(r);
         }
-        audit::append(entry);
+        self.runtime.audit(entry);
     }
 
     /// Structured widget log entry (kind="widget").
@@ -151,7 +152,7 @@ impl WidgetCtx {
                 obj.insert(k.clone(), v.clone());
             }
         }
-        audit::append(Value::Object(obj));
+        self.runtime.audit(Value::Object(obj));
     }
 }
 
@@ -236,6 +237,45 @@ pub fn is_known(name: &str) -> bool {
     )
 }
 
+/// Check a widget's entry capability before resolving credentials. Individual
+/// API calls still preflight inside each widget. Query start/stop is coupled by
+/// the policy gate, so a disabled cleanup capability cannot trigger SSO/STS.
+pub(crate) fn entry_operations(
+    name: &str,
+    inputs: &Value,
+) -> &'static [(&'static str, &'static str)] {
+    let mode = inputs.get("mode").and_then(Value::as_str).unwrap_or("");
+    match name {
+        "cfn-stacks" => &[("cloudformation", "ListStacks")],
+        "cfn-stack-detail" => &[("cloudformation", "DescribeStackResources")],
+        "cloudwatch-logs" => match mode {
+            "streams" => &[("logs", "DescribeLogStreams")],
+            "events" => &[("logs", "GetLogEvents")],
+            _ => &[("logs", "DescribeLogGroups")],
+        },
+        "log-tail" => match mode {
+            "list" => &[("lambda", "ListFunctions")],
+            "streams" => &[("logs", "DescribeLogStreams")],
+            "events" => &[("logs", "GetLogEvents")],
+            _ => &[("logs", "FilterLogEvents")],
+        },
+        "logs-insights" if mode == "groups" => &[("logs", "DescribeLogGroups")],
+        "logs-insights" => &[("logs", "StartQuery"), ("logs", "GetQueryResults")],
+        "errors-by-stack" => &[
+            ("logs", "DescribeLogGroups"),
+            ("logs", "StartQuery"),
+            ("logs", "GetQueryResults"),
+        ],
+        "resource-lookup" => &[("resourcegroupstaggingapi", "GetResources")],
+        "pipeline-runs" => &[("codepipeline", "ListPipelineExecutions")],
+        "pipeline-execution-detail" => &[("codepipeline", "ListActionExecutions")],
+        "codeartifact-packages" => &[("codeartifact", "ListPackages")],
+        "codeartifact-package-version-history" => &[("codeartifact", "DescribePackageVersion")],
+        "codebuild-log" => &[("codebuild", "BatchGetBuilds")],
+        _ => &[],
+    }
+}
+
 /// Source viewer payload. `yaml` is the declared manifest, `py` is the actual
 /// Rust implementation (so a user can see exactly what a widget does before
 /// trusting it — the same intent as the Python `widget.getSource`).
@@ -244,7 +284,7 @@ pub fn get_source(name: &str) -> Value {
         "aws-cli" => (
             AWS_CLI_YAML,
             include_str!("aws_cli.rs"),
-            "AWS CLI Table — run a read-only aws CLI command and render its JSON as a table.",
+            "AWS CLI Table — run a supported resource-read aws command and render its JSON as a table.",
         ),
         "logs-insights" => (
             LOGS_INSIGHTS_YAML,
@@ -315,11 +355,11 @@ pub fn get_source(name: &str) -> Value {
 
 const AWS_CLI_YAML: &str = r#"name: "AWS CLI Table"
 version: 1
-description: "Run a read-only aws CLI command under the tile's account context and render its JSON output as a table."
+description: "Run a supported resource-read aws CLI command and render its JSON output as a table."
 inputs:
   command: { type: string, required: true }
 refresh: 0
-permissions: ["derived from the command: <service>:<Operation> must pass the read-only guard and policy.yaml"]
+permissions: ["exact CLI operation mapping and reviewed arguments required; policy.yaml can only restrict supported operations"]
 "#;
 
 const LOGS_INSIGHTS_YAML: &str = r#"name: "Logs Insights Query"
@@ -395,7 +435,7 @@ inputs:
   hours: { type: number, default: 24 }
   log_group_pattern: { type: string, default: "/aws/lambda/" }
 refresh: 120s
-permissions: [logs:read]
+permissions: [logs:DescribeLogGroups, logs:StartQuery, logs:GetQueryResults, logs:StopQuery]
 "#;
 
 const RESOURCE_LOOKUP_YAML: &str = r#"name: "Resource Reverse Lookup"
@@ -447,3 +487,38 @@ inputs:
 refresh: 0
 permissions: [codebuild:read, logs:read]
 "#;
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use crate::{aws::policy::Policy, test_aws, test_support::TestDir};
+    use std::sync::{atomic::Ordering, Arc};
+
+    #[tokio::test]
+    async fn query_workflows_require_cleanup_before_any_sdk_work() {
+        for policy_text in [
+            "statements:\n  - effect: Allow\n    action: ['*']\n  - effect: Deny\n    action: ['logs:StopQuery']\n",
+            "statements:\n  - effect: Allow\n    action: ['sso:GetRoleCredentials', 'logs:DescribeLogGroups', 'logs:StartQuery', 'logs:GetQueryResults']\n",
+        ] {
+            for widget in ["logs-insights", "errors-by-stack"] {
+                let dir = TestDir::new();
+                let counters = Arc::new(test_aws::Counters::default());
+                let ctx = WidgetCtx {
+                    runtime: Runtime::for_test(dir.paths()),
+                    sdk: test_aws::sdk_config_with_counters(counters.clone()),
+                    profile: "demo-profile".into(),
+                    account_id: "acct-demo-fixture".into(),
+                    region: "us-east-1".into(),
+                    widget_name: widget.into(),
+                    inputs: json!({"log_group": "/demo/test", "query": "fields @message"}),
+                    policy: Policy::parse(policy_text).map_err(|e| e.message),
+                };
+                let denied = fetch(widget, &ctx).await;
+                assert_eq!(denied["render"], "permission_denied", "{widget}");
+                assert!(denied["reason"].as_str().unwrap().contains("logs:StopQuery"));
+                assert_eq!(counters.credentials.load(Ordering::SeqCst), 0);
+                assert_eq!(counters.transport.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+}
