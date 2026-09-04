@@ -1,6 +1,6 @@
 # P5 — Give Cloud Burrito a distinctive creative interface
 
-**Complete locally.** Approved and implemented on 2026-09-04; see [P5 exit evidence](p5-exit-evidence.md) for local commits, checks and the preserved source. This phase introduces the Studio design while keeping the existing Classic experience available. The original device-validation phase moves to [P6](phase-6.md), and the portfolio phase moves to [P7](phase-7.md). Existing P1–P4 commits, results and artifact identities remain historical evidence.
+**Complete locally.** Approved and implemented on 2026-09-04; see [P5 exit evidence](p5-exit-evidence.md) for local commits, checks and the preserved source. This phase introduces the Studio design, four selectable Studio appearances with Paper as the default, and the existing Classic experience as a fallback. The original device-validation phase moves to [P6](phase-6.md), and the portfolio phase moves to [P7](phase-7.md). Existing P1–P4 commits, results and artifact identities remain historical evidence.
 
 ## Design direction
 
@@ -16,12 +16,14 @@ Studio is a frontend presentation of the existing product. Keep Rust + Tauri, th
 | P5-02 — Introduce the visual system | Implement Studio with an intentional layout, typography, color, spacing, surfaces and distinct interaction states | The primary screen and critical overlays share one coherent system; existing dark/light modes, readable hierarchy and honest error states remain usable |
 | P5-03 — Make interaction meaningful | Connect visual entry points to real workspace, widget, context and investigation actions; add measured transitions and useful feedback | Actions affect the actual workspace, preserve existing ownership contracts and explain empty/pending/failed outcomes; no dead decorative controls or invented cloud results |
 | P5-04 — Validate and hand off | Review the actual rendered UI, exercise both designs with a synthetic bridge and run applicable regression gates | Record viewport, keyboard, reduced-motion, theme and layout checks; preserve functionality and note untested native behavior; identify the final source for fresh P4 packages |
+| P5-05 — Promote the appearance set | Integrate Studio Original, Precision, Paper and Night Shift into the real Studio workspace; use Paper by default and for packaged OS icons | The four styles are allowlisted, selectable and durable without changing theme, Classic, workspace state or AWS context; Paper assets cover existing native icon targets |
+| P5-06 — Record the final handoff | Review the actual Paper UI and chooser, run the complete synthetic frontend gate and check the final committed source for macOS build inputs | Evidence names the exact source, test limits, clean preflights and remaining Windows/Ubuntu/native-device work |
 
 Commit local work by the P5 unit IDs. More than one focused commit is acceptable where a unit needs a follow-up; no previous phase history needs rewriting.
 
 ## Preservation and switching
 
-The safety reference preserves the entire pre-design source. The Classic choice provides an everyday visual fallback inside the current application, while Studio carries the new presentation. Switching designs must not clear saved layouts, disconnect a context, repin a widget or replace durable settings. A later full source rollback is a separate deliberate Git action, not a destructive command embedded in this plan.
+The safety reference preserves the entire pre-design source. The Classic choice provides an everyday visual fallback inside the current application, while Studio carries the new presentation. Inside Studio, appearance, light/dark theme and compact density remain independent choices. Switching any of them must not clear saved layouts, disconnect a context, repin a widget or replace durable settings. A later full source rollback is a separate deliberate Git action, not a destructive command embedded in this plan.
 
 Keep the default, persistence mechanism and observed reload behavior in the final P5 evidence. Reusing a browser preference for presentation does not make it an AWS configuration setting. A failed preference write must leave the current UI usable.
 
@@ -37,6 +39,6 @@ Keep the default, persistence mechanism and observed reload behavior in the fina
 
 P5 closes locally when the preserved baseline, complete Studio interface, working Classic fallback and recorded local checks exist. Any inaccessible critical workflow, lost state, context confusion or false success keeps its affected unit open.
 
-Select the final reviewed P5 source, then use the P4 build and inspection workflow to produce a fresh matching candidate set. The macOS artifacts recorded in [P4 evidence](p4-exit-evidence.md) precede this redesign; their checks cannot validate new frontend bytes. Native Windows/Ubuntu build gates remain open. Only then continue to the [P6 handoff](../packaging/p6-handoff.md) and real-device acceptance.
+The final reviewed application source is `5d39eed`. Its two macOS input preflights pass, but no new package was built. Use the P4 build and inspection workflow to produce a fresh matching candidate set. The macOS artifacts recorded in [P4 evidence](p4-exit-evidence.md) precede this redesign; their checks cannot validate new frontend bytes. Native Windows/Ubuntu build gates remain open. Only then continue to the [P6 handoff](../packaging/p6-handoff.md) and real-device acceptance.
 
 This local design task includes no AWS connection, real AWS CLI invocation, credential inspection, native installation/app launch, remote Git/GitHub action, push, tag, release or publication.

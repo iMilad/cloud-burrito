@@ -2,7 +2,9 @@
 
 The source has packaging paths for all three desktop operating systems. A full
 candidate contains four targets and seven files. Build each target from the same
-clean committed source after the final design is selected.
+clean committed source. The selected application source is `5d39eed`: all four
+Studio appearances are integrated, Paper is the default, and its mark is the
+canonical packaged operating-system icon.
 
 | Build environment | Target | Files for later device testing |
 | --- | --- | --- |
@@ -85,22 +87,30 @@ ready for the owner's [device tests](p6-handoff.md).
 ## Current evidence
 
 As of 2026-09-04, earlier macOS ARM64 and Intel builds were inspected in P4;
-those files predate Studio and the new logo. The current Mac has both Rust
-targets and the pinned Rust/Tauri versions. Windows and Ubuntu packaging policy
-checks pass locally, but their native build machines and reviewed helper
-inventories have not been supplied in this task. No device acceptance has been
-claimed. Rebuild the final selected design before testing it.
+those files predate Studio, the appearance selector and the Paper icon. They are
+historical evidence, not candidates for the current source. The current Mac has
+both Rust targets and the pinned Rust/Tauri versions. Windows and Ubuntu
+packaging policy checks pass locally, but their native build machines and
+reviewed helper inventories have not been supplied in this task. No device
+acceptance has been claimed.
 
-On committed source `205303c`, both `macos-aarch64 --check` and
+Earlier, on committed source `205303c`, both `macos-aarch64 --check` and
 `macos-x86_64 --check` passed on this Mac. Each reported `built: false` and
 `device_validated: false`; version, offline input/tool checks, the 17-command
 registry and the scoped 295-file privacy scan passed. The helper regression
-suite passed 116 tests, including the new preflight cases. This records build
-input readiness for the applied Studio/logo source; the alternative design
-studies are separate documents. Selecting and integrating a variation requires
-a new committed-source check and build. Windows and Ubuntu native preflights
-remain pending on their declared hosts; this documentation update adds no
-application changes to that checked source.
+suite passed 116 tests, including the new preflight cases. This remains the
+historical build-input record for that earlier Studio/logo source.
+
+On the current committed application source `5d39eed`, both
+`macos-aarch64 --check` and `macos-x86_64 --check` passed on this Mac. The
+committed source contains the integrated Studio Original, Precision, Paper and
+Night Shift appearances plus the Paper default/canonical package icon. The
+preflights validated their build inputs and included a scoped 301-file privacy scan.
+Both results reported `built: false`, `device_validated: false` and
+`publication: false`: no current binaries were produced, installed, launched or
+published. Windows and Ubuntu native preflights remain pending on their declared
+hosts and still require reviewed helper inventories. No AWS connection or push
+was part of this evidence.
 
 The existing GitHub Release workflow remains macOS-only. The four-target
 [CI example](ci-orchestration.md) is inactive; these local instructions do not

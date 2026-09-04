@@ -1,14 +1,16 @@
 # P6 candidate handoff
 
-Renumbered from P5 on 2026-09-04. The [new P5](../roadmap/phase-5.md) changes the interface before device validation. Rebuild all target artifacts from its final reviewed source before accepting the redesigned candidate; the P4 results below describe the preserved pre-design source.
+Renumbered from P5 on 2026-09-04. The [new P5](../roadmap/phase-5.md) changed the interface before device validation. On committed application source `5d39eed`, Studio Original, Precision, Paper and Night Shift are all integrated Studio appearances; Paper is the default and its mark is the canonical packaged operating-system icon. Rebuild all target artifacts from this reviewed source before accepting the redesigned candidate; the P4 results below describe the preserved pre-design source.
 
-**Handoff prepared; the complete candidate remains pending. No device test has passed.** Both macOS architecture pairs have passed build-time inspection; native Windows and Ubuntu build hosts are unavailable in this task. The owner has three laptops, but their exact OS versions and CPU architectures have not been recorded. A macOS ARM64 build does not validate Intel hardware.
+**Handoff prepared; the complete candidate remains pending. No device test has passed.** Both macOS targets passed `--check` on source `5d39eed`, including the scoped 301-file privacy scan, while reporting `built: false`, `device_validated: false` and `publication: false`. The inspected P4 macOS artifacts predate this source and cannot serve as its candidate. Native Windows and Ubuntu build hosts and their reviewed helper inventories are unavailable in this task. The owner has three laptops, but their exact OS versions and CPU architectures have not been recorded. A macOS ARM64 build does not validate Intel hardware.
 
-Local build-readiness preparation is now requested. Start with the
+Local build-readiness preparation is complete for both macOS targets and remains
+pending on native Windows and Ubuntu hosts. Start with the
 [build-machine checks and commands](README.md); compilation and packaging are
 separate from running the installed application. The device examples below are
-for the later P6 session. No native app launch, runtime acquisition, AWS access,
-release or publication has occurred in this preparation. Use
+for the later P6 session. No current binary, native app launch, device
+acceptance, runtime acquisition, AWS access, push, release or publication has
+occurred in this preparation. Use
 [the P6 plan](../roadmap/phase-6.md) for the single acceptance checklist.
 
 ## Identify the candidate before testing
@@ -17,12 +19,19 @@ The [p4-v1 matrix](../../packaging/targets.json) requires four targets and seven
 
 | Target | Required files | Evidence at preparation |
 | --- | --- | --- |
-| macOS ARM64 | `cloud-burrito_{version}_aarch64_unsigned.dmg`, `cloud-burrito_{version}_aarch64_unsigned.app.zip` | Built and inspected; device execution pending |
-| macOS Intel | `cloud-burrito_{version}_x86_64_unsigned.dmg`, `cloud-burrito_{version}_x86_64_unsigned.app.zip` | Built and inspected; device execution pending |
-| Windows x64 | `cloud-burrito_{version}_windows_x86_64_unsigned_setup.exe` | Native build unavailable |
-| Ubuntu x64 | `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.deb`, `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.AppImage` | Native build unavailable |
+| macOS ARM64 | `cloud-burrito_{version}_aarch64_unsigned.dmg`, `cloud-burrito_{version}_aarch64_unsigned.app.zip` | Current-source preflight passed; rebuild and device execution pending |
+| macOS Intel | `cloud-burrito_{version}_x86_64_unsigned.dmg`, `cloud-burrito_{version}_x86_64_unsigned.app.zip` | Current-source preflight passed; rebuild and device execution pending |
+| Windows x64 | `cloud-burrito_{version}_windows_x86_64_unsigned_setup.exe` | Native host, reviewed helper inventory and build unavailable |
+| Ubuntu x64 | `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.deb`, `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.AppImage` | Native host, reviewed helper inventory and build unavailable |
 
-See [actual build evidence](../roadmap/p4-exit-evidence.md) for the selected source and local macOS artifacts. Before complete handoff, attach `candidate-manifest.json`, `SHA256SUMS`, and all four `build-manifest-<target-id>.json` files from the [candidate assembler](provenance.md). Record the exact source commit, version and artifact hash in every device result. All seven files must share the same accepted source/version. A partial target set is not a complete candidate.
+See [historical P4 build evidence](../roadmap/p4-exit-evidence.md) for the
+preserved pre-design source and its local macOS artifacts. The current-source
+preflight record is in the [packaging overview](README.md). Before complete
+handoff, attach `candidate-manifest.json`, `SHA256SUMS`, and all four
+`build-manifest-<target-id>.json` files from the
+[candidate assembler](provenance.md). Record the exact source commit, version
+and artifact hash in every device result. All seven files must share the same
+accepted source/version. A partial target set is not a complete candidate.
 
 The candidate floors are macOS 13.0, Windows 11 24H2 x64 and Ubuntu 22.04 x64. They are proposed acceptance boundaries, not existing support claims. Record actual CPU architecture, OS release, desktop/WebView runtime and installation method before selecting a file. Stop if a laptop does not match a declared target.
 

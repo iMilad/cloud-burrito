@@ -323,6 +323,12 @@ tags; a maintainer reviews and publishes each draft. See
 
 ## Configuration
 
+Studio opens with the **Paper** workspace style on a fresh installation. Open
+**Appearance** in the Studio rail (or its compact top-bar control) to switch
+between Studio Original, Precision, Paper and Night Shift. The choice is stored
+locally on that device and stays independent from the light/dark color theme,
+Classic view, saved layout and AWS context.
+
 Search for your default account and region in the top bar. The selected profile
 in the configured AWS file determines the SSO session. Individual widgets can
 inherit the verified connection or pin their own profile/account/region; pinned

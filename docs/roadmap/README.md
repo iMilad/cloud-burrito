@@ -31,7 +31,7 @@ Use **P0–P7** for work items and acceptance evidence. On 2026-09-04 the owner 
 | [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | Complete locally / native acceptance pending |
 | [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Synthetic timings and resource limits recorded; native startup/memory and public performance claims remain pending | P3-01–08 complete locally / native evidence pending |
 | [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P6 | P4-01–09 complete locally / native artifact evidence pending |
-| [P5 — Make the interface distinctive](phase-5.md) | A polished, interactive Studio experience with the existing Classic design available | Baseline preserved, meaningful interactions validated, keyboard/reduced-motion checks recorded; final design source identified for new packages | P5-01–04 complete locally / native evidence pending |
+| [P5 — Make the interface distinctive](phase-5.md) | A polished, interactive Studio experience with four selectable styles and the existing Classic design available | Paper default and platform icons applied; state, keyboard, themes, responsive layout and build inputs checked; native packages and device evidence remain pending | P5-01–06 complete locally / native evidence pending |
 | [P6 — Validate on real machines](phase-6.md) | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Planned / not started |
 | [P7 — Build the portfolio launch package](phase-7.md) | English documentation, demo, decisions and release evidence | Privacy/history and dependency review complete; independent feedback recorded; explicit publication decision | Outline only / not started |
 
@@ -62,8 +62,8 @@ Deferred: Go/Wails rewrite, plugin SDK, full AI assistant, infrastructure mutati
 
 ## Start here
 
-1. Review the completed [P5 Studio design](p5-exit-evidence.md). The owner can switch to Classic without reverting functional work; both choices preserve the workspace.
-2. At the P5 handoff, select its final reviewed source and regenerate the P4 candidates. Close the missing native Windows/Ubuntu build gates before accepting the complete artifact set; then begin [P6-01](phase-6.md) with one identified laptop.
+1. Review the completed [P5 Studio appearance set](p5-exit-evidence.md). Paper is the default; the owner can select the three related styles or switch to Classic without losing the workspace.
+2. Regenerate P4 candidates from application source `5d39eed`. Close the missing native Windows/Ubuntu build gates before accepting the complete artifact set; then begin [P6-01](phase-6.md) with one identified laptop.
 3. Keep evidence against the [journey contracts](phase-0.md) and [operation inventory](aws-operation-inventory.md).
 4. Resume [device checks](device-checks.md) when the laptops are available; final support and native acceptance remain conditional until then.
 

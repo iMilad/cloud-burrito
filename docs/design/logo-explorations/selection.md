@@ -1,8 +1,8 @@
-# Selected identity: the folded cloud
+# Selected identity: the folded-cloud family
 
 Selected and applied on 2026-09-04. Public product name: **Cloud Burrito**.
 
-The user chose concept 01 and authorized application after a preliminary similarity check. The production mark combines a rounded cloud, a diagonal opening and an orange folded corner. It uses the Studio palette: charcoal `#141612`, ivory `#e9eddf`, and orange `#ff8657`. The existing text wordmark remains live text.
+The user chose concept 01 and authorized application after a preliminary similarity check. Its production family combines a rounded cloud, a diagonal opening and a folded corner. Four related Studio appearances now express that family: Studio Original, Precision, Paper and Night Shift. **Paper** is the fresh-install default and canonical packaged icon, using dark olive `#30392c`, warm ivory `#f3eee4` and terracotta `#c87852`. The existing text wordmark remains live text.
 
 ## Preliminary similarity review
 
@@ -24,19 +24,20 @@ Exact-name searches also surfaced unrelated food and music uses of “Cloud Burr
 
 | Asset | Purpose |
 | --- | --- |
-| [`cloud-burrito-icon.svg`](../../../frontend/assets/cloud-burrito-icon.svg) | Canonical square icon source: ivory cloud and orange fold on a charcoal rounded tile. Used by Studio, favicon, and README. |
+| [`cloud-burrito-icon.svg`](../../../frontend/assets/cloud-burrito-icon.svg) | Canonical Paper square icon source: warm ivory cloud and terracotta fold on a dark olive rounded tile. Used for the README and packaged operating-system icons. |
 | [`cloud-burrito-icon.png`](../../../frontend/assets/cloud-burrito-icon.png) | 1024px transparent-edge raster companion. |
-| [`cloud-burrito-mark.svg`](../../../frontend/assets/cloud-burrito-mark.svg) | Standalone charcoal/orange symbol for light backgrounds. |
+| [`cloud-burrito-mark.svg`](../../../frontend/assets/cloud-burrito-mark.svg) | Standalone dark-olive and terracotta Paper symbol for light backgrounds. |
+| [`cloud-burrito-style-current.svg`](../../../frontend/assets/cloud-burrito-style-current.svg), [`cloud-burrito-style-precision.svg`](../../../frontend/assets/cloud-burrito-style-precision.svg), [`cloud-burrito-style-paper.svg`](../../../frontend/assets/cloud-burrito-style-paper.svg), [`cloud-burrito-style-night.svg`](../../../frontend/assets/cloud-burrito-style-night.svg) | Runtime marks for the four selectable Studio appearances. They change in-app marks and the favicon, not the packaged launcher icon. |
 | [`cloud-burrito-classic-icon.svg`](../../../frontend/assets/cloud-burrito-classic-icon.svg) | Preserved original mark for Classic view. |
 | [`src-tauri/icons`](../../../src-tauri/icons) | Existing PNG, ICO, and ICNS exports regenerated from the canonical square source. Existing Android/iOS exports are retained as assets; no mobile target is enabled. |
 
-Keep the icon square and preserve the gap between the cloud and folded corner. Do not add a second colored background or padding around the SVG in the navigation rail. Use the charcoal tile on dark surfaces; the standalone charcoal symbol is intended for light surfaces.
+Keep the icon square and preserve the gap between the cloud and folded corner. Do not add a second colored background or padding around the SVG in the navigation rail. The runtime marks may follow their selected appearance, while Windows, Linux and macOS launcher or installer assets remain Paper.
 
 Generate native exports with the repository's installed Tauri CLI (2.11.4 at application time):
 
 ```sh
 cargo tauri icon frontend/assets/cloud-burrito-icon.svg \
-  --output /tmp/cloud-burrito-cloud-fold-icons
+  --output /tmp/cloud-burrito-paper-icons
 ```
 
 Copy only existing tracked paths so the generator cannot silently add platform assets or configuration:
@@ -46,7 +47,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-generated = Path("/tmp/cloud-burrito-cloud-fold-icons")
+generated = Path("/tmp/cloud-burrito-paper-icons")
 for name in subprocess.check_output(
     ["git", "ls-files", "src-tauri/icons"], text=True
 ).splitlines():
@@ -58,8 +59,8 @@ The frontend raster companion can be reproduced separately:
 
 ```sh
 cargo tauri icon frontend/assets/cloud-burrito-icon.svg \
-  --output /tmp/cloud-burrito-cloud-fold-raster --png 1024
-cp /tmp/cloud-burrito-cloud-fold-raster/1024x1024.png \
+  --output /tmp/cloud-burrito-paper-raster --png 1024
+cp /tmp/cloud-burrito-paper-raster/1024x1024.png \
   frontend/assets/cloud-burrito-icon.png
 ```
 
@@ -67,6 +68,6 @@ cp /tmp/cloud-burrito-cloud-fold-raster/1024x1024.png \
 
 - All 48 existing native PNGs preserve their previous dimensions, bit depth, color mode, and alpha mode. Both Android XML files remain byte-identical.
 - ICO decoding confirms 16, 24, 32, 48, 64, and 256px frames. ICNS decoding with `iconutil` confirms ten standard slots covering 16–1024px; `sips` confirms alpha.
-- Browser review confirmed the updated Studio rail, compact header, light/dark themes, and the preserved Classic header. The generated 16px and 32px icons were also visually checked. The existing browser-mode and Studio tests passed: **15 tests**, using synthetic browser data.
-- No native app was built, launched, or installed for this asset change. Real OS launcher/Dock appearance remains a device acceptance check.
-- The original concept artwork and prompts remain in this directory. The full previous frontend/native icon set is recoverable from commit `cf4d11b`. Reverting the logo application commit restores the prior integration as well; Classic view already retains its old header icon.
+- Browser review covered all four styles in light and dark mode, compact layout, the Appearance chooser and the preserved Classic header. The focused Appearance/accessibility gate exited normally with **13 passed**. The complete synthetic frontend run reported all **139 cases passed with zero failures**; its documented teardown hang required stopping the finished runner.
+- No native app was built, launched, or installed for this asset change. Both macOS input preflights pass on application source `5d39eed`, while Windows and Ubuntu still require their native build hosts. Real launcher, installer, Start menu, taskbar and Dock appearance remain device acceptance checks.
+- The original concept artwork and prompts remain in this directory. The concept board is retained in `cf4d11b`, the first applied folded-cloud identity in `f006269`, and the source immediately before the four-style application in `774939a`. Classic view retains its old header icon.

@@ -38,7 +38,7 @@ Use one work ID per reviewable change where practical. A work ID may need multip
 | 10 | P3-02/03/04: scheduler, progressive results and query cleanup | Work stays within budgets; cancellation and remote cleanup are distinguished |
 | 11 | P3-05/06/07/08: bounded caches, CLI aggregate memory, audit and rendering | No identity leak, unbounded retained work or misleading performance claim |
 | 12 | P4 work packages in their documented order | Same-candidate unsigned artifacts, checksums and reviewed setup instructions |
-| 13 | P5-01/02/03/04: baseline, visual system, interactions and validation | Classic remains available; Studio adds working, accessible interactions with synthetic local evidence |
+| 13 | P5-01 through P5-06: baseline, visual system, interactions, four appearances and validation | Paper is the Studio default; three related styles and Classic remain available with synthetic local evidence |
 | 14 | Refresh P4 artifacts from the final P5 source, then P6-01 through P6-05 | Complete matching candidate and observed device/lifecycle/journey evidence |
 | 15 | P7-01 through P7-04: narrative, demonstration, readiness and decision | Reviewable English portfolio package with explicit publication decision |
 
@@ -46,7 +46,7 @@ A dependent unit may consume a reviewed interface fixture before a whole phase f
 
 ## Current implementation progress
 
-**P1–P3 are complete locally. [P4 final evidence](p4-exit-evidence.md) records the native-build gate. [P5](phase-5.md) is implementing the creative interface; [P6](phase-6.md) device validation and [P7](phase-7.md) portfolio work remain planned.**
+**P1–P3 are complete locally. [P4 final evidence](p4-exit-evidence.md) records the native-build gate. [P5](phase-5.md) is complete through P5-06 with Paper as the default of four Studio appearances; [P6](phase-6.md) device validation and [P7](phase-7.md) portfolio work remain planned.**
 
 [P3 exit evidence](p3-exit-evidence.md) records the completed phase and P4 handoff. Historical [P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline, 249 Rust and 17 Node regressions, and 270 successful measured browser trials. No native or live AWS performance is claimed.
 
@@ -106,7 +106,7 @@ Device checks will resume sequentially with one action, expected result and reco
 | Unsigned, identity-free distribution | Repository requirement | No publisher certificates, Apple Developer IDs, notarization or personal publisher metadata |
 | Exact approved CLI operations and validated arguments | P1-02 and P1-04 validated locally | The same 18 resource-read schemas remain; desktop CLI is re-enabled with frozen verified credentials and isolated child execution |
 | Explicit legacy and named-session SSO support | Implemented and locally validated in P1-03 | Frozen STS-verified credentials serve resource calls; unsupported credential/endpoint indirection fails before provider work; live renewal and provider behavior remain unverified |
-| Preserve the existing frontend as Classic; add Studio in P5 | Approved on 2026-09-04 | Keep a recoverable baseline and a design switch; retain the existing workflow, trust boundaries and honest beta controls |
+| Preserve Classic; add Studio with four appearances in P5 | Complete locally on 2026-09-04 | Paper is the default and packaged icon; Studio Original, Precision and Night Shift remain selectable without changing workflow, trust boundaries or state |
 | Numeric performance/resource budgets | P3 local limits implemented; synthetic timings recorded | See [P3 exit evidence](p3-exit-evidence.md); native performance and memory gates remain pending |
 | Windows NSIS; Ubuntu deb plus secondary AppImage; existing macOS DMG/ZIP | Proposed P4 packaging | OS versions/architectures remain provisional until device inventory and build evidence |
 
