@@ -20,6 +20,10 @@ async function boot(page, response = table, options = {}) {
     const identity = { profile: "demo-a", account_id: "acct-a-fixture", region: "eu-west-1" };
     const command = "aws sts get-caller-identity";
     let active = false;
+    const settingsDefaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1", theme: "dark" };
+    let settings = { ...settingsDefaults, default_profile: identity.profile, default_region: identity.region };
+    const settingsMetadata = () => ({ defaults: { ...settingsDefaults }, allowed_regions: ["eu-west-1", "us-east-1"], field_errors: {} });
+    const settingsResponse = status => ({ ...settings, _settings: settingsMetadata(), _storage: { store: "settings", status } });
     const fixture = window.__securityFixture = {
       response, audit: { entries: [] }, auditWriteFailed: !!options.auditWriteFailed,
       policy: "Version: '2012-10-17'\nStatement: []", rejectWidget: false, rejectedSetters: [], selectionCalls: 0,
@@ -34,14 +38,18 @@ async function boot(page, response = table, options = {}) {
       let value;
       switch (name) {
         case "ping": value = { version: "synthetic" }; break;
-        case "settings_get": value = { default_profile: identity.profile, default_region: identity.region }; break;
+        case "settings_get": value = settingsResponse("loaded"); break;
         case "dashboard_get": value = { tiles: [{ id: "aws-cli", widget: "aws-cli", x: 0, y: 0, w: 12, h: 9,
           config: { context: { mode: "pinned", ...identity }, inputs: options.pin
             ? { pinned_cli_commands: [{ ...identity, command }] } : { command } },
         }] }; break;
         case "dashboard_set": value = { ok: true }; break;
         case "settings_set":
-          value = fixture.holdSettings ? await new Promise(resolve => { fixture.finishSettings = resolve; }) : { ok: true };
+          if (fixture.holdSettings) await new Promise(resolve => { fixture.finishSettings = () => resolve(); });
+          if (!fixture.rejectedSetters.includes(name)) {
+            settings = Object.fromEntries(Object.entries(settingsDefaults).map(([field, fallback]) => [field, params[field]?.trim() || fallback]));
+          }
+          value = settingsResponse("saved");
           break;
         case "aws_list_profiles": value = { profiles: [{ name: identity.profile, account_id: identity.account_id,
           region: identity.region, role_name: "SyntheticReadOnly", sso_session: "synthetic-session" }] }; break;
@@ -58,7 +66,8 @@ async function boot(page, response = table, options = {}) {
         default: throw new Error("Unexpected synthetic invoke");
       }
       if (fixture.rejectedSetters.includes(name)) {
-        value = { ok: false, error_type: "InvalidRequest", error: "CB_SYNTHETIC_DIAGNOSTIC_SECRET" };
+        value = { ok: false, error_type: "InvalidRequest", error: "CB_SYNTHETIC_DIAGNOSTIC_SECRET",
+          ...(name === "settings_set" ? { _settings: settingsMetadata(), _storage: { store: "settings", status: "failed" } } : {}) };
       }
       if (["widget_fetch", "aws_list_pipelines", "aws_set_account", "aws_auth_status"].includes(name)) {
         const verified = name !== "aws_auth_status" || active;
@@ -274,7 +283,7 @@ test("a late accepted settings callback does not replace a newer selection", asy
   await page.evaluate(() => document.querySelector("#account-select").dispatchEvent(new Event("change")));
   await expect.poll(() => page.evaluate(() => window.__securityFixture.selectionCalls)).toBe(before + 1);
   await expect(page.locator("#auth-status")).toHaveAttribute("data-state", "online");
-  await page.evaluate(() => window.__securityFixture.finishSettings({ default_profile: "demo-a", default_region: "eu-west-1" }));
+  await page.evaluate(() => window.__securityFixture.finishSettings());
   await expect(page.locator("#settings-save")).toBeEnabled();
   await expect(page.locator("#settings-status")).toHaveText("Saved.");
   expect(await page.evaluate(() => window.__securityFixture.selectionCalls)).toBe(before + 1);

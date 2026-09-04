@@ -107,6 +107,7 @@
         : errorType === "StorageSuperseded" ? "Save was superseded by a newer change. Review and retry if needed."
         : "Changes were rejected. Review the input and try again.");
       error.error_type = errorType;
+      if (command === "settings_set") error.settings = result._settings;
       throw error;
     }
     return result;
@@ -406,7 +407,7 @@
       profile: topbarState.profile, account_id: topbarState.accountId, region: topbarState.region,
     };
     const request = {
-      id, context, allowed: independent || lastSetAccountResult?.ok === true,
+      id, context, allowed: (!isTauri || settingsStorageReady) && (independent || lastSetAccountResult?.ok === true),
       current() {
         return owner.isConnected && owner._ownedRequest === request
           && configuration === configurationGeneration
@@ -506,6 +507,74 @@
   let settingsDraftRevision = 0;
   let settingsDraftDirty = false;
   let settingsReadFailed = false;
+  let settingsDefaults = null;
+  let desktopPickersStarted = false;
+  let bootComplete = false;
+  // Browser-only demonstration regions. Desktop choices come from Rust.
+  let allowedRegions = isTauri ? [] : ["eu-west-1", "us-east-1"];
+  const SETTINGS_FIELDS = {
+    aws_config_path: "settings-aws-config-path", sso_session_name: "settings-sso-session",
+    default_profile: "settings-default-profile", default_region: "settings-default-region", theme: "settings-theme",
+  };
+
+  function showSettingsFieldErrors(errors = {}) {
+    for (const [key, id] of Object.entries(SETTINGS_FIELDS)) {
+      const message = typeof errors[key] === "string" ? errors[key].slice(0, 400) : "";
+      $("#" + id).setAttribute("aria-invalid", String(!!message));
+      $("#" + id + "-error").textContent = message;
+      $("#" + id + "-error").hidden = !message;
+    }
+  }
+
+  function consumeSettingsMetadata(metadata) {
+    if (!metadata || !metadata.defaults || typeof metadata.defaults !== "object"
+        || Object.keys(SETTINGS_FIELDS).some(key => typeof metadata.defaults[key] !== "string")
+        || !["dark", "light"].includes(metadata.defaults.theme)
+        || !Array.isArray(metadata.allowed_regions) || !metadata.allowed_regions.length
+        || metadata.allowed_regions.length > 128
+        || metadata.allowed_regions.some(region => typeof region !== "string" || !/^[a-z0-9-]{1,64}$/.test(region))
+        || !metadata.field_errors || typeof metadata.field_errors !== "object" || Array.isArray(metadata.field_errors)) {
+      throw new Error("Settings metadata unavailable");
+    }
+    settingsDefaults = { ...metadata.defaults };
+    allowedRegions = [...new Set(metadata.allowed_regions)];
+    for (const key of ["aws_config_path", "sso_session_name", "default_profile"]) {
+      $("#" + SETTINGS_FIELDS[key]).placeholder = settingsDefaults[key] || "(none)";
+    }
+    populateSettingsRegionSelect($("#settings-default-region").value);
+    showSettingsFieldErrors(metadata.field_errors);
+  }
+
+  function populateSettingsRegionSelect(value) {
+    const select = $("#settings-default-region");
+    resetSelect(select);
+    addOption(select, "", `Default (${settingsDefaults.default_region})`);
+    allowedRegions.forEach(region => addOption(select, region, region));
+    if (value && !allowedRegions.includes(value)) addOption(select, value, `${value} — unsupported`);
+    select.value = value || "";
+  }
+
+  function updateThemePreview() {
+    const theme = $("#settings-theme").value;
+    if (!["dark", "light"].includes(theme)) return;
+    document.documentElement.dataset.theme = theme;
+    $("#appearance-unsaved").hidden = !isTauri || !cachedSettings || theme === cachedSettings.theme;
+    $("#theme-toggle").setAttribute("aria-label", `Preview ${theme === "dark" ? "light" : "dark"} theme`);
+  }
+
+  function markSettingsDirty() {
+    settingsDraftRevision++;
+    settingsDraftDirty = true;
+    if (!settingsSavePending && !settingsReadFailed) $("#settings-status").textContent = "Current edits are not saved.";
+    updateThemePreview();
+  }
+
+  function startDesktopPickers() {
+    if (!isTauri || !bootComplete || !settingsStorageReady || desktopPickersStarted) return;
+    desktopPickersStarted = true;
+    initTopbarPickers();
+    startAuthStatusPolling();
+  }
 
   function showStorageLoadWarning(store, retry, recover) {
     const id = `${store}-storage-warning`;
@@ -524,8 +593,14 @@
     fillIfNonDefault("settings-aws-config-path", s.aws_config_path, "aws_config_path");
     fillIfNonDefault("settings-sso-session", s.sso_session_name, "sso_session_name");
     fillIfNonDefault("settings-default-profile", s.default_profile, "default_profile");
-    fillIfNonDefault("settings-default-region", s.default_region, "default_region");
+    populateSettingsRegionSelect(s.default_region === settingsDefaults.default_region ? "" : s.default_region);
+    $("#settings-theme").querySelectorAll("option[data-unsupported]").forEach(option => option.remove());
+    if (!["dark", "light"].includes(s.theme)) {
+      addOption($("#settings-theme"), s.theme, `${s.theme} — unsupported`, { unsupported: "true" });
+    }
+    $("#settings-theme").value = s.theme;
     settingsDraftDirty = false;
+    updateThemePreview();
   }
 
   async function retrySettingsLoad() {
@@ -542,20 +617,26 @@
     try {
       const loaded = await tauriInvoke("settings_get");
       if (request !== settingsLoadId) return null;
+      consumeSettingsMetadata(loaded?._settings);
       if (!loaded || typeof loaded !== "object" || Array.isArray(loaded)
-          || loaded.ok === false || loaded._storage?.status === "failed") throw new Error("Settings unavailable");
+          || loaded.ok === false || loaded._storage?.status === "failed"
+          || Object.keys(SETTINGS_FIELDS).some(key => typeof loaded[key] !== "string")) throw new Error("Settings unavailable");
       cachedSettings = loaded;
       settingsStorageReady = true;
       $("#settings-storage-warning")?.remove();
       $("#settings-save").disabled = settingsSavePending;
+      $("#theme-toggle").disabled = false;
       if (settingsReadFailed) $("#settings-status").textContent = settingsDraftDirty ? "Current edits are not saved." : "";
       settingsReadFailed = false;
+      if (!settingsDraftDirty) fillSettingsForm(loaded);
+      startDesktopPickers();
       return cachedSettings;
     } catch (e) {
       if (request !== settingsLoadId) return null;
       settingsStorageReady = false;
       settingsReadFailed = true;
       $("#settings-save").disabled = true;
+      $("#theme-toggle").disabled = true;
       $("#settings-status").textContent = "Settings could not be loaded. Retry loading or explicitly replace them with defaults.";
       showStorageLoadWarning("settings", retrySettingsLoad, () => saveSettings({ preventDefault() {} }, { recover: true }));
       console.warn("Settings could not be loaded.");
@@ -563,20 +644,10 @@
     }
   }
 
-  // Default values mirrored from the backend defaults in src-tauri/src/settings.rs.
-  // Inputs that match the default are shown empty (with placeholder) so the
-  // user can leave them alone and get the default behaviour.
-  const SETTINGS_DEFAULTS = {
-    aws_config_path: "~/.aws/config",
-    sso_session_name: "",
-    default_profile: "default",
-    default_region: "eu-west-1",
-  };
-
   function fillIfNonDefault(inputId, value, key) {
     const node = $("#" + inputId);
     if (!node) return;
-    node.value = value && value !== SETTINGS_DEFAULTS[key] ? value : "";
+    node.value = value && value !== settingsDefaults[key] ? value : "";
   }
 
   function openSettingsPanel() {
@@ -612,29 +683,34 @@
     // Send empty strings for blank inputs — the backend treats empty as
     // "fall back to default" so the user doesn't need to retype defaults.
     const params = options.recover ? {
-      aws_config_path: "", sso_session_name: "", default_profile: "", default_region: "",
+      aws_config_path: "", sso_session_name: "", default_profile: "", default_region: "", theme: "",
     } : {
       aws_config_path:   $("#settings-aws-config-path").value.trim(),
       sso_session_name:  $("#settings-sso-session").value.trim(),
       default_profile:   $("#settings-default-profile").value.trim(),
       default_region:    $("#settings-default-region").value.trim(),
+      theme:             $("#settings-theme").value,
     };
     const status = $("#settings-status");
     status.textContent = "Saving…";
     const configuration = configurationGeneration;
-    const selection = currentSelectionId;
     const draft = settingsDraftRevision;
+    const previous = cachedSettings;
     ++settingsLoadId; // An older read cannot replace a newly accepted save.
     settingsSavePending = true;
     $("#settings-save").disabled = true;
     try {
       const saved = await tauriInvoke("settings_set", { params });
       if (configuration !== configurationGeneration) return;
+      consumeSettingsMetadata(saved?._settings);
+      if (Object.keys(SETTINGS_FIELDS).some(key => typeof saved[key] !== "string")
+          || !["dark", "light"].includes(saved.theme)) throw new Error("Settings save response was incomplete. Reload to verify.");
       ++settingsLoadId;
       cachedSettings = saved;
       settingsStorageReady = true;
       settingsReadFailed = false;
       $("#settings-storage-warning")?.remove();
+      $("#theme-toggle").disabled = false;
       if (draft === settingsDraftRevision) {
         if (options.recover) fillSettingsForm(saved);
         settingsDraftDirty = false;
@@ -642,9 +718,15 @@
       } else {
         status.textContent = "Previous values saved. Current edits are not saved.";
       }
-      // A rejected save leaves the draft and verified view intact. A late
-      // accepted callback also cannot replace a newer account selection.
-      if (selection !== currentSelectionId) return;
+      updateThemePreview();
+      startDesktopPickers();
+      // Preferences affect the next default choice, not an already verified
+      // context. Only the credential source changes its identity contract.
+      const credentialsChanged = !previous || ["aws_config_path", "sso_session_name"].some(key => previous[key] !== saved[key]);
+      if (!credentialsChanged) return;
+      // Credential changes invalidate every old configuration even if the
+      // user selected another account while saving. Reverify the current
+      // picker selection below; never restore the submitted draft's account.
       ++configurationGeneration;
       ++currentSelectionId;
       lastSetAccountResult = null;
@@ -671,6 +753,9 @@
       refreshProfilesInBackground();
     } catch (err) {
       if (configuration !== configurationGeneration) return;
+      if (err.settings) {
+        try { consumeSettingsMetadata(err.settings); } catch (_) { /* Keep the last accepted catalogue. */ }
+      }
       status.textContent = "Save failed: " + err;
     } finally {
       settingsSavePending = false;
@@ -931,7 +1016,6 @@
   }
 
   // ===== Searchable top bar pickers (backed by selects populated from ~/.aws/config) =====
-  const ALLOWED_REGIONS = ["eu-west-1", "us-east-1"];
   const topbarState = { profile: null, accountId: null, role: null, region: null };
   let topbarPickerList = null;
   let topbarPickerInput = null;
@@ -1178,10 +1262,14 @@
     const sel = $("#region-select");
     if (!sel) return;
     resetSelect(sel);
-    ALLOWED_REGIONS.forEach(r => {
+    allowedRegions.forEach(r => {
       const opt = addOption(sel, r, r);
       if (r === current) opt.selected = true;
     });
+    if (current && !allowedRegions.includes(current)) addOption(sel, current, `${current} — unsupported`);
+    if (!current) addOption(sel, "", "(choose a supported region)");
+    sel.value = current || "";
+    sel.disabled = !allowedRegions.length;
     syncTopbarPicker(sel);
   }
 
@@ -1190,7 +1278,7 @@
     if (!sel) return;
     resetSelect(sel);
     if (!profiles || profiles.length === 0) {
-      addOption(sel, "", "(no profiles in ~/.aws/config)");
+      addOption(sel, "", "(no configured profiles)");
       sel.disabled = true;
       syncTopbarPicker(sel);
       return;
@@ -1227,7 +1315,7 @@
   }
 
   async function applyTopbarSelection(opts) {
-    if (!isTauri) return;
+    if (!isTauri || !settingsStorageReady) return;
     const accSel = $("#account-select");
     const opt = accSel.options[accSel.selectedIndex];
     if (!opt || !opt.value) return;
@@ -1240,11 +1328,8 @@
     const fromProfile = opts && opts.fromProfile;
     const profileRegion = opt.dataset.region || "";
     const regSel = $("#region-select");
-    if (fromProfile && profileRegion && ALLOWED_REGIONS.includes(profileRegion)) {
-      regSel.value = profileRegion;
-      syncTopbarPicker(regSel);
-    }
-    const region = regSel.value || ALLOWED_REGIONS[0];
+    if (fromProfile && profileRegion) populateRegionSelect(profileRegion);
+    const region = regSel.value;
     const profile = opt.value;
     const accountId = opt.dataset.accountId;
     const ssoSession = opt.dataset.ssoSession || "";
@@ -1255,6 +1340,15 @@
     topbarState.profile = profile;
     topbarState.accountId = accountId;
     topbarState.region = region;
+    if (!allowedRegions.includes(region)) {
+      lastSetAccountResult = { ok: false, error: "Choose a supported region before verifying the account." };
+      updateAllWidgetContextChips();
+      const pill = $("#auth-status");
+      pill.hidden = false;
+      pill.dataset.state = "offline";
+      $(".core-label", pill).textContent = "auth: unsupported region — choose a supported region";
+      return;
+    }
 
     updateAllWidgetContextChips();
     document.querySelectorAll('.widget[data-widget="pipeline-runs"]').forEach((widget) => {
@@ -1319,7 +1413,7 @@
     // Build a short, useful explanation for the topbar dropdown when no
     // profiles came back from aws.listProfiles.
     if (!info) return "(profile lookup failed)";
-    const path = info.resolved_path || info.config_path || "~/.aws/config";
+    const path = info.resolved_path || info.config_path || "the configured AWS file";
     if (info.file_exists === false) return `(no file at ${path})`;
     if (info.error) return `(parse error: ${info.error})`;
     return `(0 profiles in ${path})`;
@@ -1379,7 +1473,7 @@
 
   let currentProfilesRequestId = 0;
   async function refreshProfilesInBackground() {
-    if (!isTauri) return;
+    if (!isTauri || !settingsStorageReady) return;
     const accSel = $("#account-select");
     const requestId = ++currentProfilesRequestId;
     const configuration = configurationGeneration;
@@ -1429,9 +1523,9 @@
       const want = (last && last.profile)
         || (cachedSettings && cachedSettings.default_profile)
         || "";
-      if (!selectAccountByName(want, { fromProfile: true })) {
+      if (!selectAccountByName(want, { fromProfile: false })) {
         accSel.selectedIndex = 0;
-        applyTopbarSelection({ fromProfile: true });
+        applyTopbarSelection({ fromProfile: false });
       }
     }
   }
@@ -1439,9 +1533,9 @@
   function applyBrowserRegionSelection() {
     const regSel = $("#region-select");
     if (!regSel) return;
-    const region = ALLOWED_REGIONS.includes(regSel.value)
+    const region = allowedRegions.includes(regSel.value)
       ? regSel.value
-      : ALLOWED_REGIONS[0];
+      : allowedRegions[0];
     topbarState.region = region;
     writeLastSelection("", region);
     updateAllWidgetContextChips();
@@ -1449,6 +1543,7 @@
 
   async function initTopbarPickers() {
     wireTopbarSearchablePickers();
+    if (isTauri && !settingsStorageReady) return;
     if (!isTauri) {
       const sel = $("#account-select");
       resetSelect(sel);
@@ -1457,9 +1552,9 @@
       syncTopbarPicker(sel);
       const regSel = $("#region-select");
       const last = readLastSelection();
-      const initialRegion = last && ALLOWED_REGIONS.includes(last.region)
+      const initialRegion = last && allowedRegions.includes(last.region)
         ? last.region
-        : ALLOWED_REGIONS[0];
+        : allowedRegions[0];
       populateRegionSelect(initialRegion);
       if (regSel.dataset.contextWired !== "1") {
         regSel.dataset.contextWired = "1";
@@ -1481,19 +1576,20 @@
         applyTopbarSelection({ fromProfile: false });
       });
     }
-    // 1) Fast path: hydrate from localStorage so the dropdown is usable
-    //    immediately — caching makes every subsequent launch instant.
+    // Hydration starts only after settings and its region catalogue loaded.
     const cached = readProfilesCache();
     const last = readLastSelection();
-    populateRegionSelect((last && last.region) || (cachedSettings && cachedSettings.default_region) || ALLOWED_REGIONS[0]);
+    const initialRegion = allowedRegions.includes(cachedSettings.default_region)
+      ? (last && last.region) || cachedSettings.default_region : cachedSettings.default_region;
+    populateRegionSelect(initialRegion);
     if (cached && cached.profiles.length > 0) {
       populateAccountSelect(cached.profiles);
       const want = (last && last.profile)
         || (cachedSettings && cachedSettings.default_profile)
         || "";
-      if (!selectAccountByName(want, { fromProfile: true })) {
+      if (!selectAccountByName(want, { fromProfile: false })) {
         accSel.selectedIndex = 0;
-        applyTopbarSelection({ fromProfile: true });
+        applyTopbarSelection({ fromProfile: false });
       }
     } else {
       resetSelect(accSel);
@@ -1529,7 +1625,7 @@
   let currentAuthStatusId = 0;
 
   async function refreshAuthStatus() {
-    if (!isTauri) return;
+    if (!isTauri || !settingsStorageReady) return;
     const pill = $("#auth-status");
     if (!pill) return;
     pill.hidden = false;
@@ -1689,8 +1785,12 @@
   // ===== Theme toggle =====
   $("#theme-toggle").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
+    if (!isTauri) { document.documentElement.dataset.theme = next; return; }
+    if (!settingsStorageReady) return;
+    $("#settings-theme").value = next;
+    markSettingsDirty();
   });
+  $("#appearance-settings").addEventListener("click", openSettingsPanel);
 
   // Cmd-K focuses the global search; Esc closes the side panel.
   document.addEventListener("keydown", (e) => {
@@ -5215,10 +5315,7 @@
     $("#settings-panel-close").addEventListener("click", closeSettingsPanel);
     $("#settings-cancel").addEventListener("click", closeSettingsPanel);
     $("#settings-form").addEventListener("submit", saveSettings);
-    $("#settings-form").addEventListener("input", () => {
-      settingsDraftRevision++;
-      settingsDraftDirty = true;
-    });
+    $("#settings-form").addEventListener("input", markSettingsDirty);
     $("#policy-save")?.addEventListener("click", savePolicy);
     $("#policy-reload")?.addEventListener("click", loadPolicy);
     // input re-renders content and re-syncs scroll; scroll only re-syncs.
@@ -5346,6 +5443,7 @@ def fetch(ctx):
   let restoringLayout = false;
   let layoutSavePending = false;
   let layoutSaveQueued = false;
+  let layoutEditRevision = 0;
   let layoutLoadId = 0;
   let starterLayout = [];
 
@@ -5494,6 +5592,8 @@ def fetch(ctx):
 
   function scheduleSaveLayout() {
     if (!grid || restoringLayout || (isTauri && !dashboardStorageReady)) return;
+    layoutEditRevision++;
+    setLayoutStatus("Unsaved layout changes.");
     if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
     layoutSaveTimer = setTimeout(saveLayout, LAYOUT_SAVE_DEBOUNCE_MS);
   }
@@ -5501,6 +5601,13 @@ def fetch(ctx):
   function setLayoutSavePending(pending) {
     layoutSavePending = pending;
     $("#reset-layout-btn").disabled = pending;
+  }
+
+  function setLayoutStatus(message) {
+    if (!isTauri) return;
+    const status = $("#layout-save-status");
+    status.textContent = message;
+    status.hidden = !message;
   }
 
   async function saveLayout() {
@@ -5512,12 +5619,16 @@ def fetch(ctx):
     } catch (_) { return; }
     const tiles = (data || []).map(pickTileFields).filter(t => t.id);
     if (isTauri) {
+      const revision = layoutEditRevision;
       setLayoutSavePending(true);
+      setLayoutStatus("Saving layout…");
       try {
         await tauriInvoke("dashboard_set", { params: { tiles } });
         $("#layout-save-warning")?.remove();
+        setLayoutStatus(revision === layoutEditRevision ? "Layout saved." : "Unsaved layout changes.");
       } catch (e) {
         console.warn("Dashboard could not be saved.");
+        setLayoutStatus("Layout save failed. Current changes are not saved.");
         showLayoutSaveWarning("Dashboard changes were not saved. The current layout is still displayed.");
       } finally {
         setLayoutSavePending(false);
@@ -5593,10 +5704,12 @@ def fetch(ctx):
       const wasReady = dashboardStorageReady;
       dashboardStorageReady = false;
       setLayoutSavePending(true);
+      setLayoutStatus("Saving layout reset…");
       try {
         await tauriInvoke("dashboard_set", { params: { tiles: starterLayout } });
       } catch (e) {
         console.warn("Dashboard reset could not be saved.");
+        setLayoutStatus("Layout reset failed.");
         showLayoutSaveWarning("Layout reset was not saved. The current layout is unchanged.", resetLayout);
         return;
       } finally {
@@ -5785,8 +5898,10 @@ def fetch(ctx):
     };
 
     // Account section
+    $("#cfg-context-error").textContent = "";
     populateOverrideProfileSelect();
-    populateOverrideRegionSelect();
+    populateOverrideRegionSelect(currentCfgDraft.context.mode === "pinned"
+      ? currentCfgDraft.context.region : topbarState.region || cachedSettings?.default_region);
     const useOverride = $("#cfg-use-override");
     useOverride.checked = currentCfgDraft.context.mode === "pinned";
     refreshDefaultContextLine();
@@ -5857,18 +5972,21 @@ def fetch(ctx):
       const opt = sel.options[sel.selectedIndex];
       if (!opt) return;
       $("#cfg-override-account").value = opt.dataset.accountId || "";
-      // Default the override region from the profile's region if it's allowed.
-      const regSel = $("#cfg-override-region");
+      // Keep unsupported values visible rather than selecting another region.
       const pr = opt.dataset.region || "";
-      if (pr && ALLOWED_REGIONS.includes(pr)) regSel.value = pr;
+      if (pr) populateOverrideRegionSelect(pr);
     };
   }
 
-  function populateOverrideRegionSelect() {
+  function populateOverrideRegionSelect(current) {
     const sel = $("#cfg-override-region");
     if (!sel) return;
     resetSelect(sel);
-    ALLOWED_REGIONS.forEach(r => addOption(sel, r, r));
+    allowedRegions.forEach(r => addOption(sel, r, r));
+    if (current && !allowedRegions.includes(current)) addOption(sel, current, `${current} — unsupported`);
+    if (!current) addOption(sel, "", "(choose a supported region)");
+    sel.value = current || "";
+    sel.disabled = !allowedRegions.length;
   }
 
   function refreshDefaultContextLine() {
@@ -5958,6 +6076,10 @@ def fetch(ctx):
       const profile = $("#cfg-override-profile").value.trim();
       const accountId = $("#cfg-override-account").value.trim();
       const region = $("#cfg-override-region").value.trim();
+      if (!allowedRegions.includes(region)) {
+        $("#cfg-context-error").textContent = "Choose a supported region before saving this pinned context.";
+        return;
+      }
       if (profile && accountId && region) {
         currentCfgDraft.context = { mode: "pinned", profile, account_id: accountId, region };
       } else {
@@ -6030,7 +6152,16 @@ def fetch(ctx):
   }, true);
 
   // ===== Boot =====
-  function boot() {
+  async function boot() {
+    pingCore();
+    if (isTauri) {
+      $("#account-select").disabled = true;
+      $("#region-select").disabled = true;
+      wireTopbarSearchablePickers();
+      syncTopbarPicker($("#account-select"));
+      syncTopbarPicker($("#region-select"));
+      await loadSettings();
+    } else $("#theme-toggle").disabled = false;
     renderPipelineRuns();
     renderLogTail();
     renderCfnStacks();
@@ -6042,18 +6173,11 @@ def fetch(ctx):
     wireRefreshButtons();
     wireRemoveButtons();
     wireConfigButtons();
-    startAuthStatusPolling();
     wireFullscreenButtons();
     updateAllWidgetContextChips();
-    pingCore();
-    // Hydrate the topbar dropdowns from localStorage SYNCHRONOUSLY *before*
-    // any RPC fires — the background refresh + settings load run concurrently
-    // behind the already-populated dropdown so the user isn't stuck on
-    // "(loading…)" when the cached profile list is in localStorage.
-    initTopbarPickers();
-    if (isTauri) {
-      loadSettings().then((s) => { prefillPipelineConfig(s); });
-    }
+    bootComplete = true;
+    if (isTauri) startDesktopPickers();
+    else initTopbarPickers();
   }
   document.addEventListener("DOMContentLoaded", boot);
 })();

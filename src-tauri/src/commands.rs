@@ -11,11 +11,36 @@ use crate::{dashboard, settings, widgets};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn config_path_from_settings(s: &Value) -> String {
-    let p = settings::get_str(s, "aws_config_path");
-    if p.is_empty() {
-        "~/.aws/config".to_string()
+    settings::get_str(s, "aws_config_path")
+}
+
+fn observe_settings(state: &AppState, settings: &Value) -> u64 {
+    state.observe_credential_settings(
+        &config_path_from_settings(settings),
+        &settings::get_str(settings, "sso_session_name"),
+    )
+}
+
+const UNSUPPORTED_REGION: &str =
+    "Choose a supported AWS region before connecting or running this request";
+const SESSION_CONFLICT: &str =
+    "The requested SSO session conflicts with the saved SSO session constraint";
+
+/// A saved session is an additional constraint. It never supplies credentials
+/// or changes the session selected by the profile's validated configuration.
+fn effective_session_constraint(
+    settings: &Value,
+    hint: Option<&str>,
+) -> Result<Option<String>, &'static str> {
+    let configured = settings::get_str(settings, "sso_session_name");
+    let hint = hint.map(str::trim).filter(|name| !name.is_empty());
+    if !configured.is_empty() {
+        if hint.is_some_and(|name| name != configured) {
+            return Err(SESSION_CONFLICT);
+        }
+        Ok(Some(configured))
     } else {
-        p
+        Ok(hint.map(str::to_string))
     }
 }
 
@@ -114,7 +139,7 @@ async fn aws_set_account_request(
         Err(error) => return Ok(error),
     };
     let cfg_path = config_path_from_settings(&user_settings);
-    let revision = state.observe_config_path(&cfg_path);
+    let revision = observe_settings(state, &user_settings);
     let profile = params
         .get("profile")
         .and_then(Value::as_str)
@@ -130,23 +155,15 @@ async fn aws_set_account_request(
     let region = params
         .get("region")
         .and_then(Value::as_str)
+        .map(str::trim)
         .filter(|r| !r.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| settings::get_str(&user_settings, "default_region"));
-    let region = if region.is_empty() {
-        "eu-west-1".into()
-    } else {
-        region
-    };
-    let session = params
-        .get("sso_session_name")
-        .and_then(Value::as_str)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string);
+    let supplied_session = params.get("sso_session_name").and_then(Value::as_str);
     let Some(attempt) = state.begin_attempt(
         json!({
             "profile": profile, "account_id": account_id, "region": region,
-            "sso_session": session, "ts": state.runtime.clock.now_epoch(),
+            "sso_session": supplied_session, "ts": state.runtime.clock.now_epoch(),
         }),
         revision,
     ) else {
@@ -164,6 +181,27 @@ async fn aws_set_account_request(
             false,
         ));
     }
+    if !settings::allowed_region(&region) {
+        return Ok(finish_connection_failure(
+            state,
+            attempt,
+            "UnsupportedRegion",
+            UNSUPPORTED_REGION,
+            false,
+        ));
+    }
+    let session = match effective_session_constraint(&user_settings, supplied_session) {
+        Ok(session) => session,
+        Err(message) => {
+            return Ok(finish_connection_failure(
+                state,
+                attempt,
+                "SsoSessionConflict",
+                message,
+                false,
+            ))
+        }
+    };
     let ctx = AwsContext::new(
         profile,
         account_id,
@@ -282,19 +320,22 @@ fn superseded() -> Value {
 fn load_settings(state: &AppState) -> Result<Value, Value> {
     match settings::load(&state.runtime.storage) {
         Ok(settings) => {
-            state.observe_config_path(&config_path_from_settings(&settings));
+            observe_settings(state, &settings);
             Ok(settings)
         }
         Err(error) => {
             state.invalidate_settings();
-            Err(error.response("settings"))
+            Err(settings::with_metadata(
+                error.response("settings"),
+                &json!({}),
+            ))
         }
     }
 }
 
 fn refresh_configuration_revision(state: &AppState) -> Result<u64, Value> {
     let settings = load_settings(state)?;
-    Ok(state.observe_config_path(&config_path_from_settings(&settings)))
+    Ok(observe_settings(state, &settings))
 }
 
 fn finish_connection_failure(
@@ -358,7 +399,7 @@ struct ResolvedContext {
 fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContext, Value> {
     let user_settings = load_settings(state)?;
     let path = config_path_from_settings(&user_settings);
-    let revision = state.observe_config_path(&path);
+    let revision = observe_settings(state, &user_settings);
     let explicit = params
         .get("context")
         .or_else(|| params.get("account_override"));
@@ -371,6 +412,11 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
                     "Pinned context requires its own profile, account and region",
                 )
             })?;
+            if !settings::allowed_region(region) {
+                return Err(request_error("UnsupportedRegion", UNSUPPORTED_REGION));
+            }
+            let session = effective_session_constraint(&user_settings, None)
+                .map_err(|message| request_error("SsoSessionConflict", message))?;
             let connection = state.connection.lock();
             let cached = connection
                 .overrides
@@ -382,6 +428,7 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
                         && ctx.region == region
                         && ctx.settings_revision == revision
                         && ctx.aws_config_path == path
+                        && ctx.sso_session_name == session
                 })
                 .map(|cached| cached.context.clone());
             let context = cached.unwrap_or_else(|| {
@@ -389,7 +436,7 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
                     profile.into(),
                     account.into(),
                     region.into(),
-                    None,
+                    session,
                     path,
                     state.runtime.clone(),
                 )
@@ -412,6 +459,9 @@ fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContex
         .active
         .clone()
         .ok_or_else(|| request_error("NoVerifiedContext", "No verified AWS account selected"))?;
+    if !settings::allowed_region(&context.region) {
+        return Err(request_error("UnsupportedRegion", UNSUPPORTED_REGION));
+    }
     Ok(ResolvedContext {
         context,
         inherited_attempt: Some(connection.attempt),
@@ -707,7 +757,9 @@ fn local_validation(state: &AppState, command: &'static str, params: &Value) -> 
 
 fn settings_set_impl(state: &AppState, params: Value) -> Value {
     if let Some(error) = local_validation(state, "settings_set", &params) {
-        return error;
+        return state
+            .runtime
+            .with_diagnostics(settings::with_metadata(error, &params));
     }
     let result = match settings::save(&state.runtime.storage, &params) {
         Ok(result) => match refresh_configuration_revision(state) {
@@ -716,7 +768,9 @@ fn settings_set_impl(state: &AppState, params: Value) -> Value {
         },
         Err(error) => error.response("settings"),
     };
-    state.runtime.with_diagnostics(result)
+    state
+        .runtime
+        .with_diagnostics(settings::with_metadata(result, &params))
 }
 
 #[tauri::command]

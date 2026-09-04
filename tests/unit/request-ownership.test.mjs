@@ -16,7 +16,7 @@ function fixture() {
   const rendered = [];
   const errors = [];
   const context = vm.createContext({
-    currentSelectionId: 1, isTauri: true, lastSetAccountResult: { ok: true },
+    currentSelectionId: 1, isTauri: true, settingsStorageReady: true, lastSetAccountResult: { ok: true },
     topbarState: { profile: 'demo-fixture', accountId: 'acct-a-fixture', region: 'region-fixture' },
     contextForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextPayloadForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },

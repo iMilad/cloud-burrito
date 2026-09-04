@@ -1,6 +1,6 @@
 # P2 — Make the core dependable
 
-Status: **P2-01 complete locally; P2-02 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
+Status: **P2-01–02 complete locally; P2-03 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
 Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
 
@@ -54,6 +54,8 @@ All units below are **not started**. Review and complete one unit before combini
 **Review unit:** storage behavior plus command propagation and focused failure tests. No unrelated UI redesign.
 
 ### P2-02 — Make routine settings predictable
+
+**Complete locally:** [implementation and validation evidence](p2-02-evidence.md).
 
 **Scope:** Settings panel, theme, region/profile defaults, layout-save feedback; CB-J01/CB-J05. Depends on P2-01.
 

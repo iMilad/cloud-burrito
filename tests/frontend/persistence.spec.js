@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const initialSettings = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "saved-demo", default_region: "eu-west-1" };
+const initialSettings = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "saved-demo", default_region: "eu-west-1", theme: "dark" };
 const initialDashboard = { version: 1, tiles: [{ id: "resource-lookup", widget: "resource-lookup", x: 0, y: 0, w: 6, h: 4,
   config: { header_color: "blue", inputs: { query: "synthetic saved query" } } }] };
 
@@ -22,17 +22,24 @@ async function boot(page, files = {}) {
       readFailures: {}, writeFailures: {}, calls: [],
     };
     const persist = () => sessionStorage.setItem(key, JSON.stringify(state));
-    const defaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1" };
+    const defaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1", theme: "dark" };
+    const settingsMetadata = () => ({ defaults: { ...defaults }, allowed_regions: ["eu-west-1", "us-east-1"], field_errors: {} });
+    const loadedResponse = (store, value, status) => ({
+      ...(store === "settings" ? defaults : {}), ...value,
+      ...(store === "settings" ? { _settings: settingsMetadata() } : {}),
+      _storage: { status, store },
+    });
     const failure = (store, error_type) => ({ ok: false, error_type, error: "Synthetic storage operation failed",
+      ...(store === "settings" ? { _settings: settingsMetadata() } : {}),
       _storage: { status: "failed", store } });
     const load = store => {
       if (state.readFailures[store]) return failure(store, "StorageReadFailed");
-      if (state.files[store] === null) return { ...(store === "settings" ? defaults : { version: 1, tiles: [] }), _storage: { status: "missing" } };
+      if (state.files[store] === null) return loadedResponse(store, store === "settings" ? defaults : { version: 1, tiles: [] }, "missing");
       try {
         const value = JSON.parse(state.files[store]);
         if (!value || typeof value !== "object" || Array.isArray(value)
             || (store === "dashboard" && !Array.isArray(value.tiles))) throw new Error("Invalid synthetic shape");
-        return { ...value, _storage: { status: "loaded" } };
+        return loadedResponse(store, value, "loaded");
       } catch (_) { return failure(store, "StorageInvalid"); }
     };
     const fixture = window.__persistenceFixture = { state, persist };
@@ -54,7 +61,7 @@ async function boot(page, files = {}) {
             : { version: 1, tiles: params.tiles };
           state.files[store] = JSON.stringify(value);
           persist();
-          return { ...value, _storage: { status: "saved" } };
+          return loadedResponse(store, value, "saved");
         }
         case "aws_list_profiles": return { profiles: [], file_exists: false };
         case "aws_auth_status": return { has_context: false, logged_in: false, connection_state: "disconnected" };

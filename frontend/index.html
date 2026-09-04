@@ -32,8 +32,7 @@
           aria-controls="topbar-picker-list" autocomplete="off" autocorrect="off"
           spellcheck="false" data-select-id="region-select" />
         <select class="picker-select" id="region-select" aria-label="Region" hidden aria-hidden="true" tabindex="-1">
-          <option value="eu-west-1">eu-west-1</option>
-          <option value="us-east-1">us-east-1</option>
+          <option value="">(loading settings…)</option>
         </select>
       </div>
       <span class="sr-only" id="topbar-picker-status" aria-live="polite"></span>
@@ -59,12 +58,18 @@
     </div>
     <div class="topbar-right">
       <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout">↺</button>
-      <button class="btn btn-ghost" id="theme-toggle" title="Toggle theme">◐</button>
+      <button class="btn btn-ghost" id="theme-toggle" title="Preview another theme" aria-label="Preview another theme" disabled>◐</button>
       <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden>⏱</button>
       <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden>⚙</button>
       <button class="btn btn-primary" id="add-widget-btn">+ Widget</button>
     </div>
   </header>
+
+  <div id="appearance-unsaved" class="preference-notice" role="status" hidden>
+    <span>Unsaved appearance preview.</span>
+    <button type="button" class="btn btn-ghost small" id="appearance-settings">Open Settings to save</button>
+  </div>
+  <p id="layout-save-status" class="save-status" role="status" hidden></p>
 
   <main class="dashboard">
     <div class="grid-stack" id="grid-stack">
@@ -284,27 +289,40 @@
         <form id="settings-form" class="settings-form">
           <label>
             <span>AWS config file</span>
-            <input id="settings-aws-config-path" type="text" placeholder="~/.aws/config" />
+            <input id="settings-aws-config-path" type="text" aria-describedby="settings-aws-config-path-error" />
+            <span id="settings-aws-config-path-error" class="field-error" hidden></span>
           </label>
           <label>
             <span>SSO session name</span>
-            <input id="settings-sso-session" type="text" placeholder="(optional)" />
+            <input id="settings-sso-session" type="text" aria-describedby="settings-sso-session-error" />
+            <span id="settings-sso-session-error" class="field-error" hidden></span>
           </label>
           <label>
             <span>Default profile</span>
-            <input id="settings-default-profile" type="text" placeholder="default" />
+            <input id="settings-default-profile" type="text" aria-describedby="settings-default-profile-error" />
+            <span id="settings-default-profile-error" class="field-error" hidden></span>
           </label>
           <label>
             <span>Default region</span>
-            <input id="settings-default-region" type="text" placeholder="eu-west-1" />
+            <select id="settings-default-region" aria-describedby="settings-default-region-error"></select>
+            <span id="settings-default-region-error" class="field-error" hidden></span>
           </label>
+          <label>
+            <span>Appearance</span>
+            <select id="settings-theme" aria-describedby="settings-theme-error">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+            <span id="settings-theme-error" class="field-error" hidden></span>
+          </label>
+          <p class="muted small">Blank fields use the defaults shown. Appearance changes are previews until you save.</p>
           <p class="muted small">
             The app checks requested operations against its supported list and
             your policy before execution. Logs Insights requires permission to
             both start and stop queries; queries can incur AWS charges.
             Blocked calls show up in the Audit log panel.
           </p>
-          <p class="muted small" id="settings-status"></p>
+          <p class="muted small" id="settings-status" role="status"></p>
           <div class="ai-actions">
             <button type="button" class="btn btn-ghost" id="settings-cancel">Cancel</button>
             <button type="submit" class="btn btn-primary" id="settings-save">Save</button>
@@ -396,6 +414,7 @@
             <span>Region</span>
             <select id="cfg-override-region"></select>
           </label>
+          <p id="cfg-context-error" class="field-error" role="status"></p>
         </div>
       </section>
 

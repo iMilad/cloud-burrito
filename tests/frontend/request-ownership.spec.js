@@ -41,13 +41,21 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
       return call[key] === value;
     });
     const table = (key, value) => ({ render: "table", columns: [key], rows: [{ [key]: value }] });
+    const settingsDefaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1", theme: "dark" };
+    let settings = { ...settingsDefaults, default_profile: A.profile, default_region: A.region };
+    const settingsResponse = status => ({ ...settings,
+      _settings: { defaults: { ...settingsDefaults }, allowed_regions: ["eu-west-1", "us-east-1"], field_errors: {} },
+      _storage: { store: "settings", status } });
     function defaultResponse(call) {
       const { command, params, context } = call;
       switch (command) {
         case "ping": return { ok: true, version: "synthetic-test" };
-        case "settings_get": return { default_profile: A.profile, default_region: A.region, default_pipeline: "" };
+        case "settings_get": return settingsResponse("loaded");
         case "dashboard_get": return { tiles };
-        case "dashboard_set": case "settings_set": return { ok: true };
+        case "dashboard_set": return { ok: true };
+        case "settings_set":
+          settings = Object.fromEntries(Object.entries(settingsDefaults).map(([name, fallback]) => [name, params[name]?.trim() || fallback]));
+          return settingsResponse("saved");
         case "aws_list_profiles": return {
           config_path: "/synthetic/aws/config", file_exists: true,
           profiles: [A, B].map((identity) => ({

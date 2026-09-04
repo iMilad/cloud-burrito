@@ -226,6 +226,11 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
     const identity = {
       profile: "demo-profile", account_id: "acct-fixture", region: "eu-west-1",
     };
+    const settingsDefaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1", theme: "dark" };
+    let settings = { ...settingsDefaults, default_profile: identity.profile, default_region: identity.region };
+    const settingsResponse = status => ({ ...settings,
+      _settings: { defaults: { ...settingsDefaults }, allowed_regions: ["eu-west-1", "us-east-1"], field_errors: {} },
+      _storage: { store: "settings", status } });
     const withContext = (result, payload, verified = !!active) => ({
       ...result,
       _request: {
@@ -275,7 +280,12 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
           }
           if (command === "ping") return { version: "test" };
           if (command === "settings_get") {
-            return { default_profile: identity.profile, default_region: identity.region };
+            return settingsResponse("loaded");
+          }
+          if (command === "settings_set") {
+            settings = Object.fromEntries(Object.entries(settingsDefaults).map(([name, fallback]) =>
+              [name, payload?.params?.[name]?.trim() || fallback]));
+            return settingsResponse("saved");
           }
           if (command === "dashboard_get") return { tiles: [], _storage: { status: "missing" } };
           if (command === "aws_list_profiles") return {

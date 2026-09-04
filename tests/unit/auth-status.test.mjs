@@ -24,7 +24,7 @@ function fixture() {
   const panel = { classList: { add: (value) => openClasses.add(value), contains: (value) => openClasses.has(value) }, setAttribute: () => {} };
   const scrim = { classList: { add: () => {} }, hidden: true };
   const context = vm.createContext({
-    isTauri: true, currentSelectionId: 1, currentAuthStatusId: 0,
+    isTauri: true, settingsStorageReady: true, currentSelectionId: 1, currentAuthStatusId: 0,
     lastSetAccountResult: null, lastAuthStatus: null,
     topbarState: { profile: 'demo-fixture', accountId: 'acct-current-fixture', region: 'region-fixture' },
     clearInheritedResults: () => rendered.push({ cleared: true }),

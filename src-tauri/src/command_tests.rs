@@ -321,6 +321,14 @@ fn demo(profile: &str, account: &str) -> Value {
     json!({"profile": profile, "account_id": account, "region": "us-east-1"})
 }
 
+/// IPC settings writes replace the full form. Tests spell out changes while
+/// explicitly providing all other fields from the backend defaults.
+fn full_settings(changes: Value) -> Value {
+    let mut form = settings::defaults();
+    form.extend(changes.as_object().unwrap().clone());
+    Value::Object(form)
+}
+
 fn pinned(profile: &str, account: &str) -> Value {
     json!({"context": {"mode": "pinned", "profile": profile, "account_id": account, "region": "us-east-1"}})
 }
@@ -1665,7 +1673,10 @@ async fn broken_settings_block_every_provider_entry_and_clear_verified_context()
         "{synthetic-invalid-json"
     );
     let failed_revision = fixture.state.connection.lock().settings_revision;
-    let recovered = settings_set_impl(&fixture.state, json!({"default_region":"us-east-1"}));
+    let recovered = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({"default_region":"us-east-1"})),
+    );
     assert_eq!(recovered["_storage"]["status"], "saved");
     assert!(fixture.state.connection.lock().settings_revision > failed_revision);
     assert!(fixture.state.current_ctx().is_none());
@@ -1696,9 +1707,322 @@ fn persistence_commands_distinguish_first_run_empty_read_and_write_failure() {
         settings_get_impl(&fixture.state)["error_type"],
         "StorageReadFailed"
     );
-    let response = settings_set_impl(&fixture.state, json!({"default_region":"us-east-1"}));
+    let response = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({"default_region":"us-east-1"})),
+    );
     assert_eq!(response["ok"], false);
     assert_eq!(response["error_type"], "StorageWriteFailed");
     assert_eq!(response["_storage"]["status"], "failed");
     assert!(path.is_dir());
+}
+
+#[test]
+fn settings_metadata_is_available_on_success_validation_and_storage_failure() {
+    let fixture = Fixture::new();
+    let initial = settings_get_impl(&fixture.state);
+    assert_eq!(initial["default_profile"], "");
+    assert_eq!(initial["theme"], "dark");
+    assert_eq!(
+        initial["_settings"]["defaults"],
+        Value::Object(settings::defaults())
+    );
+    assert_eq!(
+        initial["_settings"]["allowed_regions"],
+        json!(settings::ALLOWED_REGIONS)
+    );
+    let path = fixture.state.runtime.paths.data_file("settings.json");
+    for (field, invalid) in [
+        ("default_region", json!("ap-south-1")),
+        ("theme", json!("system")),
+        ("default_profile", json!(12)),
+    ] {
+        let mut params = full_settings(json!({}));
+        params[field] = invalid;
+        let response = settings_set_impl(&fixture.state, params);
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error_type"], "InvalidRequest");
+        assert!(response["_settings"]["field_errors"][field].is_string());
+        assert!(!path.exists());
+    }
+    let blanks = settings_set_impl(
+        &fixture.state,
+        json!({"aws_config_path":" \t", "sso_session_name":" ", "default_profile":" ", "default_region":" ", "theme":"\t"}),
+    );
+    assert_eq!(blanks["_storage"]["status"], "saved");
+    assert_eq!(blanks["theme"], "dark");
+    assert_eq!(blanks["default_region"], "eu-west-1");
+    assert_eq!(blanks["_settings"]["field_errors"], json!({}));
+    fixture
+        .state
+        .runtime
+        .storage
+        .write_json(
+            "settings.json",
+            &json!({"default_region":"ap-south-1", "theme":"light"}),
+        )
+        .unwrap();
+    let visible = settings_get_impl(&fixture.state);
+    assert_eq!(visible["default_region"], "ap-south-1");
+    assert_eq!(visible["_storage"]["status"], "loaded");
+    assert!(visible["_settings"]["field_errors"]["default_region"].is_string());
+    let before = std::fs::read(&path).unwrap();
+    let rejected = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({"default_region":"ap-south-1", "theme":"dark"})),
+    );
+    assert_eq!(rejected["ok"], false);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let repaired = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({"default_region":"us-east-1", "theme":" light "})),
+    );
+    assert_eq!(repaired["_storage"]["status"], "saved");
+    assert_eq!(settings_get_impl(&fixture.state)["theme"], "light");
+    std::fs::write(&path, "{synthetic-broken-settings").unwrap();
+    let error = settings_get_impl(&fixture.state);
+    assert_eq!(error["error_type"], "StorageInvalid");
+    assert_eq!(error["_settings"]["defaults"]["theme"], "dark");
+    assert_eq!(error["_settings"]["field_errors"], json!({}));
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn unsupported_default_and_pinned_regions_are_preserved_but_never_executed() {
+    let fixture = Fixture::new();
+    fixture
+        .state
+        .runtime
+        .storage
+        .write_json("settings.json", &json!({"default_region":"ap-south-1"}))
+        .unwrap();
+    let mut selection = demo("demo-a", ACCOUNT_A);
+    selection.as_object_mut().unwrap().remove("region");
+    let denied = aws_set_account_impl(&fixture.state, selection)
+        .await
+        .unwrap();
+    assert_eq!(denied["error_type"], "UnsupportedRegion");
+    assert_eq!(denied["connection_state"], "failed");
+    let mut pin = pinned("demo-a", ACCOUNT_A);
+    pin["context"]["region"] = json!("ap-south-1");
+    let tile = json!({"id":"unsupported-region-fixture", "widget":"aws-cli", "x":0,"y":0,"w":4,"h":3,"config":pin});
+    let persisted = dashboard_set_impl(&fixture.state, json!({"tiles":[tile.clone()]}));
+    assert_eq!(persisted["_storage"]["status"], "saved");
+    assert_eq!(dashboard_get_impl(&fixture.state)["tiles"][0], tile);
+    let mut request = cli_params();
+    request["context"] = pin["context"].clone();
+    let denied_pin = widget_fetch_impl(&fixture.state, request).await.unwrap();
+    assert_eq!(denied_pin["error_type"], "UnsupportedRegion");
+    assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+    // An explicit supported region is usable without rewriting the saved default.
+    fixture
+        .connect_a("CB_SYNTHETIC_EXPLICIT_REGION", 3000)
+        .await;
+    assert_eq!(fixture.state.current_ctx().unwrap().region, "us-east-1");
+    assert_eq!(
+        settings_get_impl(&fixture.state)["default_region"],
+        "ap-south-1"
+    );
+}
+
+#[tokio::test]
+async fn saved_session_constraint_applies_to_topbar_and_pinned_verification() {
+    let fixture = Fixture::new();
+    let settings = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({"sso_session_name":"synthetic-session"})),
+    );
+    assert_eq!(settings["_storage"]["status"], "saved");
+    let mut conflicting = demo("demo-a", ACCOUNT_A);
+    conflicting["sso_session_name"] = json!("synthetic-other");
+    let conflict = aws_set_account_impl(&fixture.state, conflicting)
+        .await
+        .unwrap();
+    assert_eq!(conflict["error_type"], "SsoSessionConflict");
+    assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+    fixture.aws.assert_no_resolution();
+    let mut matching = demo("demo-a", ACCOUNT_A);
+    matching["sso_session_name"] = json!("synthetic-session");
+    fixture.aws.ready(
+        "demo-a",
+        "CB_SYNTHETIC_SESSION_A",
+        ACCOUNT_A,
+        "principal-a",
+        3000,
+    );
+    assert_eq!(
+        aws_set_account_impl(&fixture.state, matching)
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    assert_eq!(
+        fixture
+            .state
+            .current_ctx()
+            .unwrap()
+            .sso_session_name
+            .as_deref(),
+        Some("synthetic-session")
+    );
+    fixture.aws.ready(
+        "demo-b",
+        "CB_SYNTHETIC_SESSION_PIN",
+        ACCOUNT_B,
+        "principal-b",
+        3000,
+    );
+    let pin = resolve_widget_ctx(&fixture.state, &pinned("demo-b", ACCOUNT_B)).unwrap();
+    assert_eq!(
+        pin.context.sso_session_name.as_deref(),
+        Some("synthetic-session")
+    );
+    let verified = verify_request_context(&fixture.state, &pin, &fixture.policy())
+        .await
+        .unwrap();
+    assert_eq!(
+        verified.snapshot.session_name.as_deref(),
+        Some("synthetic-session")
+    );
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn saved_session_never_overrides_a_different_selected_profile_session() {
+    for pinned_request in [false, true] {
+        let fixture = Fixture::new();
+        settings_set_impl(
+            &fixture.state,
+            full_settings(json!({"sso_session_name":"synthetic-different"})),
+        );
+        let error = if pinned_request {
+            let context = resolve_widget_ctx(&fixture.state, &pinned("demo-a", ACCOUNT_A)).unwrap();
+            verify_request_context(&fixture.state, &context, &fixture.policy())
+                .await
+                .unwrap_err()
+        } else {
+            aws_set_account_impl(&fixture.state, demo("demo-a", ACCOUNT_A))
+                .await
+                .unwrap()
+        };
+        assert_eq!(error["error_type"], "UnsupportedProfile");
+        assert!(fixture.state.current_ctx().is_none());
+        assert!(fixture.state.connection.lock().overrides.is_empty());
+        fixture.aws.assert_no_resolution();
+        fixture.no_process();
+    }
+}
+
+#[tokio::test]
+async fn only_credential_settings_invalidate_verified_and_pinned_contexts() {
+    let fixture = Fixture::new();
+    let initial = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({
+            "aws_config_path":"synthetic-custom-config.ini", "sso_session_name":"synthetic-session"
+        })),
+    );
+    assert_eq!(initial["_storage"]["status"], "saved");
+    fixture.connect_a("CB_SYNTHETIC_PREF_A", 3000).await;
+    fixture.aws.ready(
+        "demo-b",
+        "CB_SYNTHETIC_PREF_PIN",
+        ACCOUNT_B,
+        "principal-b",
+        3000,
+    );
+    let pin = resolve_widget_ctx(&fixture.state, &pinned("demo-b", ACCOUNT_B)).unwrap();
+    let pinned_session = verify_request_context(&fixture.state, &pin, &fixture.policy())
+        .await
+        .unwrap();
+    let old_id = fixture.state.current_ctx().unwrap().id();
+    let old_revision = fixture.state.connection.lock().settings_revision;
+    let path = fixture.state.runtime.paths.data_file("settings.json");
+    let saved_bytes = std::fs::read(&path).unwrap();
+    let snapshots = fixture.aws.snapshot_calls.load(Ordering::SeqCst);
+    let partial = settings_set_impl(&fixture.state, json!({"theme":"light"}));
+    assert_eq!(partial["error_type"], "InvalidRequest");
+    assert_eq!(
+        partial["error"],
+        "Submit every settings field; use a blank value to reset a field"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), saved_bytes);
+    assert_eq!(fixture.state.current_ctx().unwrap().id(), old_id);
+    assert_eq!(
+        fixture.state.connection.lock().settings_revision,
+        old_revision
+    );
+    assert_eq!(fixture.state.connection.lock().overrides.len(), 1);
+    assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), snapshots);
+    let preference_save = settings_set_impl(
+        &fixture.state,
+        full_settings(
+            json!({"aws_config_path":"synthetic-custom-config.ini", "sso_session_name":"synthetic-session", "theme":"light", "default_region":"eu-west-1", "default_profile":"demo-b"}),
+        ),
+    );
+    assert_eq!(preference_save["_storage"]["status"], "saved");
+    assert_eq!(fixture.state.current_ctx().unwrap().id(), old_id);
+    assert_eq!(
+        fixture.state.connection.lock().settings_revision,
+        old_revision
+    );
+    assert_eq!(fixture.state.connection.lock().overrides.len(), 1);
+    assert_eq!(
+        fixture.state.current_ctx().unwrap().aws_config_path,
+        "synthetic-custom-config.ini"
+    );
+    assert_eq!(
+        fixture
+            .state
+            .current_ctx()
+            .unwrap()
+            .sso_session_name
+            .as_deref(),
+        Some("synthetic-session")
+    );
+    validate_request_context(&fixture.state, &pin, &pinned_session).unwrap();
+    let constraint_save = settings_set_impl(
+        &fixture.state,
+        full_settings(
+            json!({"aws_config_path":"synthetic-custom-config.ini", "sso_session_name":"", "theme":"light"}),
+        ),
+    );
+    assert_eq!(constraint_save["_storage"]["status"], "saved");
+    assert!(fixture.state.connection.lock().settings_revision > old_revision);
+    assert!(fixture.state.current_ctx().is_none());
+    assert!(fixture.state.connection.lock().overrides.is_empty());
+    assert_eq!(
+        validate_request_context(&fixture.state, &pin, &pinned_session).unwrap_err()["error_type"],
+        "Superseded"
+    );
+    let next = resolve_widget_ctx(&fixture.state, &pinned("demo-b", ACCOUNT_B)).unwrap();
+    assert_ne!(next.context.id(), pin.context.id());
+    assert!(next.context.sso_session_name.is_none());
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn changing_only_saved_session_fences_an_older_pending_selection() {
+    let fixture = Fixture::new();
+    let finish = fixture.aws.queue_credentials("demo-a");
+    fixture
+        .aws
+        .ready_identity("CB_SYNTHETIC_PENDING_SESSION", ACCOUNT_A, "principal-a");
+    let pending = aws_set_account_impl(&fixture.state, demo("demo-a", ACCOUNT_A));
+    tokio::pin!(pending);
+    assert!(futures::poll!(&mut pending).is_pending());
+    let saved = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({"sso_session_name":"synthetic-session"})),
+    );
+    assert_eq!(saved["_storage"]["status"], "saved");
+    finish
+        .send(Ok(credentials("CB_SYNTHETIC_PENDING_SESSION", 3000)))
+        .unwrap();
+    assert_eq!(pending.await.unwrap()["error_type"], "Superseded");
+    assert!(fixture.state.current_ctx().is_none());
+    fixture.no_process();
 }

@@ -26,6 +26,7 @@ pub(crate) struct ConnectionState {
     pub attempt: u64,
     pub settings_revision: u64,
     config_path: Option<String>,
+    sso_constraint: String,
     settings_failed: bool,
     pub status: &'static str,
     pub active: Option<AwsContext>,
@@ -40,6 +41,7 @@ impl Default for ConnectionState {
             attempt: 0,
             settings_revision: 0,
             config_path: None,
+            sso_constraint: String::new(),
             settings_failed: false,
             status: "disconnected",
             active: None,
@@ -70,15 +72,19 @@ impl AppState {
         self.connection.lock().active.clone()
     }
 
-    /// Detect persisted path changes before a new request or a pending result.
+    /// Detect credential-setting changes before a request or pending result.
     /// No locks survive an await. Provider fields are checked separately against
     /// the context's exact parsed configuration snapshot.
-    pub(crate) fn observe_config_path(&self, path: &str) -> u64 {
+    pub(crate) fn observe_credential_settings(&self, path: &str, sso_constraint: &str) -> u64 {
         let mut state = self.connection.lock();
-        if state.settings_failed || state.config_path.as_deref() != Some(path) {
+        if state.settings_failed
+            || state.config_path.as_deref() != Some(path)
+            || state.sso_constraint != sso_constraint
+        {
             state.settings_failed = false;
             let was_configured = state.config_path.is_some();
             state.config_path = Some(path.to_string());
+            state.sso_constraint = sso_constraint.to_string();
             state.settings_revision += 1;
             if was_configured {
                 state.attempt += 1;

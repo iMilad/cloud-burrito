@@ -80,19 +80,20 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
             }
         }
         "settings_set" => {
-            keys(
-                p,
-                &[
-                    "aws_config_path",
-                    "sso_session_name",
-                    "default_profile",
-                    "default_region",
-                ],
-            )?;
-            optional_text(p, "aws_config_path", 4096, true, false, false)?;
-            optional_text(p, "sso_session_name", 256, true, false, false)?;
-            optional_text(p, "default_profile", 256, true, false, false)?;
-            optional_text(p, "default_region", 128, true, false, false)
+            settings_shape(params)?;
+            // IPC writes replace the complete editable form. Missing values
+            // must never silently reset a custom credential configuration.
+            if SETTINGS_FIELDS
+                .iter()
+                .any(|(field, _, _)| !p.contains_key(*field))
+            {
+                return Err("Submit every settings field; use a blank value to reset a field");
+            }
+            if settings_field_errors(params).is_empty() {
+                Ok(())
+            } else {
+                Err("Correct the highlighted settings fields")
+            }
         }
         "dashboard_set" => {
             keys(p, &["tiles"])?;
@@ -125,6 +126,72 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
             text(required(p, "text")?, MAX_POLICY, true, true).map(|_| ())
         }
         _ => Err("Unknown command"),
+    }
+}
+
+const SETTINGS_FIELDS: [(&str, usize, &str); 5] = [
+    ("aws_config_path", 4096, "Enter a valid AWS config path"),
+    ("sso_session_name", 256, "Enter a valid SSO session name"),
+    ("default_profile", 256, "Enter a valid default profile"),
+    ("default_region", 128, "Choose a supported default region"),
+    ("theme", 16, "Choose light or dark theme"),
+];
+
+/// On-disk shape validation intentionally does not reject unsupported semantic
+/// preference values; loading must preserve them for an explicit correction.
+pub(crate) fn settings_shape(value: &Value) -> Check {
+    json_budget(value)?;
+    let fields = object(value)?;
+    keys(
+        fields,
+        &[
+            "aws_config_path",
+            "sso_session_name",
+            "default_profile",
+            "default_region",
+            "theme",
+        ],
+    )?;
+    for (name, limit, _) in SETTINGS_FIELDS {
+        settings_field_shape(fields, name, limit)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn settings_field_errors(value: &Value) -> Map<String, Value> {
+    let mut errors = Map::new();
+    let Some(fields) = value.as_object() else {
+        return errors;
+    };
+    for (name, limit, message) in SETTINGS_FIELDS {
+        let invalid_shape = settings_field_shape(fields, name, limit).is_err();
+        let text = fields
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let invalid_choice = !text.is_empty()
+            && match name {
+                "default_region" => !crate::settings::allowed_region(text),
+                "theme" => !matches!(text, "light" | "dark"),
+                _ => false,
+            };
+        if invalid_shape || invalid_choice {
+            errors.insert(name.into(), Value::String(message.into()));
+        }
+    }
+    errors
+}
+
+fn settings_field_shape(fields: &Map<String, Value>, name: &str, limit: usize) -> Check {
+    let Some(value) = fields.get(name) else {
+        return Ok(());
+    };
+    let text = value.as_str().ok_or("Expected text")?.trim();
+    if text.len() > limit || text.chars().any(char::is_control) {
+        Err("Setting is too long or contains unsupported controls")
+    } else {
+        Ok(())
     }
 }
 
@@ -746,10 +813,10 @@ mod tests {
 
     #[test]
     fn settings_policy_and_audit_limits_preserve_valid_ui_values() {
-        assert!(validate("settings_set", &json!({"aws_config_path":"~/.aws/config","default_profile":"", "sso_session_name":"", "default_region":"eu-west-1"})).is_ok());
+        assert!(validate("settings_set", &json!({"aws_config_path":"~/.aws/config","default_profile":"", "sso_session_name":"", "default_region":"eu-west-1", "theme":"dark"})).is_ok());
         assert!(validate(
             "settings_set",
-            &json!({"aws_config_path":"C:\\fixture\\config"})
+            &json!({"aws_config_path":"C:\\fixture\\config", "default_profile":"", "sso_session_name":"", "default_region":"", "theme":""})
         )
         .is_ok());
         assert!(validate("policy_set", &json!({"text":"Version: 1\nStatement: []\n"})).is_ok());
@@ -781,6 +848,21 @@ mod tests {
         ] {
             assert!(validate(command, &json!({})).is_ok());
             assert!(validate(command, &json!({"unexpected":true})).is_err());
+        }
+    }
+
+    #[test]
+    fn settings_ipc_requires_full_form_while_legacy_storage_shape_remains_optional() {
+        let complete = Value::Object(crate::settings::defaults());
+        assert!(validate("settings_set", &complete).is_ok());
+        for (field, _, _) in SETTINGS_FIELDS {
+            let mut partial = complete.clone();
+            partial.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                validate("settings_set", &partial),
+                Err("Submit every settings field; use a blank value to reset a field")
+            );
+            assert!(settings_shape(&partial).is_ok());
         }
     }
 
