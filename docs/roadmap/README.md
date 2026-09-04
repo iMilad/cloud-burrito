@@ -1,8 +1,8 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1–P3 complete locally. P4-01–05 implemented locally; P4-06 is next.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
+Status: **P1–P3 complete locally. P4-01–06 implemented locally; P4-07 is next.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
 
-Latest completed unit: [P4-05](p4-05-evidence.md) — Ubuntu package policy. Native package/device evidence remains separate.
+Latest completed unit: [P4-06](p4-06-evidence.md) — Unsigned macOS packaging. Native package/device evidence remains separate.
 
 [P3 exit evidence](p3-exit-evidence.md) records all eight separate local work units, final checks, before/after measurements and remaining native gates.
 
@@ -28,7 +28,7 @@ Use **P0–P6** for work items and acceptance evidence. The presentation's five 
 | [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–06 complete locally / native evidence pending |
 | [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | Complete locally / native acceptance pending |
 | [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Synthetic timings and resource limits recorded; native startup/memory and public performance claims remain pending | P3-01–08 complete locally / native evidence pending |
-| [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | P4-01–05 complete locally / native artifact evidence pending |
+| [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | P4-01–06 complete locally / native artifact evidence pending |
 | P5 — Validate on real machines | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Outline only / not started |
 | P6 — Build the portfolio launch package | English documentation, demo, decisions and release evidence | Privacy/history and dependency review complete; independent feedback recorded; explicit publication decision | Outline only / not started |
 

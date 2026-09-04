@@ -26,12 +26,15 @@ class BuildCandidateTests(unittest.TestCase):
             root = Path(directory).resolve()
             inherited = {'PATH': '/synthetic/tools', 'APPLE_TEAM_ID': 'synthetic',
                          'AWS_PROFILE': 'synthetic', 'TAURI_SIGNING_PRIVATE_KEY': 'synthetic',
+                         'TAURI_BUNDLER_DMG_IGNORE_CI': 'true',
                          'RUSTFLAGS': 'unreviewed', 'CARGO_HOME': str(root / 'cargo cache')}
             env = BUILD.build_environment(root / 'source tree', root / 'target', row, inherited)
             self.assertNotIn('APPLE_TEAM_ID', env)
             self.assertNotIn('AWS_PROFILE', env)
             self.assertNotIn('TAURI_SIGNING_PRIVATE_KEY', env)
             self.assertNotIn('RUSTFLAGS', env)
+            self.assertNotIn('TAURI_BUNDLER_DMG_IGNORE_CI', env)
+            self.assertEqual(env['CI'], 'true')
             self.assertEqual(env['CARGO_NET_OFFLINE'], 'true')
             self.assertEqual(env['MACOSX_DEPLOYMENT_TARGET'], '13.0')
             self.assertIn(f'--remap-path-prefix={root / "source tree"}=.', env['CARGO_ENCODED_RUSTFLAGS'].split('\x1f'))

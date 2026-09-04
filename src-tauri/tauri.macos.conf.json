@@ -2,6 +2,12 @@
   "bundle": {
     "targets": ["app", "dmg"],
     "createUpdaterArtifacts": false,
-    "useLocalToolsDir": true
+    "useLocalToolsDir": true,
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": null,
+      "providerShortName": null,
+      "entitlements": null
+    }
   }
 }

@@ -96,6 +96,7 @@ def build_environment(source_root, target_dir, row, inherited=None):
         if key.startswith(('APPLE_', 'AWS_', 'TAURI_SIGNING_', 'TAURI_PRIVATE_', 'CARGO_PROFILE_')) or key in (
             'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_TARGET', 'MACOSX_DEPLOYMENT_TARGET',
             'TAURI_CONFIG', 'TAURI_BUNDLER_SIGN', 'TAURI_BUNDLER_SIGNING_IDENTITY',
+            'TAURI_BUNDLER_DMG_IGNORE_CI',
             'RUSTC', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'RUSTDOCFLAGS',
         ):
             env.pop(key, None)
