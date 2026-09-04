@@ -489,3 +489,39 @@ test("a failed Lambda stream refresh cannot lend its request identity to retaine
     { streams: [{ name: "current-stream" }], coverage: coverage() });
   await expect(view).toBeEnabled();
 });
+
+test("reviewed detail reuse shows original capture time and keeps the current verified envelope", async ({ page }) => {
+  const { surface } = await pipeline(page);
+  await hold(page, requestFor("cfn-stack-detail"));
+  await surface.getByRole("button", { name: "Inspect configured stack" }).click();
+  const request = await next(page, requestFor("cfn-stack-detail"));
+  expect(request.params.reuse_result).toBe(true);
+  const captured = Math.floor(Date.now() / 1000) - 10;
+  await reply(page, request, { ...stackDetail("cached"), _cache: { hit: true, captured_at: captured, max_age_seconds: 15 } });
+  const result = surface.locator(".result-status").filter({ has: page.locator(".result-cached") }).last();
+  await expect(result).toContainText("Cached evidence · original capture time");
+  await expect(result.locator("time")).toHaveAttribute("datetime", new Date(captured * 1000).toISOString());
+  await expect(result).toContainText(A.account_id);
+  await expect(surface).toContainText("Logs-cached");
+});
+
+test("invalid cached capture metadata cannot promote an old detail into newly received evidence", async ({ page }) => {
+  const { surface } = await pipeline(page);
+  await hold(page, requestFor("cfn-stack-detail"));
+  await surface.getByRole("button", { name: "Inspect configured stack" }).click();
+  const request = await next(page, requestFor("cfn-stack-detail"));
+  await reply(page, request, { ...stackDetail("invalid-cache"), _cache: { hit: true, captured_at: -1, max_age_seconds: 15 } });
+  await expect(surface).toContainText("Response freshness metadata was invalid.");
+  await expect(surface).not.toContainText("Logs-invalid-cache");
+});
+
+test("manual parent Refresh requests current evidence without cache reuse opt-in", async ({ page }) => {
+  const { surface } = await pipeline(page);
+  await hold(page, requestFor("pipeline-runs"));
+  await refresh(surface);
+  const request = await next(page, requestFor("pipeline-runs"));
+  expect(request.params).not.toHaveProperty("reuse_result");
+  await reply(page, request, runs("fresh-parent-execution"));
+  await expect(surface.locator(".pipeline-runs-rows")).toContainText("fresh-parent-execution");
+  await expect(surface.locator(".result-cached")).toHaveCount(0);
+});

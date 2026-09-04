@@ -280,6 +280,16 @@ impl AwsContext {
         })
     }
 
+    fn verification_active(&self) -> Result<(), ContextError> {
+        if self.state.lock().invalidated {
+            return Err(ContextError::new(
+                "StaleContext",
+                "this AWS context changed before identity dispatch",
+            ));
+        }
+        Ok(())
+    }
+
     async fn verified_session_once(&self) -> Result<Arc<VerifiedSession>, ContextError> {
         let verification_scope = crate::scheduler::WorkScope::new(
             format!("verification-{}", self.id),
@@ -337,6 +347,7 @@ impl AwsContext {
                 async {
                     self.verification_policy("sso", "GetRoleCredentials")
                         .await?;
+                    self.verification_active()?;
                     self.runtime.aws.resolve_sso(&snapshot).await.map_err(|_| {
                         ContextError::new(
                             "CredentialsError",
@@ -368,6 +379,7 @@ impl AwsContext {
         let sdk = fixed_sdk_config(credentials, &snapshot.region, self.runtime.clock.clone());
         let caller=self.runtime.scheduler.run(&verification_scope,"sts",crate::scheduler::ResourceKind::Ordinary,async {
             self.verification_policy("sts","GetCallerIdentity").await?;
+            self.verification_active()?;
             self.runtime.aws.caller_identity(&sdk).await.map_err(|_|
                 ContextError::new("IdentityVerificationFailed","AWS identity verification failed; check the selected SSO session and try again"))
         }).await.map_err(|_|ContextError::new("VerificationDeadline","Identity verification reached its local work limit; try connecting again"))??;
@@ -579,9 +591,51 @@ mod shared_verification_tests {
         backend.release.notify_one();
         let failure = request.await.unwrap().unwrap_err();
         assert_eq!(failure.error_type, "StaleContext");
+        assert_eq!(backend.callers.load(Ordering::SeqCst), 0);
         assert!(context.state.lock().session.is_none());
         assert_eq!(backend.resolves.load(Ordering::SeqCst), 1);
     }
+    #[tokio::test]
+    async fn invalidation_while_queued_prevents_credential_provider_dispatch() {
+        let (_dir, backend, context) = fixture();
+        let scope = crate::scheduler::WorkScope::new(
+            "synthetic-capacity-owner".into(),
+            context.account_id.clone(),
+            context.region.clone(),
+            crate::process::ProcessCancellation::new(),
+            crate::scheduler::WorkBudget::for_widget("identity"),
+        );
+        let mut permits = Vec::new();
+        for _ in 0..4 {
+            permits.push(
+                context
+                    .runtime
+                    .scheduler
+                    .acquire(&scope, "sso", crate::scheduler::ResourceKind::Ordinary)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let request = tokio::spawn({
+            let context = context.clone();
+            async move { context.verified_session().await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while context.runtime.scheduler.snapshot().queued == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        context.invalidate("SyntheticChange", "synthetic context changed");
+        drop(permits);
+        let failure = request.await.unwrap().unwrap_err();
+        assert_eq!(failure.error_type, "StaleContext");
+        assert_eq!(backend.resolves.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.callers.load(Ordering::SeqCst), 0);
+        assert!(context.state.lock().session.is_none());
+    }
+
     #[tokio::test]
     async fn policy_revocation_after_credentials_blocks_identity_dispatch() {
         let (dir, backend, context) = fixture();

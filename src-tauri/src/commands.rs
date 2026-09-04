@@ -773,6 +773,25 @@ async fn widget_fetch_request(
         inputs.clone()
     };
     let key = json!([authority_key, name, normalized_inputs]).to_string();
+    let cacheable = crate::result_cache::cacheable(&name);
+    if cacheable && params.get("reuse_result").and_then(Value::as_bool) == Some(true) {
+        // Identity/configuration and all current operation gates were checked
+        // above. A hit does not refresh credentials or extend data age.
+        if let Some(result) = state.results.get(&key) {
+            if let Err(error) = validate_request_context(state, &resolved, &session) {
+                return Ok(error);
+            }
+            if cancellation.is_cancelled() {
+                return Ok(crate::work_registry::cancelled_result());
+            }
+            request
+                .runtime(&state.runtime)
+                .audit(json!({"kind":"widget", "widget":name, "event":"cache_hit"}));
+            return Ok(result);
+        }
+    }
+    let cache_key = key.clone();
+    let cache = state.results.clone();
     let state_owned = state.clone();
     let runtime = request.runtime(&state.runtime);
     let result = state
@@ -814,7 +833,18 @@ async fn widget_fetch_request(
                 policy,
                 cli,
             };
-            run_widget_job(state_owned, resolved, session, wctx, policy_revision).await
+            let result = run_widget_job(
+                state_owned,
+                resolved,
+                session,
+                wctx.clone(),
+                policy_revision,
+            )
+            .await;
+            if cacheable {
+                cache.insert(cache_key, &result, wctx.runtime.clock.now_epoch());
+            }
+            result
         })
         .await;
     Ok(result)

@@ -15,6 +15,7 @@ mod dashboard;
 mod paths;
 mod process;
 mod request;
+mod result_cache;
 mod runtime;
 mod scheduler;
 mod settings;

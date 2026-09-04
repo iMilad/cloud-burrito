@@ -593,6 +593,8 @@
     }
     const result = await invokeOwnedRequest(request, "widget_fetch", {
       widget: widgetName, inputs: inputs || {}, context: request.context,
+      ...(["cfn-stack-detail", "pipeline-execution-detail", "codeartifact-package-version-history"].includes(widgetName)
+        ? { reuse_result: !request.resultHost?._resultView } : {}),
     });
     if (queryWidget && request.current() && request.accept(result)) rememberQueryRecovery(widget, request, inputs, result);
     return result;
@@ -691,6 +693,7 @@
     const labels = { loading: "Loading", success: "Updated", empty: "Empty response", limited: "Limited result", partial: "Partial result", stale: "Stale evidence", denied: "Denied", expired: "Credentials expired", failed: "Failed", cancelled: "Cancelled" };
     const status = el("div", { class: "result-status small", "data-state": state },
       el("strong", {}, labels[state] || "Result"));
+    if (view?.cached) status.appendChild(el("span", { class: "result-cached" }, "Cached evidence · original capture time"));
     if (view?.receivedAt) status.appendChild(el("time", { datetime: view.receivedAt, class: "result-received" }, `Received ${new Date(view.receivedAt).toLocaleString()}`));
     const context = view?.context || (spec?._request?.context_id ? spec._request : null);
     if (context) status.appendChild(el("div", { class: "result-context" }, `Profile: ${context.profile} · Verified account: ${context.account_id} · Region: ${context.region}`));
@@ -1035,6 +1038,11 @@
     if (!request.current() || spec._request.id !== request.id) return;
     if (!validCoverage(spec.coverage)) return failResult(host, request, "Response coverage metadata was invalid.");
     if (!validResultShape(spec)) return failResult(host, request, "Response data shape was invalid.");
+    const cache = spec._cache;
+    if (cache !== undefined && (!cache || cache.hit !== true || !Number.isFinite(cache.captured_at)
+        || cache.captured_at < 0 || cache.captured_at * 1000 > Date.now() + 1000 || cache.max_age_seconds !== 15)) {
+      return failResult(host, request, "Response freshness metadata was invalid.");
+    }
     const previous = host._resultView?.key === request.resultKey ? host._resultView : null;
     if (resultFailure(spec) && !resultHasEvidence(spec) && previous) {
       return failResult(host, request, spec.error || spec.data?.error || spec.reason || "The refresh did not complete.", spec);
@@ -1043,7 +1051,7 @@
     try { render(); } finally { host._renderingResult = false; }
     const state = resultState(spec);
     const usable = !resultFailure(spec) || resultHasEvidence(spec);
-    const view = { key: request.resultKey, receivedAt: new Date().toISOString(), context: spec._request, state, coverage: spec.coverage,
+    const view = { key: request.resultKey, receivedAt: new Date(cache ? cache.captured_at * 1000 : Date.now()).toISOString(), cached: !!cache, context: spec._request, state, coverage: spec.coverage,
       nodes: Array.from(host.childNodes).filter(node => !node.classList?.contains("result-status")) };
     if (usable) host._resultView = view;
     else delete host._resultView;
@@ -1589,8 +1597,9 @@
           not_attempted: "Query cleanup: stop not attempted",
         };
         const cleanup = field("cleanup_status");
-        detail = entry.event === "query_cleanup" && Object.hasOwn(cleanupLabels, cleanup)
-          ? cleanupLabels[cleanup] : field("error_type") || "Widget diagnostic";
+        detail = entry.event === "cache_hit" ? "Result reused from memory"
+          : entry.event === "query_cleanup" && Object.hasOwn(cleanupLabels, cleanup)
+            ? cleanupLabels[cleanup] : field("error_type") || "Widget diagnostic";
         const failed = entry.failed_count ?? entry.failed;
         const failedCount = Number.isSafeInteger(failed) && failed >= 0 ? `${failed} failed` : "";
         extra = [field("request_id"), failedCount].filter(Boolean).join(" · ");

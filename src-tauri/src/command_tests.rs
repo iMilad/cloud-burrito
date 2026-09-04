@@ -2250,7 +2250,13 @@ async fn policy_change_keeps_unknown_query_cleanup_and_recovery_in_final_envelop
     ctx.runtime = fixture.state.runtime.with_work(scope);
     ctx.account_id = ACCOUNT_A.into();
     ctx.policy = policy;
-    let job = Box::pin(run_widget_job(fixture.state.clone(), resolved, session, ctx, revision));
+    let job = Box::pin(run_widget_job(
+        fixture.state.clone(),
+        resolved,
+        session,
+        ctx,
+        revision,
+    ));
     let revoke = async {
         while http.calls() == 0 {
             tokio::task::yield_now().await;
@@ -2272,4 +2278,157 @@ async fn policy_change_keeps_unknown_query_cleanup_and_recovery_in_final_envelop
     assert_eq!(result["recovery_pending"].as_array().unwrap().len(), 1);
     http.assert_finished();
     fixture.no_process();
+}
+async fn seed_verified_detail(fixture: &Fixture) -> (Value, String) {
+    fixture.connect_a("CB_SYNTHETIC_CACHE_A", 3000).await;
+    let params = json!({"widget":"cfn-stack-detail","inputs":{"stack_name":"synthetic-stack"},"reuse_result":true,"request_id":"synthetic-cache-read"});
+    let policy = fixture.policy();
+    let revision = fixture.state.observe_policy(&policy);
+    let resolved = resolve_widget_ctx(&fixture.state, &params).unwrap();
+    let session = verify_request_context(&fixture.state, &resolved, &policy)
+        .await
+        .unwrap();
+    let authority = json!([
+        resolved.context.id(),
+        session.provider_revision,
+        session.snapshot.settings_revision,
+        revision,
+        session.identity.account_id,
+        session.identity.arn,
+        session.identity.user_id,
+        session.snapshot.profile,
+        session.snapshot.config_path,
+        session.snapshot.region
+    ])
+    .to_string();
+    let key = json!([authority, "cfn-stack-detail", params["inputs"]]).to_string();
+    fixture.state.results.insert(key.clone(),&json!({"render":"table","columns":["stack"],"rows":[{"stack":"synthetic-cache-evidence"}],"coverage":{"completeness":"complete"}}),1200.0);
+    (params, key)
+}
+
+#[tokio::test]
+async fn cached_detail_is_reverified_and_preserves_capture_time_and_request_owner() {
+    let fixture = Fixture::new();
+    let (params, _) = seed_verified_detail(&fixture).await;
+    let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(result["_cache"]["hit"], true);
+    assert_eq!(result["_cache"]["captured_at"], 1200.0);
+    assert_eq!(result["_request"]["id"], "synthetic-cache-read");
+    assert_eq!(result["_request"]["account_id"], ACCOUNT_A);
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
+    fixture.no_process();
+    let audit = crate::audit::try_tail(&fixture.state.runtime.paths, 100).unwrap();
+    assert_eq!(
+        audit.iter().filter(|e| e["event"] == "cache_hit").count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn cached_protected_data_cannot_survive_a_new_deny_or_refreshed_principal() {
+    for change in ["policy", "principal"] {
+        let fixture = Fixture::new();
+        let (params, key) = seed_verified_detail(&fixture).await;
+        if change == "policy" {
+            std::fs::write(
+                fixture.state.runtime.paths.data_file("policy.yaml"),
+                "statements:\n  - effect: Deny\n    action: ['*:*']\n",
+            )
+            .unwrap();
+        } else {
+            fixture.clock.0.store(2980, Ordering::SeqCst);
+            fixture.aws.ready(
+                "demo-a",
+                "CB_SYNTHETIC_CACHE_CHANGED",
+                ACCOUNT_A,
+                "changed-principal",
+                5000,
+            );
+        }
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert!(result.get("_cache").is_none(), "{change}: {result}");
+        assert!(result.get("rows").is_none());
+        assert!(fixture.state.results.get(&key).is_none());
+        fixture.no_process();
+    }
+}
+
+#[tokio::test]
+async fn saved_configuration_change_clears_detail_results_before_reuse() {
+    let fixture = Fixture::new();
+    let (_, key) = seed_verified_detail(&fixture).await;
+    settings::save(
+        &fixture.state.runtime.storage,
+        &json!({"aws_config_path":"synthetic-other-config.ini"}),
+    )
+    .unwrap();
+    load_settings(&fixture.state).unwrap();
+    assert!(fixture.state.results.get(&key).is_none());
+}
+
+#[tokio::test]
+async fn cached_detail_commands_isolate_account_profile_and_region() {
+    for dimension in ["account", "profile", "region"] {
+        let fixture = Fixture::new();
+        let (original, original_key) = seed_verified_detail(&fixture).await;
+        let (profile, account, region) = match dimension {
+            "account" => ("demo-b", ACCOUNT_B, "us-east-1"),
+            "profile" => ("synthetic-profile-alias", ACCOUNT_A, "us-east-1"),
+            _ => ("demo-a", ACCOUNT_A, "eu-west-1"),
+        };
+        if dimension == "profile" {
+            fixture.aws.profile(profile, account);
+        }
+        fixture.aws.ready(
+            profile,
+            "CB_SYNTHETIC_CACHE_ISOLATED",
+            account,
+            "principal-a",
+            3000,
+        );
+        let mut params = original.clone();
+        params["context"] =
+            json!({"mode":"pinned","profile":profile,"account_id":account,"region":region});
+        params["request_id"] = json!("synthetic-isolated-cache-read");
+        let policy = fixture.policy();
+        let revision = fixture.state.observe_policy(&policy);
+        let resolved = resolve_widget_ctx(&fixture.state, &params).unwrap();
+        let session = verify_request_context(&fixture.state, &resolved, &policy)
+            .await
+            .unwrap();
+        let authority = json!([
+            resolved.context.id(),
+            session.provider_revision,
+            session.snapshot.settings_revision,
+            revision,
+            session.identity.account_id,
+            session.identity.arn,
+            session.identity.user_id,
+            session.snapshot.profile,
+            session.snapshot.config_path,
+            session.snapshot.region
+        ])
+        .to_string();
+        let isolated_key = json!([authority, "cfn-stack-detail", params["inputs"]]).to_string();
+        assert_ne!(original_key, isolated_key, "{dimension}");
+        fixture.state.results.insert(isolated_key, &json!({"render":"table","columns":["stack"],
+            "rows":[{"stack":"synthetic-isolated-evidence"}],"coverage":{"completeness":"complete"}}), 1230.0);
+        let isolated = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert_eq!(
+            isolated["rows"][0]["stack"], "synthetic-isolated-evidence",
+            "{dimension}"
+        );
+        assert_eq!(isolated["_cache"]["captured_at"], 1230.0);
+        assert_eq!(isolated["_request"]["account_id"], account);
+        assert_eq!(isolated["_request"]["region"], region);
+        // Returning to the original verified context finds its own evidence.
+        let original_result = widget_fetch_impl(&fixture.state, original).await.unwrap();
+        assert_eq!(
+            original_result["rows"][0]["stack"], "synthetic-cache-evidence",
+            "{dimension}"
+        );
+        assert_eq!(original_result["_cache"]["captured_at"], 1200.0);
+        fixture.no_process();
+    }
 }

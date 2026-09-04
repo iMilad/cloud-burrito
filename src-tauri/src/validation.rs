@@ -60,6 +60,7 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
                 &[
                     "request_id",
                     "widget",
+                    "reuse_result",
                     "inputs",
                     "context",
                     "account_override",
@@ -68,6 +69,11 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
             request_id(p)?;
             request_context(p)?;
             let name = required_text(p, "widget", 128, false)?;
+            if let Some(value) = p.get("reuse_result") {
+                if !value.is_boolean() || !crate::result_cache::cacheable(name) {
+                    return Err("Result reuse is only available for reviewed detail reads");
+                }
+            }
             let empty = Map::new();
             let inputs = match p.get("inputs") {
                 None => &empty,

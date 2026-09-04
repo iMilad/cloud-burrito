@@ -88,6 +88,7 @@ pub struct AppState {
     pub(crate) connection: Arc<Mutex<ConnectionState>>,
     pub(crate) work: Arc<crate::work_registry::WorkRegistry>,
     observed_policy: Arc<Mutex<(Option<String>, u64)>>,
+    pub(crate) results: Arc<crate::result_cache::ResultCache>,
 }
 
 impl AppState {
@@ -98,6 +99,7 @@ impl AppState {
             connection: Arc::default(),
             work: Arc::default(),
             observed_policy: Arc::default(),
+            results: Arc::default(),
         }
     }
 
@@ -131,6 +133,7 @@ impl AppState {
             observed.1 += 1;
             if changed {
                 self.work.cancel_jobs();
+                self.results.clear();
             }
         }
         observed.1
@@ -157,6 +160,7 @@ impl AppState {
             state.settings_revision += 1;
             if was_configured {
                 self.work.cancel_all();
+                self.results.clear();
                 state.attempt += 1;
                 state.active = None;
                 state.overrides.clear();
@@ -176,6 +180,7 @@ impl AppState {
     /// A broken app-settings file cannot leave a formerly verified context usable.
     pub(crate) fn invalidate_settings(&self) {
         self.work.cancel_all();
+        self.results.clear();
         let mut state = self.connection.lock();
         if !state.settings_failed {
             state.settings_failed = true;
@@ -203,6 +208,7 @@ impl AppState {
     }
 
     pub(crate) fn invalidate_context(&self, id: u64, error_type: &str, message: &str) {
+        self.results.clear();
         let mut state = self.connection.lock();
         state
             .pending_contexts
