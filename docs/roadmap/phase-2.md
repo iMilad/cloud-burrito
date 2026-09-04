@@ -1,6 +1,6 @@
 # P2 — Make the core dependable
 
-Status: **P2-01–05 complete locally; P2-06 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
+Status: **P2-01–06 complete locally; P2-07 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
 Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
 
@@ -125,6 +125,8 @@ P2 must preserve and propagate partial/truncated/error metadata for existing cap
 **Review units:** live lookup repair; explicit handoff/context plumbing; complete flagship synthetic acceptance. These are separate reviewable slices.
 
 ### P2-06 — Align the beta surface with working behavior
+
+**Complete locally:** [implementation and validation evidence](p2-06-evidence.md).
 
 **Scope:** visible controls and help text; CB-J01/CB-J03/CB-J04.
 

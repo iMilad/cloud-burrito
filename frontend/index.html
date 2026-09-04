@@ -36,8 +36,8 @@
         </select>
       </div>
       <span class="sr-only" id="topbar-picker-status" aria-live="polite"></span>
-      <span class="ro-badge" title="Browses resources through approved operations. Logs Insights queries can incur AWS charges. Use a least-privilege role.">
-        <span class="ro-dot"></span>READ-ONLY
+      <span class="ro-badge" title="Resource reads use reviewed operations. Queries can incur charges, and SSO obtains temporary credentials. See Identity details.">
+        <span class="ro-dot"></span>RESOURCE READS
       </span>
       <span class="core-status" id="core-status" data-state="unknown" title="Backend core status">
         <span class="core-dot"></span>
@@ -47,14 +47,6 @@
         <span class="core-dot"></span>
         <span class="core-label">auth: —</span>
       </span>
-    </div>
-    <div class="topbar-center">
-      <div class="search">
-        <span class="search-icon">⌕</span>
-        <input id="global-search" type="text" aria-label="Global search"
-          placeholder="Search any resource, ARN, stack, or log group…" />
-        <span class="search-hint">⌘K</span>
-      </div>
     </div>
     <div class="topbar-right">
       <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout">↺</button>
@@ -85,6 +77,7 @@
     <button type="button" class="btn btn-ghost small" id="appearance-settings">Open Settings to save</button>
   </div>
   <p id="layout-save-status" class="save-status" role="status" hidden></p>
+  <p id="clipboard-status" class="sr-only" role="status"></p>
 
   <main class="dashboard">
     <div class="grid-stack" id="grid-stack">
@@ -151,8 +144,6 @@
               <h2 class="widget-title">Lambda Logs</h2>
               <span class="widget-sub">Lambda functions and CloudWatch logs</span>
               <div class="widget-actions">
-                <span class="dot dot-live"></span>
-                <button class="icon-btn" title="Pause">‖</button>
                 <button class="icon-btn" title="Refresh">↻</button>
                 <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
                 <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
@@ -189,7 +180,7 @@
           <article class="widget" data-widget="resource-lookup">
             <header class="widget-header">
               <h2 class="widget-title">Resource Reverse Lookup</h2>
-              <span class="widget-sub">Find the stack that owns a resource</span>
+              <span class="widget-sub">Search tagged resources and inspect confirmed stack associations</span>
               <div class="widget-actions">
                 <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
                 <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
@@ -204,12 +195,12 @@
         </div>
       </div>
 
-      <!-- Errors by Stack -->
+      <!-- Log Error Counts -->
       <div class="grid-stack-item" gs-id="errors-by-stack" gs-x="4" gs-y="6" gs-w="8" gs-h="3" gs-min-w="3" gs-min-h="2">
         <div class="grid-stack-item-content">
           <article class="widget" data-widget="errors-by-stack">
             <header class="widget-header">
-              <h2 class="widget-title">Errors by Stack</h2>
+              <h2 class="widget-title">Log Error Counts</h2>
               <span class="widget-sub">CloudWatch errors in the last 24 hours</span>
               <div class="widget-actions">
                 <button class="icon-btn" title="Refresh">↻</button>
@@ -279,16 +270,7 @@
         <div class="prebuilt-list" id="prebuilt-list"></div>
       </section>
 
-      <section class="panel-section">
-        <h3 class="panel-section-title">Describe with AI</h3>
-        <p class="muted">Describe what you want to see. AI will draft a widget you can review, edit, and save.</p>
-        <textarea id="ai-prompt" rows="4" placeholder="e.g. Show me lambdas that errored in the last hour, grouped by which CFN stack owns them, with a one-click tail of each."></textarea>
-        <div class="ai-actions">
-          <button class="btn btn-ghost" id="ai-cancel">Cancel</button>
-          <button class="btn btn-primary" id="ai-generate">Generate</button>
-        </div>
-        <pre class="ai-output" id="ai-output" hidden></pre>
-      </section>
+
     </div>
   </aside>
 
@@ -331,7 +313,7 @@
             <span id="settings-theme-error" class="field-error" hidden></span>
           </label>
           <p class="muted small">Blank fields use the defaults shown. Appearance changes are previews until you save.</p>
-          <p class="muted small">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. Cloud Burrito does not create credentials or start a login process.</p>
+          <p class="muted small">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. The app uses your existing SSO session to obtain temporary AWS credentials; it does not start an interactive login.</p>
           <p class="muted small">
             The app checks requested operations against its supported list and
             your policy before execution. Logs Insights requires permission to
@@ -346,7 +328,7 @@
         </form>
       </section>
       <section class="panel-section">
-        <h3 class="panel-section-title">Read-only policy</h3>
+        <h3 class="panel-section-title">Operation policy</h3>
         <p class="muted small">
           IAM-style allowlist. Explicit Deny &gt; Allow &gt; default-deny; globs
           <code>*</code> and <code>?</code> work. It can only narrow what the app

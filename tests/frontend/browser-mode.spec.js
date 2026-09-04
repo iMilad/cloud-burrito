@@ -39,10 +39,20 @@ test("starts in browser mode and renders mock widgets", async ({ page }) => {
   await expect(stackWidget(page).locator(".table-filter-count")).toHaveText("4");
 });
 
-test("supports the topbar shortcut and persistent region picker", async ({ page }) => {
+test("omits the unavailable global search shortcut and keeps the persistent region picker", async ({ page }) => {
   const globalSearch = page.getByRole("textbox", { name: "Global search" });
+  await expect(globalSearch).toHaveCount(0);
+  const filter = stackWidget(page).getByRole("textbox", { name: "Search stacks (name, status, or date)…" });
+  await filter.focus();
+  await page.evaluate(() => {
+    window.__shortcutPrevented = null;
+    document.addEventListener("keydown", event => {
+      if (event.ctrlKey && event.key.toLowerCase() === "k") window.__shortcutPrevented = event.defaultPrevented;
+    });
+  });
   await page.keyboard.press("Control+K");
-  await expect(globalSearch).toBeFocused();
+  await expect(globalSearch).toHaveCount(0);
+  expect(await page.evaluate(() => window.__shortcutPrevented)).toBe(false);
 
   const region = page.getByRole("combobox", { name: "Default region" });
   await region.click();
@@ -76,6 +86,70 @@ test("supports the topbar shortcut and persistent region picker", async ({ page 
   await expect(stackWidget(page).locator(".widget-context")).toHaveText(
     "Default · (none) · (none) · us-east-1"
   );
+});
+
+test("beta exposes working widget controls and honest log-count naming", async ({ page }) => {
+  await expect(page.locator("#global-search, #ai-prompt, #ai-generate, #ai-output")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toHaveCount(0);
+  await expect(page.locator(".dot-live")).toHaveCount(0);
+  await expect(page.locator('[data-widget="errors-by-stack"] .widget-title')).toHaveText("Log Error Counts");
+  await expect(page.locator(".ro-badge")).toHaveText("RESOURCE READS");
+
+  const filter = stackWidget(page).getByRole("textbox", { name: "Search stacks (name, status, or date)…" });
+  await filter.fill("inventory");
+  await expect(visibleStackRows(page)).toHaveCount(1);
+  await expect(visibleStackRows(page)).toContainText("inventory");
+  await filter.clear();
+
+  await page.locator("#add-widget-btn").click();
+  const panel = page.locator("#side-panel");
+  await expect(panel).toHaveAttribute("aria-hidden", "false");
+  await expect(panel.getByRole("heading", { name: "Add a widget" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Describe with AI" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Generate", exact: true })).toHaveCount(0);
+  const catalogItem = panel.locator(".prebuilt-item").filter({ has: page.locator(".prebuilt-name", { hasText: /^Log Error Counts$/ }) });
+  await expect(catalogItem).toHaveCount(1);
+  await catalogItem.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(panel).toHaveAttribute("aria-hidden", "true");
+  await expect(page.locator('[data-widget="errors-by-stack"]')).toHaveCount(2);
+  await expect(page.locator('[data-widget="errors-by-stack"] .widget-title')).toHaveText(["Log Error Counts", "Log Error Counts"]);
+  await expect(page.locator("#grid-stack > .grid-stack-item")).toHaveCount(7);
+  await expect(page.locator(".dot-live, button[title='Pause']")).toHaveCount(0);
+});
+
+test("clipboard denial stays truthful and a synthetic retry reports success", async ({ page }) => {
+  await page.clock.install();
+  await page.evaluate(() => {
+    const fixture = window.__clipboardFixture = { allowed: false, writes: [], fallbackCalls: [] };
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async text => {
+        fixture.writes.push(text);
+        if (!fixture.allowed) throw new DOMException("Synthetic clipboard denial", "NotAllowedError");
+      },
+    } });
+    document.execCommand = command => { fixture.fallbackCalls.push(command); return false; };
+  });
+  const version = "1.2.1.260701.093637+9c0581c";
+  const row = codeArtifactRows(page).filter({ hasText: "example-config-library" });
+  const copy = row.getByRole("button", { name: `Copy latest version ${version}` });
+  const original = await copy.textContent();
+  await copy.click();
+  await expect(copy).toHaveText("Copy failed");
+  await expect(copy).toHaveAttribute("data-copy-state", "failed");
+  await expect(codeArtifactWidget(page).locator("tr.row-detail")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__clipboardFixture.writes)).toEqual([version]);
+  expect(await page.evaluate(() => window.__clipboardFixture.fallbackCalls)).toEqual(["copy"]);
+  await page.clock.fastForward(2_000);
+  await expect(copy).toHaveText(original);
+
+  await page.evaluate(() => { window.__clipboardFixture.allowed = true; });
+  await copy.click();
+  await expect(copy).toHaveText("✓");
+  await expect(copy).toHaveAttribute("data-copy-state", "copied");
+  expect(await page.evaluate(() => window.__clipboardFixture.writes)).toEqual([version, version]);
+  expect(await page.evaluate(() => window.__clipboardFixture.fallbackCalls)).toEqual(["copy"]);
+  await page.clock.fastForward(2_000);
+  await expect(copy).toHaveText(original);
 });
 
 test("filters and expands CloudFormation mock stacks", async ({ page }) => {

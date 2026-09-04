@@ -82,6 +82,23 @@ async function boot(page, options = {}) {
 const calls = (page, command) => page.evaluate(command => window.__firstRun.calls.filter(call => call.command === command), command);
 const cliFetches = page => page.evaluate(() => window.__firstRun.calls.filter(call => call.command === "widget_fetch" && call.params.widget === "aws-cli"));
 
+test("identity details distinguish resource reads, query control and credential operations", async ({ page }) => {
+  const remote = await boot(page);
+  await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
+  await page.locator("#connection-details").click();
+  const panel = page.locator("#identity-panel");
+  await expect(panel).toHaveAttribute("aria-hidden", "false");
+  for (const category of ["Resource reads", "Query control", "Credentials"]) {
+    await expect(panel.getByText(category, { exact: true })).toBeVisible();
+  }
+  await expect(panel.locator(".identity-scope")).toContainText("infrastructure changes are not supported");
+  await expect(panel.locator(".identity-scope")).toContainText("starts and stops queries and can incur AWS charges");
+  await expect(panel.locator(".identity-scope")).toContainText("does not confirm a remote stop");
+  await expect(panel.locator(".identity-scope")).toContainText("temporary AWS credentials");
+  await expect(panel).toContainText(identity.account_id);
+  expect(remote).toEqual([]);
+});
+
 for (const state of ["missing_config", "unreadable_config", "malformed_config", "no_profiles"]) {
   test(`${state} offers visible recovery, ignores old profile cache, and retries without restart`, async ({ page }) => {
     const remote = await boot(page, { discovery: state });

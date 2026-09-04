@@ -100,7 +100,7 @@ button { font-family: inherit; color: inherit; }
 /* ============ Top bar ============ */
 .topbar {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
   padding: 6px var(--space-4);

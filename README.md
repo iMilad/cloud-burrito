@@ -233,17 +233,39 @@ CLI coverage can remain unknown after output projection; shortened nested JSON
 cells are marked. Existing CodeBuild log reads stop between whole pages after
 the event threshold, so their reported event count can exceed that threshold.
 
-| Widget | What it shows |
-| --- | --- |
-| `cfn-stacks` | Searchable non-deleted CloudFormation stacks with status, resource count, resources, and recent events |
-| `log-tail` | Lambda function browser with ARN/update/log-group details, log streams, and events |
-| `cloudwatch-logs` | Search CloudWatch log groups, browse their streams, and view events |
-| `errors-by-stack` | CloudWatch errors grouped by stack over a selected time window, with in-widget filtering |
-| `resource-lookup` | Reverse-lookup: find the CloudFormation stack that owns a resource |
-| `pipeline-runs` | Recent CodePipeline executions with expandable detail, plus pinned pipelines across accounts and regions |
-| `codeartifact-packages` | Latest package versions in CodeArtifact filtered by package prefix |
-| `logs-insights` | Your own CloudWatch Logs Insights query against any log group, rendered as a table |
-| `aws-cli` | A supported resource-read `aws` command with reviewed arguments, JSON output rendered as a table |
+| Widget | Stable ID | Available behavior |
+| --- | --- | --- |
+| CloudFormation Stacks | `cfn-stacks` | Filter returned non-deleted stacks, inspect resources and recent events, and refresh; failed enrichment and event limits remain visible |
+| Lambda Logs | `log-tail` | Filter functions, inspect their logging configuration, load streams and view events; a default log-group naming convention is labelled unverified |
+| CloudWatch Logs | `cloudwatch-logs` | Filter loaded log groups, search AWS with Enter, load streams and view events |
+| Log Error Counts | `errors-by-stack` | Bounded Logs Insights counts for sampled log groups over the last 24 hours by default, with local filtering; these are not verified stack ownership or complete account-wide counts |
+| Resource Reverse Lookup | `resource-lookup` | Search tagged resource ARNs and show a confirmed stack association only when reviewed, exact evidence establishes it; other associations remain unknown |
+| Pipeline Runs | `pipeline-runs` | Select a pipeline, load executions, inspect action/build evidence, and keep independently scoped pinned pipelines |
+| CodeArtifact Packages | `codeartifact-packages` | Load packages by domain, repository and prefix; inspect available version information and partial failures |
+| Logs Insights Query | `logs-insights` | Run a query for a supplied log group and time range; inspect rows, query statistics and reported cleanup status |
+| AWS CLI Table | `aws-cli` | Run or pin one of the 18 supported resource-read commands with reviewed arguments, including `sts get-caller-identity`; inspect JSON output as a table |
+
+The beta exposes these implemented widgets and their local filters. It does not
+include a global resource-search box or an AI widget generator. Log views load
+on explicit actions; a displayed result is not a continuously streaming feed.
+The error-count widget can run bounded Logs Insights queries when loaded or
+refreshed, and both query widgets can incur AWS charges. Error counts match the
+case-sensitive text `ERROR`; discovery covers its first page and at most 20
+matching log groups, with query-result limits reported in the result coverage.
+
+Resource lookup checks ownership only for reviewed unqualified Lambda functions,
+CloudWatch log groups and EC2 instances. It requires an exact physical identifier
+and resource type, with one consistent stack ARN in the verified account/region.
+Unsupported types, denied lookups, missing evidence and ambiguous responses keep
+the resource match without an ownership claim. A manually selected stack remains
+an explicit user choice. Searching tagged resources does not discover every AWS
+resource or establish that an unmatched resource is absent.
+
+All live widgets require a verified SSO context and permitted operations. A
+missing local CLI affects only the CLI widget. Empty results, denied requests,
+failed loads and limited coverage have distinct messages and recovery controls.
+The [beta control inventory](docs/roadmap/p2-06-evidence.md) records the retained
+controls and their prerequisites; native acceptance remains pending.
 
 Widget payloads may use stable machine keys such as `latest_version`,
 `last_published`, or `execution_id`, but the UI must not show those raw names as

@@ -2229,6 +2229,13 @@
       dl.appendChild(el("dd", { class: "mono" }, v || "(empty)"));
     });
     wrap.appendChild(dl);
+    const scope = el("dl", { class: "identity-kv identity-scope" });
+    for (const [label, text] of [
+      ["Resource reads", "Reviewed operations inspect resources; infrastructure changes are not supported."],
+      ["Query control", "Logs Insights starts and stops queries and can incur AWS charges. A cancelled local request does not confirm a remote stop."],
+      ["Credentials", "Your existing SSO session obtains temporary AWS credentials, which STS verifies before resource access. The SDK can renew a named SSO session token."],
+    ]) scope.append(el("dt", {}, label), el("dd", {}, text));
+    wrap.appendChild(scope);
 
     const actions = el("div", { class: "identity-actions" });
     actions.appendChild(el("button", {
@@ -2264,12 +2271,8 @@
   });
   $("#appearance-settings").addEventListener("click", openSettingsPanel);
 
-  // Cmd-K focuses the global search; Esc closes the side panel.
+  // Escape closes the active side panel.
   document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      $("#global-search").focus();
-    }
     if (e.key === "Escape") {
       closeSidePanel();
       closeSettingsPanel();
@@ -3423,30 +3426,44 @@
     host.appendChild(list);
   }
 
-  function copyToClipboard(text, btn) {
-    const flash = () => {
-      if (!btn) return;
-      const prev = btn.textContent;
-      btn.textContent = btn.classList.contains("exec-icon-btn") ? "✓" : "Copied";
-      setTimeout(() => { btn.textContent = prev; }, 1200);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(flash).catch(() => fallbackCopy(text, flash));
-    } else {
-      fallbackCopy(text, flash);
-    }
+  async function copyToClipboard(text, btn) {
+    // Feedback reflects the clipboard result; a rejected fallback is not a copy.
+    const intent = btn ? (btn._copyIntent || 0) + 1 : 0;
+    if (btn) { btn._copyIntent = intent; btn._copyLabel ??= btn.textContent; }
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch (_) { /* Try the local fallback below. */ }
+    if (!copied) copied = fallbackCopy(text);
+    if (!btn || btn._copyIntent !== intent) return;
+    btn.textContent = copied ? btn.classList.contains("exec-icon-btn") ? "✓" : "Copied" : "Copy failed";
+    btn.dataset.copyState = copied ? "copied" : "failed";
+    const status = $("#clipboard-status");
+    if (status) status.textContent = copied ? "Copied to clipboard." : "Copy failed. Try again.";
+    setTimeout(() => {
+      if (btn._copyIntent !== intent) return;
+      btn.textContent = btn._copyLabel;
+      delete btn.dataset.copyState;
+    }, 1600);
   }
 
-  function fallbackCopy(text, done) {
+  function fallbackCopy(text) {
+    const focused = document.activeElement;
     const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed";
     ta.style.opacity = "0";
+    ta.setAttribute("aria-label", "Temporary clipboard text");
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand("copy"); } catch (_e) { /* ignore */ }
-    document.body.removeChild(ta);
-    done();
+    let copied = false;
+    try { copied = document.execCommand("copy") === true; } catch (_) { /* Report failure. */ }
+    ta.remove();
+    if (focused?.isConnected) focused.focus({ preventScroll: true });
+    return copied;
   }
 
   // ===== Render dispatcher =====
@@ -5384,7 +5401,7 @@
     { name: "CodeArtifact Packages",   desc: "Latest CodeArtifact package versions by prefix.",          gsId: "codeartifact-packages",   phase: 1 },
     { name: "CloudFormation Stacks",   desc: "Browse stacks, resources, and recent events.",              gsId: "cfn-stacks",              phase: 2 },
     { name: "Resource Reverse Lookup", desc: "Search resources and inspect confirmed stack associations.",                     gsId: "resource-lookup",         phase: 2 },
-    { name: "Errors by Stack",         desc: "CloudWatch errors by stack over the last 24 hours.",       gsId: "errors-by-stack",         phase: 2 },
+    { name: "Log Error Counts",         desc: "Bounded error counts from sampled CloudWatch log groups.",       gsId: "errors-by-stack",         phase: 2 },
     { name: "Logs Insights Query",     desc: "Run your own Logs Insights query on any log group.",       gsId: "logs-insights",           phase: 2 },
     { name: "AWS CLI Table",           desc: "Supported AWS read commands rendered as a table.",       gsId: "aws-cli",                 phase: 2 },
   ];
@@ -5406,8 +5423,7 @@
   }
 
   function buildPlaceholderTile(w) {
-    // Gives a visible placeholder if a catalog entry has no dedicated live
-    // renderer yet.
+    // Keep an unsupported saved widget visible with an honest recovery path.
     const item = el("div", {
       class: "grid-stack-item",
       "gs-id": w.gsId,
@@ -5418,18 +5434,16 @@
     const article = el("article", { class: "widget", "data-widget": w.gsId },
       el("header", { class: "widget-header" },
         el("h2", { class: "widget-title" }, w.name),
-        el("span", { class: "widget-sub" }, "Runtime wiring pending"),
+        el("span", { class: "widget-sub" }, "Unsupported saved widget"),
         el("div", { class: "widget-actions" },
-          el("button", { class: "icon-btn", title: "Refresh" }, "↻"),
           el("button", { class: "icon-btn fs-btn", title: "Fullscreen" }, "⛶"),
-          el("button", { class: "icon-btn cfg-btn", title: "Configure widget" }, "⚙"),
           el("button", { class: "icon-btn rm-btn", title: "Remove widget" }, "✕"),
         ),
       ),
       el("div", { class: "widget-body" },
         el("div", { class: "muted small" }, w.desc),
         el("div", { class: "muted small", style: "margin-top:8px;" },
-          "This widget has no live data source yet. Runtime wiring is pending."),
+          "This saved widget is not supported by this version. Remove it and add a supported widget from the catalogue."),
       ),
     );
     content.appendChild(article);
@@ -5439,8 +5453,6 @@
 
   function widgetActions(opts = {}) {
     const actions = [];
-    if (opts.liveDot) actions.push(el("span", { class: "dot dot-live" }));
-    if (opts.pause) actions.push(el("button", { class: "icon-btn", title: "Pause" }, "‖"));
     if (opts.refresh !== false) actions.push(el("button", { class: "icon-btn", title: "Refresh" }, "↻"));
     actions.push(el("button", { class: "icon-btn fs-btn", title: "Fullscreen" }, "⛶"));
     actions.push(el("button", { class: "icon-btn cfg-btn", title: "Configure widget" }, "⚙"));
@@ -5475,7 +5487,7 @@
     return buildWidgetTile(
       w,
       el("div", { class: "widget-body lambda-log-browser log-tail-body" }),
-      { w: 8, h: 6, liveDot: true, pause: true, refresh: true, sub: "Lambda functions and CloudWatch logs" },
+      { w: 8, h: 6, refresh: true, sub: "Lambda functions and CloudWatch logs" },
     );
   }
 
@@ -5514,7 +5526,7 @@
     return buildWidgetTile(
       w,
       el("div", { class: "widget-body errors-body" }),
-      { w: 8, sub: "CloudWatch errors in the last 24 hours" },
+      { w: 8, sub: "Error counts from sampled log groups" },
     );
   }
 
@@ -5748,7 +5760,7 @@
           ),
         ),
       ),
-      { w: 8, h: 5, refresh: true, sub: "Read-only aws command as a table" },
+      { w: 8, h: 5, refresh: true, sub: "Reviewed AWS resource-read command as a table" },
     );
   }
 
@@ -5897,89 +5909,7 @@
     loadSourceIntoPanel(name);
   });
 
-  // ===== Mock AI generation =====
-  $("#ai-generate").addEventListener("click", () => {
-    const prompt = $("#ai-prompt").value.trim();
-    const out = $("#ai-output");
-    if (!prompt) { out.hidden = true; return; }
-    out.hidden = false;
-    const sample = generateWidgetCode(prompt);
-    out.textContent = "// Generating widget…\n";
-    let i = 0;
-    const tick = () => {
-      out.textContent = "// Generating widget…\n" + sample.slice(0, i);
-      i += 18;
-      if (i < sample.length) setTimeout(tick, 18);
-      else out.textContent = sample;
-    };
-    tick();
-  });
-  $("#ai-cancel").addEventListener("click", () => {
-    $("#ai-prompt").value = "";
-    $("#ai-output").hidden = true;
-    $("#ai-output").textContent = "";
-  });
-
-  function generateWidgetCode(prompt) {
-    return `# widget.yaml
-name: "Lambdas with errors, grouped by stack"
-version: 1
-inputs:
-  hours: { type: number, default: 1 }
-refresh: 60s
-permissions:
-  - cloudwatch:read
-  - cloudformation:read
-
-# widget.py
-def fetch(ctx):
-    rows = ctx.steampipe.query("""
-      with errored as (
-        select log_group_name, count(*) as errors
-        from aws_cloudwatch_log_event
-        where region = $1
-          and timestamp > now() - interval '$2 hours'
-          and message ilike '%error%'
-        group by log_group_name
-      )
-      select e.log_group_name as lambda, e.errors,
-             r.stack_name as stack
-      from errored e
-      left join aws_cloudformation_stack_resource r
-        on r.physical_resource_id = replace(e.log_group_name, '/aws/lambda/', '')
-      order by e.errors desc
-      limit 25
-    """, [ctx.region, ctx.input("hours")])
-
-    return {
-      "render": "table",
-      "columns": ["lambda", "errors", "stack"],
-      "rows": rows,
-      "row_actions": [
-        {"label": "Tail",       "spawn_widget": "log-tail",
-         "inputs": {"log_group": "{lambda}"}},
-        {"label": "Open stack", "spawn_widget": "cfn-stack-detail",
-         "inputs": {"stack_name": "{stack}"}},
-      ],
-    }
-
-# (you wrote: ${truncate(prompt, 90)})`;
-  }
-
   function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
-
-  // ===== Spawn widget (from "Tail this lambda" buttons) =====
-  function spawnLogTailWidget(logGroup) {
-    const tile = $(".log-tail-body")?.closest(".widget");
-    if (!tile) return;
-    const sub = tile.querySelector(".widget-sub");
-    if (sub) sub.textContent = logGroup;
-    renderLogTail(tile);
-    tile.style.transition = "box-shadow 0.6s";
-    tile.style.boxShadow = "0 0 0 2px var(--accent)";
-    setTimeout(() => { tile.style.boxShadow = ""; }, 700);
-    tile.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }
 
   // ===== GridStack: drag, resize, persist =====
   // Tauri mode persists layout via the backend (dashboard_get / dashboard_set,
