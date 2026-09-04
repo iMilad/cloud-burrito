@@ -1,7 +1,19 @@
 {
   "bundle": {
-    "targets": ["deb", "appimage"],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
     "createUpdaterArtifacts": false,
-    "useLocalToolsDir": true
+    "useLocalToolsDir": true,
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "priority": "optional"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   }
 }
