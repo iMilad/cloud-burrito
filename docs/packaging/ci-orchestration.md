@@ -24,7 +24,7 @@ flowchart LR
     W --> I
     L --> I
     I --> C[Assemble complete set and independently verify]
-    C --> H[P5 handoff awaits separate authorization]
+    C --> H[P6 handoff awaits separate authorization]
 ```
 
 Native format checks run inside each build wrapper on its appropriate host.
@@ -126,6 +126,6 @@ controlled build; the assembled candidate alone cannot provide it.
 
 No P4 native build, inspection, remote run or repeat-build result is established
 by this template or its static test. Runner and helper availability remain open.
-P5 still needs the actual operating systems and the installation, first launch,
+P6 still needs the actual operating systems and the installation, first launch,
 runtime acquisition, data persistence, upgrade and uninstall journeys. Target
 rows retain their existing status until the corresponding evidence exists.

@@ -1,5 +1,7 @@
 # P2-07 — Keyboard and readable desktop use
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 Status: complete locally; automated checks and visual review passed, native evidence pending. Base: `b920841`, version `0.2.9`.
 
 ## Scope

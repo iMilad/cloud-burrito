@@ -1,5 +1,7 @@
 # P2-01 — Truthful persistence
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 Status: complete locally; automated checks passed, native evidence pending. Base: `efef107`, version `0.2.9`. No release metadata changed.
 
 ## Result

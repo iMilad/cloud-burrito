@@ -73,7 +73,7 @@ Expected: Ubuntu release, architecture, glibc, tool-presence flags and installed
 
 Once device inventory is recorded, prepare platform-specific instructions for the same source snapshot. Transfer source privately; no GitHub publication is required. Resolve missing prerequisites from the inventory using platform-specific setup instructions before attempting the build. Attempt a native source build and controlled launch with no real AWS activity; record exact errors before implementing fixes.
 
-This early spike discovers compatibility problems. It does not validate installers or replace P5. Existing macOS release helpers cannot be assumed to work unchanged on Windows or Ubuntu.
+This early spike discovers compatibility problems. It does not validate installers or replace P6. Existing macOS release helpers cannot be assumed to work unchanged on Windows or Ubuntu.
 
 ## Evidence record
 
@@ -90,6 +90,6 @@ This early spike discovers compatibility problems. It does not validate installe
 
 Keep shared evidence synthetic and redact usernames, real account/resource identifiers, configuration contents and credentials. A useful report names the failed step and observable result without exposing private data.
 
-## Later P5 acceptance
+## Later P6 acceptance
 
 Use packaged artifacts built from the same candidate commit and verify checksums. On each declared OS/architecture, test fresh install, OS warning behavior, first run, CB-J01–CB-J05, repeated refresh, cancellation, restart, upgrade and uninstall. Log actual results against the [journey contracts](phase-0.md); never substitute a mock browser pass for native acceptance.

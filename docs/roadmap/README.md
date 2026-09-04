@@ -1,10 +1,10 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1–P3 complete locally. All nine P4 implementation/handoff units are committed. macOS artifacts are inspected; complete candidate acceptance awaits native Windows/Ubuntu builds.**
+Status: **P5 — the creative interface phase — is in progress. P1–P3 are complete locally; P4 implementation/handoff is committed. The existing macOS packages remain inspected historical artifacts, while native Windows/Ubuntu builds and device acceptance remain open.**
 
 [P4 final evidence](p4-exit-evidence.md) records actual artifacts, repeat comparison and pending build/device gates.
 
-Latest completed unit: [P4-09](p4-09-evidence.md) — Native candidate handoff. Native package/device evidence remains separate.
+Latest completed packaging unit: [P4-09](p4-09-evidence.md) — Native candidate handoff. Native package/device evidence remains separate.
 
 [P3 exit evidence](p3-exit-evidence.md) records all eight separate local work units, final checks, before/after measurements and remaining native gates.
 
@@ -22,7 +22,7 @@ Keep Rust + Tauri. Improve the existing execution boundary, context correctness,
 
 ## Canonical phases
 
-Use **P0–P6** for work items and acceptance evidence. The presentation's five cards are summary themes; their card numbers are not execution-phase IDs.
+Use **P0–P7** for work items and acceptance evidence. On 2026-09-04 the owner inserted P5 for the creative interface before device validation. The former P5 is now P6, and the former P6 is now P7. Historical evidence retains its original work IDs and results; its phase references follow that mapping. The presentation's original five cards are summary themes, not execution-phase IDs.
 
 | Phase | Outcome | Exit evidence | Planning / delivery |
 | --- | --- | --- | --- |
@@ -30,20 +30,23 @@ Use **P0–P6** for work items and acceptance evidence. The presentation's five 
 | [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–06 complete locally / native evidence pending |
 | [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | Complete locally / native acceptance pending |
 | [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Synthetic timings and resource limits recorded; native startup/memory and public performance claims remain pending | P3-01–08 complete locally / native evidence pending |
-| [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | P4-01–09 complete locally / native artifact evidence pending |
-| [P5 — Validate on real machines](phase-5.md) | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Planned / not started |
-| P6 — Build the portfolio launch package | English documentation, demo, decisions and release evidence | Privacy/history and dependency review complete; independent feedback recorded; explicit publication decision | Outline only / not started |
+| [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P6 | P4-01–09 complete locally / native artifact evidence pending |
+| [P5 — Make the interface distinctive](phase-5.md) | A polished, interactive Studio experience with the existing Classic design available | Baseline preserved, meaningful interactions validated, keyboard/reduced-motion checks recorded; final design source identified for new packages | Implementing locally |
+| [P6 — Validate on real machines](phase-6.md) | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Planned / not started |
+| [P7 — Build the portfolio launch package](phase-7.md) | English documentation, demo, decisions and release evidence | Privacy/history and dependency review complete; independent feedback recorded; explicit publication decision | Outline only / not started |
 
-P0 probes platform compatibility early when devices become available. Pending device evidence does not block planning or future isolated P1 source work. It does block final support claims; comparable performance measurements must precede optimization claims. P4 produces candidate packages after trust, product and performance work. P5 tests those packages; a source build or Chromium test cannot substitute for this gate.
+P0 probes platform compatibility early when devices become available. Pending device evidence does not block planning or future isolated P1 source work. It does block final support claims; comparable performance measurements must precede optimization claims. P4 defines and inspects candidate packages. P5 adds the creative interface; packages for P6 must be rebuilt from its final reviewed source. P6 tests those exact packages; a source build or Chromium test cannot substitute for this gate.
 
 ```mermaid
 flowchart LR
     P1["P1 · Trust<br/>Verified identity + exact operations"] --> P2["P2 · Dependability<br/>Settings + connected investigation"]
     P2 --> P3["P3 · Performance<br/>Measure + bound + optimize"]
     P3 --> P4["P4 · Native packages<br/>macOS · Windows · Ubuntu"]
-    P4 --> P5["P5 · Real device evidence"]
+    P4 --> P5["P5 · Distinctive interface<br/>Studio + Classic"]
+    P5 --> R["Refresh P4 candidates<br/>Final design source"]
+    R --> P6["P6 · Real device evidence"]
     P0["P0 · Device inventory<br/>Deferred until available"] -.-> P4
-    P5 --> P6["P6 · Portfolio + publication decision"]
+    P6 --> P7["P7 · Portfolio + publication decision"]
 ```
 
 ## Beta scope
@@ -59,8 +62,8 @@ Deferred: Go/Wails rewrite, plugin SDK, full AI assistant, infrastructure mutati
 
 ## Start here
 
-1. Read the [P4 final evidence](p4-exit-evidence.md). Close the missing native-build gates before accepting a complete candidate; then begin [P5-01](phase-5.md) with one identified laptop.
-2. Use the phase plans in order: [P1](phase-1.md) → [P2](phase-2.md) → [P3](phase-3.md) → [P4](phase-4.md).
+1. Begin [P5](phase-5.md): preserve the existing design, introduce Studio, and validate its real interactions locally. The owner can switch to Classic without reverting functional work.
+2. At the P5 handoff, select its final reviewed source and regenerate the P4 candidates. Close the missing native Windows/Ubuntu build gates before accepting the complete artifact set; then begin [P6-01](phase-6.md) with one identified laptop.
 3. Keep evidence against the [journey contracts](phase-0.md) and [operation inventory](aws-operation-inventory.md).
 4. Resume [device checks](device-checks.md) when the laptops are available; final support and native acceptance remain conditional until then.
 

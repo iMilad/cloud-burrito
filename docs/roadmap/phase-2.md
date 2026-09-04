@@ -2,13 +2,13 @@
 
 Status: **P2-01–07 complete locally; P3 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
-Original planning baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. The linked unit evidence records implementation and validation after that baseline. Native acceptance remains P5.
+Original planning baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. The linked unit evidence records implementation and validation after that baseline. Native acceptance remains P6.
 
 ## Outcome and boundaries
 
 A user can establish a verified context, complete the flagship investigation, retain useful settings, and recover from failures without guessing whether data or a save is trustworthy.
 
-Use [CB-J01–CB-J05](phase-0.md#acceptance-fixtures) as the acceptance contracts. P2 implements their product behavior; P1 owns execution/identity enforcement, P3 owns performance and bounded-work optimization, P4 owns packages, and P5 owns real-device acceptance.
+Use [CB-J01–CB-J05](phase-0.md#acceptance-fixtures) as the acceptance contracts. P2 implements their product behavior; P1 owns execution/identity enforcement, P3 owns performance and bounded-work optimization, P4 owns packages, and P6 owns real-device acceptance.
 
 Keep Rust + Tauri and the current frontend. Extract shared state/rendering helpers only where a work unit needs them; do not combine this phase with a framework migration, whole-file rewrite, new AWS services, automatic login tooling, or an AI assistant.
 
@@ -163,10 +163,10 @@ The original planning baseline had six frontend tests: five browser/demo tests a
 | Existing widget response models | Current cap, truncation and failed-page fixtures preserve available evidence, coverage and reasons without implying completeness | During P2 implementation |
 | Production frontend + fake bridge | CB-J01/02/03/05 success and controlled failure/order cases; CB-J04 displays P1's deny/error outcomes; no real AWS/process work | During P2 implementation |
 | Browser interaction review | Keyboard/focus, both themes, compact layouts, enlarged text and honest controls | During P2 implementation |
-| Native packaged app | Real filesystem paths, restart persistence, OS/webview focus, clipboard, font/layout and complete journey behavior | P5 on each declared OS/architecture |
+| Native packaged app | Real filesystem paths, restart persistence, OS/webview focus, clipboard, font/layout and complete journey behavior | P6 on each declared OS/architecture |
 
 Record assertions and observed outcomes against journey/work IDs; do not replace failed paths with demo-only coverage. P1 owns execution safety and logical cancellation; P2 owns presentation plus existing partial/error metadata propagation; P3 owns remote query cleanup, progressive-work extensions and their measurements. P2's synthetic cleanup-state rendering is an interface check, not a completed query-cancellation claim.
 
-P2 implementation is complete only when the scoped behavior and automated evidence above pass, retained beta controls are truthful, and remaining native checks are explicitly handed to P5. Any context leak, false save success, hidden partial failure, or inaccessible critical recovery action keeps the affected unit open.
+P2 implementation is complete only when the scoped behavior and automated evidence above pass, retained beta controls are truthful, and remaining native checks are explicitly handed to P6. Any context leak, false save success, hidden partial failure, or inaccessible critical recovery action keeps the affected unit open.
 
 Implementation and automated results are recorded in the linked unit evidence. They do not establish native-device, live-provider, installation or publication acceptance.

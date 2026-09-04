@@ -11,8 +11,8 @@ Keep Rust + Tauri and the existing in-process SDK architecture. The source expos
 - P0 native measurements remain pending. That does not block this plan; capture a comparable baseline before optimizing each path or claiming an improvement.
 - P1 owns verified identity, request generations, exact operation/argument controls and CLI process safety. Preserve those contracts through scheduling, caching and cancellation.
 - P2 owns durable settings, explicit partial/error/freshness states and dependable investigation journeys. Progressive updates must use those same states.
-- P4 provides reproducible unsigned packages for measurement. P5 owns acceptance on actual supported devices; no laptop availability is assumed here.
-- P6 may publish only measured results with environment, dataset and method attached. None of the targets below is a product claim.
+- P4 provides reproducible unsigned packages for measurement. P6 owns acceptance on actual supported devices; no laptop availability is assumed here.
+- P7 may publish only measured results with environment, dataset and method attached. None of the targets below is a product claim.
 
 ## Ordered work packages
 
@@ -138,7 +138,7 @@ Implementation and validation: [P3-08 evidence](p3-08-evidence.md).
 4. For each scenario/build, perform five warm-up runs then at least 30 recorded trials. Report median, empirical p95, maximum, failures, request counts and memory; label this a small-sample benchmark and repeat when results overlap or vary materially.
 5. Measure application-cold starts as separate fresh-process trials; define whether filesystem caches are warm. Do not call these machine-cold starts or flush system caches on a user's laptop.
 6. Compare the unchanged and changed path on the same device, build mode and fixture. Retain raw measurements and methodology; do not compare a debug baseline with a release candidate.
-7. Repeat native startup, rendering, memory and subprocess checks on P4 packages during P5 device validation. Browser/fake-IPC results cannot establish native support or live AWS performance.
+7. Repeat native startup, rendering, memory and subprocess checks on P4 packages during P6 device validation. Browser/fake-IPC results cannot establish native support or live AWS performance.
 
 ## Acceptance targets and evidence status
 
@@ -157,9 +157,9 @@ Concurrency limits are implemented local contracts. The 100 ms interaction and 2
 
 ## Exit evidence and handoff
 
-[P3 exit evidence](p3-exit-evidence.md) records all eight local commits, final regressions, before/after results (including regressions) and the P4/P5 handoff.
+[P3 exit evidence](p3-exit-evidence.md) records all eight local commits, final regressions, before/after results (including regressions) and the P4/P6 handoff.
 
 - Planning is complete when these contracts, dependencies and provisional targets are reviewed; no device is required to complete planning.
 - Implementation completion requires P1/P2 regression contracts, deterministic budget/cancellation/cache tests, comparable before/after measurements, and no hidden partial-result or audit failures.
-- Native measurements and package-specific performance claims remain open until the relevant P4/P5 evidence exists. A missing measurement is recorded as unmeasured, not passed.
-- Handoff to P4/P5: exact revision/build flags, fixture version, provisional/accepted budget decisions, measured results and outstanding limitations. Handoff to P6: only reproducible, supported claims.
+- Native measurements and package-specific performance claims remain open until the relevant P4/P6 evidence exists. A missing measurement is recorded as unmeasured, not passed.
+- Handoff to P4/P6: exact revision/build flags, fixture version, provisional/accepted budget decisions, measured results and outstanding limitations. Handoff to P7: only reproducible, supported claims.

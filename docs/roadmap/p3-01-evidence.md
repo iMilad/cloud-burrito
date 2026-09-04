@@ -1,5 +1,7 @@
 # P3-01 — Reproducible synthetic baseline
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 **Complete locally.** Local instrumentation and measurement only. Production behavior is unchanged in this unit. The source baseline is `6c0377e` (version `0.2.9`); each artifact records the source revision, production-file hashes and the uncommitted instrumentation state used for its run.
 
 ## Method and reproducibility

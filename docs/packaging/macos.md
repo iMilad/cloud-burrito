@@ -30,7 +30,7 @@ No Developer ID, notarization, stapling, Apple account/team identity, signing ke
 or updater is configured. A local ad-hoc integrity signature is allowed; a
 publisher authority or team is forbidden. Unsigned does not mean authenticated.
 Actual Gatekeeper warnings, opening the app, replacement upgrades, persistence
-and removal belong to P5. Do not disable macOS security globally to test them.
+and removal belong to P6. Do not disable macOS security globally to test them.
 
 The bundler's embedded helper and system SDK are build inputs. Compiler/SDK
 versions are recorded in each manifest; this is not a bit-reproducibility claim.

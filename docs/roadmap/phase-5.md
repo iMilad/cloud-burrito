@@ -1,43 +1,42 @@
-# P5 — Validate the packaged candidate on real devices
+# P5 — Give Cloud Burrito a distinctive creative interface
 
-**Planned; no device tests run or passed.** Use the [candidate handoff](../packaging/p5-handoff.md) for file names, transfer verification, runtime policies and installation examples. P4 supplies inspected artifacts; P5 supplies actual installation and application evidence. This document does not authorize native execution, AWS access or publication.
+**Implementing locally.** Approved on 2026-09-04. This phase introduces the Studio design while keeping the existing Classic experience available. The original device-validation phase moves to [P6](phase-6.md), and the portfolio phase moves to [P7](phase-7.md). Existing P1–P4 commits, results and artifact identities remain historical evidence.
+
+## Design direction
+
+Make the investigation workspace inviting and memorable: confident typography, a strong color identity, clear visual hierarchy, purposeful depth and responsive interactions. The result should help an engineer choose a next action, recognize the active context and keep evidence together. A visually striking screen still has to work with an empty workspace, long names, partial failures, large results and a keyboard.
+
+Studio is a frontend presentation of the existing product. Keep Rust + Tauri, the verified active/pinned account model, approved capabilities, bounded work and honest result states. Visible controls must lead somewhere useful; decorative metrics, invented live activity and fake cloud status are not product evidence. Demonstration data must remain explicitly synthetic and separated from connected work.
 
 ## Ordered work
 
-| Unit | Work and exit condition |
-| --- | --- |
-| P5-01 — Freeze devices and candidate | Record each laptop's OS release/CPU/runtime and match the matrix; identify the complete candidate by source, version and checksums. Record unavailable target hardware explicitly. |
-| P5-02 — Install and launch locally | On an authorized disposable test user/home, cover fresh installation, runtime present/missing, no-credentials startup, shortcuts, focus, display scaling and normal close/reopen. |
-| P5-03 — Exercise product journeys | Run the shared cases below. Connected portions require separate explicit AWS authorization and a designated test account; keep them blocked until then. |
-| P5-04 — Persistence and lifecycle | Confirm restart, settings/layout recovery, approved prior-version upgrade, same-version reinstall and uninstall with user data preserved. |
-| P5-05 — Decide readiness | Attach case evidence and defect retests per OS/architecture. Support claims require completed evidence and no unresolved critical/high defects. Release/publication remains a separate decision. |
+| Unit | Work | Exit condition |
+| --- | --- | --- |
+| P5-01 — Preserve the baseline | Record pre-design source `0a860cd`; keep a local `mk/p4-design-baseline` reference; insert the new roadmap phase and retain Classic through an in-app design choice | A recoverable source baseline is named. Classic can be selected without losing the workspace or changing account/region context |
+| P5-02 — Introduce the visual system | Implement Studio with an intentional layout, typography, color, spacing, surfaces and distinct interaction states | The primary screen and critical overlays share one coherent system; existing dark/light modes, readable hierarchy and honest error states remain usable |
+| P5-03 — Make interaction meaningful | Connect visual entry points to real workspace, widget, context and investigation actions; add measured transitions and useful feedback | Actions affect the actual workspace, preserve existing ownership contracts and explain empty/pending/failed outcomes; no dead decorative controls or invented cloud results |
+| P5-04 — Validate and hand off | Review the actual rendered UI, exercise both designs with a synthetic bridge and run applicable regression gates | Record viewport, keyboard, reduced-motion, theme and layout checks; preserve functionality and note untested native behavior; identify the final source for fresh P4 packages |
 
-The three available laptops do not automatically cover all four targets: Intel and ARM64 macOS are distinct. A missing target remains unvalidated, even if its cross-compiled package passes static inspection.
+Commit local work by the P5 unit IDs. More than one focused commit is acceptable where a unit needs a follow-up; no previous phase history needs rewriting.
 
-## Shared acceptance cases
+## Preservation and switching
 
-All statuses below begin **not run**. Record separate results for each target and each distribution route; link a shared observation only when it genuinely covers both.
+The safety reference preserves the entire pre-design source. The Classic choice provides an everyday visual fallback inside the current application, while Studio carries the new presentation. Switching designs must not clear saved layouts, disconnect a context, repin a widget or replace durable settings. A later full source rollback is a separate deliberate Git action, not a destructive command embedded in this plan.
 
-| Case | Required observation |
-| --- | --- |
-| Install / runtime | Correct architecture, version, destination and launch entry. Existing runtime works; missing runtime gives an honest setup or blocked outcome. Record trust/elevation/network prompts without disabling OS safeguards. |
-| No-credentials first launch | A disposable home has no usable credentials. Startup remains responsive, connection-dependent work stays unavailable, and missing/malformed config has a visible Settings/retry route. No AWS request or login is attempted. |
-| CB-J01 — Identity | Local configuration recovery is understandable. After separate AWS approval: supported SSO verifies the intended identity before enabling work; expired/mismatched identity fails visibly. Missing optional CLI affects CLI features only. |
-| CB-J02 — Context | After separate AWS approval: account/region changes cannot display stale results as the new identity; pinned cards and nested views retain their own context. Delayed/order failures need controlled fixtures where necessary. |
-| CB-J03 — Investigation | After separate AWS approval: Pipeline → Build → Stack → Logs preserves context, unknown associations stay explicit, and empty/denied/partial/failed results remain distinct. Query scans need an approved bounded test scope. |
-| CB-J04 — CLI | No native AWS CLI process during the offline checks. After separate approval: an exact allowed operation uses the verified context; forbidden operations/overrides are rejected. Timeout/cancellation/oversize failures use controlled synthetic fixtures, not destructive cloud actions. |
-| CB-J05 — Durability / recovery | Saved theme, region, settings and layout survive normal close/reopen. On an injected/disposable storage failure, success is not reported and previous durable values remain. Retained results keep their context/freshness labels during failed refresh. |
-| Upgrade / reinstall | Select and record the supported prior artifact before testing. Save synthetic settings/layout, close normally, install the next candidate, and verify preservation and one expected application entry. Same-version reinstall is a separate case. Windows downgrade refusal is tested separately; unsupported downgrade is not an upgrade baseline. |
-| Uninstall / retention | Normal OS removal removes the application/expected shortcuts. Existing `.cloud_burrito` and `.aws` remain untouched by removal; verify only disposable synthetic fixtures. Reinstall can recover preserved settings. |
+Keep the default, persistence mechanism and observed reload behavior in the final P5 evidence. Reusing a browser preference for presentation does not make it an AWS configuration setting. A failed preference write must leave the current UI usable.
 
-The [original CB-J01–CB-J05 contracts](phase-0.md#acceptance-fixtures) define the journeys; their historical baseline paragraphs are not current implementation claims. P1–P3 automated evidence complements these native observations and does not substitute for them.
+## Local validation
 
-## How to execute without overloading the session
+- Inspect the rendered Studio and Classic screens at representative desktop widths, including a compact window and enlarged text. Check clipping, long labels, empty workspaces, dense results and critical dialogs.
+- Exercise the design switch, navigation, workspace/widget actions, settings and the existing synthetic investigation route. Verify that focus can reach and leave every critical control and overlay.
+- Honor reduced motion. Avoid continuously running decorative animation, network fonts or remote design assets; startup must not depend on external design services.
+- Keep profile/account/region and result context visible. Preserve warnings, retry, cancellation, partial-result and stale-result semantics from P1–P3.
+- Run the existing source/browser gates relevant to the change, recording actual results. A screenshot is visual evidence, not a functional test; synthetic browser success is not native WebView or real AWS acceptance.
 
-Start with one identified laptop, one matching verified artifact, and P5-02's offline checks. Record failures before trying another format or machine. Retest a fixed defect against a new clearly identified candidate; never quietly reuse the old artifact's result. Runtime installation or repair requires an explicit scoped setup decision.
+## Exit and next step
 
-Before connected work, agree the test account/profile, allowed operations, narrow query scope and scan-cost boundary. The owner manages credentials; evidence must omit their contents. No production resource change, broad discovery, live destructive denial test or implicit AWS retry is part of this plan.
+P5 closes locally when the preserved baseline, complete Studio interface, working Classic fallback and recorded local checks exist. Any inaccessible critical workflow, lost state, context confusion or false success keeps its affected unit open.
 
-For each case, record: `target / OS + CPU / runtime / artifact + SHA256 / source commit / case ID / expected / observed / status / defect reference`. Use `blocked` for missing hardware, runtime, candidate or authorization; use `not run` when no attempt occurred. Only observed successful behavior earns `pass`.
+Select the final reviewed P5 source, then use the P4 build and inspection workflow to produce a fresh matching candidate set. The macOS artifacts recorded in [P4 evidence](p4-exit-evidence.md) precede this redesign; their checks cannot validate new frontend bytes. Native Windows/Ubuntu build gates remain open. Only then continue to the [P6 handoff](../packaging/p6-handoff.md) and real-device acceptance.
 
-P5 closes only when the declared target coverage, complete artifact set, lifecycle and journey evidence meet the gate above. Missing platforms remain named limitations. The next step is a separate portfolio/publication decision, with no automatic tag, upload, release or push.
+This local design task includes no AWS connection, real AWS CLI invocation, credential inspection, native installation/app launch, remote Git/GitHub action, push, tag, release or publication.

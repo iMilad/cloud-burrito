@@ -1,5 +1,7 @@
 # P4 — Local implementation and native evidence
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 **All nine implementation/handoff units are committed. Four macOS artifacts are
 built and inspected; the complete seven-artifact candidate is not accepted yet.**
 Windows and Ubuntu require their declared native build hosts and reviewed helper
@@ -111,8 +113,8 @@ from the selected common source. Only a complete verified set can pass assembly.
 The current matrix remains the candidate policy; per-source build evidence is
 recorded here and in target manifests, without a device-support claim.
 
-Then start [P5-01](phase-5.md) with actual laptop inventory and the
-[handoff instructions](../packaging/p5-handoff.md). Test installation, first
+Then start [P5-01](phase-6.md) with actual laptop inventory and the
+[handoff instructions](../packaging/p6-handoff.md). Test installation, first
 launch without credentials, persistence, upgrade and uninstall on isolated test
 data. Connected AWS journeys remain separately authorized work.
 

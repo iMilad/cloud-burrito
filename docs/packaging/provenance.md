@@ -53,4 +53,4 @@ and its unsigned evidence is outside a checksum's guarantees.
 Repeat builds must state whether compiler caches were reused. Compare executable
 and normalized payload hashes separately from ZIP/DMG hashes; timestamps and
 container layout may differ. No byte-reproducibility claim is made without a
-successful comparison. Device execution is still P5 work.
+successful comparison. Device execution is still P6 work.

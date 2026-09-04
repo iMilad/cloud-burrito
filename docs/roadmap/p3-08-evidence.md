@@ -1,5 +1,7 @@
 # P3-08 — Bounded rendering and responsive filtering
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 Tables mount at most 100 data rows per page, with at most ten remembered expanded rows. Filtering covers the complete returned dataset, including permitted structured CLI details, while stable source indexes keep full values associated with the correct row. Pagination preserves keyboard access and expansion identity. A same-context refresh restores the focused control and filter selection; a context change discards obsolete work. Small tables retain their row nodes for keyed progressive metadata updates.
 
 Cells show bounded previews (512 characters, with shorter title/ARIA text). Explicit full-value disclosure opens one value at a time and respects the producer's withheld-value state. Source arrays still exist in memory; limiting DOM nodes does not prove a native memory ceiling.

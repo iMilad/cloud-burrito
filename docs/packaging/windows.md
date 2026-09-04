@@ -20,20 +20,20 @@ The generated installer checks for an existing runtime. If absent, it downloads
 Microsoft's Evergreen bootstrapper; this path can need network access and can
 fail. This is not an offline runtime bundle. Evergreen updates independently of
 Cloud Burrito, and runtime scope or elevation can depend on the machine's
-existing configuration and policy. Record the actual runtime version during P5.
+existing configuration and policy. Record the actual runtime version during P6.
 [Microsoft WebView2 distribution](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)
 
 The installer, application and uninstaller remain unsigned. There is no
 publisher certificate, timestamp service, custom signing command or updater
 artifact. Build with the shared wrapper's `--no-sign` policy. Windows trust
-prompts and enterprise installation policy remain P5 device observations; do
+prompts and enterprise installation policy remain P6 device observations; do
 not present this configuration as eliminating those prompts. No personal
 publisher identity is added. Existing product and bundle identifiers stay
 stable, including Tauri's generated manufacturer metadata.
 
 Updates are a deliberate installation of a later candidate. The overlay sets
 `allowDowngrades:false`. Upgrade, same-version reinstall and uninstall still
-need P5 evidence. The stock NSIS uninstall UI can offer deletion of Tauri's
+need P6 evidence. The stock NSIS uninstall UI can offer deletion of Tauri's
 application-data directories. In the pinned template that optional operation
 targets the bundle-identifier directories in roaming/local AppData. No custom
 hook removes the user's `.cloud_burrito` directory or any AWS configuration.
@@ -70,7 +70,7 @@ executing the installer:
   installation, upgrade, uninstallation or the native app as part of P4 static
   inspection.
 
-P5 supplies the missing Windows laptop evidence: normal launch, WebView2
+P6 supplies the missing Windows laptop evidence: normal launch, WebView2
 present/missing behavior, trust prompts, UI/keyboard behavior, upgrade and
 uninstall with settings preserved. No successful static check substitutes for
 those journeys.

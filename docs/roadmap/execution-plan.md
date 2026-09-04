@@ -1,8 +1,8 @@
 # Cloud Burrito — From working tool to public beta
 
-**P1–P3 complete locally. P4 implementation/handoff is recorded; both macOS pairs are inspected, while native Windows/Ubuntu builds and all device tests remain pending.**
+**P5 creative interface work is in progress. P1–P3 are complete locally. P4 implementation/handoff is recorded; its existing macOS pairs are inspected, while native Windows/Ubuntu builds and all device tests remain pending. P6 owns device validation and P7 owns the portfolio.**
 
-Decision reference: 2026-09-03. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
+Decision reference: 2026-09-03; phase insertion approved 2026-09-04. The previous P5/P6 are now P6/P7. Historical evidence and completed work IDs are preserved. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
 
 ## The product we are building
 
@@ -14,6 +14,9 @@ An engineer installs Cloud Burrito, connects a verified AWS account, follows a f
 | [P2 · Dependability](phase-2.md) | “I can investigate a problem, save my setup and recover from errors.” | Polish the existing core before optimizing or distributing it |
 | [P3 · Performance](phase-3.md) | “Useful results arrive promptly; refresh and cancellation remain responsive.” | Measure real costs and bound work without sacrificing correctness |
 | [P4 · Native artifacts](phase-4.md) | “There is a clearly labelled package and setup path for my platform.” | Produce candidates that can enter repeatable device acceptance |
+| [P5 · Creative interface](phase-5.md) | “This feels engaging, and I can still find my work immediately.” | Preserve Classic while giving the core workflow a distinctive Studio presentation |
+| [P6 · Device evidence](phase-6.md) | “This exact package works on my laptop.” | Test the final design source through installation and complete journeys |
+| [P7 · Portfolio](phase-7.md) | “I understand what this tool solves and why it was built this way.” | Present evidence-backed work after candidate and device gates |
 
 The [roadmap overview](README.md#canonical-phases) contains the visual sequence. Each phase document carries source evidence, ordered work IDs, acceptance cases and the completion gate.
 
@@ -35,12 +38,15 @@ Use one work ID per reviewable change where practical. A work ID may need multip
 | 10 | P3-02/03/04: scheduler, progressive results and query cleanup | Work stays within budgets; cancellation and remote cleanup are distinguished |
 | 11 | P3-05/06/07/08: bounded caches, CLI aggregate memory, audit and rendering | No identity leak, unbounded retained work or misleading performance claim |
 | 12 | P4 work packages in their documented order | Same-candidate unsigned artifacts, checksums and reviewed setup instructions |
+| 13 | P5-01/02/03/04: baseline, visual system, interactions and validation | Classic remains available; Studio adds working, accessible interactions with synthetic local evidence |
+| 14 | Refresh P4 artifacts from the final P5 source, then P6-01 through P6-05 | Complete matching candidate and observed device/lifecycle/journey evidence |
+| 15 | P7-01 through P7-04: narrative, demonstration, readiness and decision | Reviewable English portfolio package with explicit publication decision |
 
 A dependent unit may consume a reviewed interface fixture before a whole phase finishes, but it cannot claim integration success until the real dependency passes. P2 defines error/partial-state contracts; P3 extends their producers. P1 supplies the process byte limits; P3 profiles their aggregate memory cost. This avoids implementing the same boundary twice.
 
 ## Current implementation progress
 
-**P1–P3 are complete locally. [P4 final evidence](p4-exit-evidence.md) records the native-build gate; [P5](phase-5.md) is planned, not started.**
+**P1–P3 are complete locally. [P4 final evidence](p4-exit-evidence.md) records the native-build gate. [P5](phase-5.md) is implementing the creative interface; [P6](phase-6.md) device validation and [P7](phase-7.md) portfolio work remain planned.**
 
 [P3 exit evidence](p3-exit-evidence.md) records the completed phase and P4 handoff. Historical [P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline, 249 Rust and 17 Node regressions, and 270 successful measured browser trials. No native or live AWS performance is claimed.
 
@@ -68,7 +74,7 @@ P1-03 adds explicit legacy/named-session SSO configuration, supported named-sess
 
 The child execution deadline is the earlier of 30 seconds or credential expiry; stdout/stderr have 2 MiB/256 KiB streaming caps. Affected-context invalidation is monitored every 100 ms, and cancellation/caller drop retain direct-child termination/reap ownership. Cleanup can outlast the execution deadline while awaiting OS-confirmed exit; only an empty isolated directory is removed, so a nonempty directory can remain. Raw stderr is withheld from the UI and exact credential values are redacted from runner errors. Cleanup failure survives a superseded context as the stable `CliCleanupFailed` UI/audit error; a controlled command regression covers that ordering.
 
-At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: close the remaining P4 native-build gates, then P5 device acceptance**. [Latest evidence](p4-exit-evidence.md). Device and live-provider acceptance remain attached to their later gates.
+At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: finish P5 design and local checks, rebuild the candidate from that source, then proceed to P6 device acceptance**. [Latest evidence](p4-exit-evidence.md). Device and live-provider acceptance remain attached to their later gates.
 
 ## Validation ledger
 
@@ -83,9 +89,9 @@ Existing P0 results remain recorded in [phase-0.md](phase-0.md#baseline-recorded
 | V05 | Broader production frontend journeys through a synthetic bridge | P1/P2 implementation | P1-05 adds 15 Node production-handler tests and deterministic browser ownership journeys; P1-06 adds hostile rendering, audit warning and rejection journeys. Broader P2/native GUI acceptance remains open |
 | V06 | Scheduler, cancellation, cache and output stress fixtures | P3 implementation | Confirms budgets and preserves P1/P2 contracts |
 | V07 | Native build, artifact inventory, checksums and privacy inspection | P4 implementation | A created package is a candidate, not an installation pass |
-| V08 | Fresh install, first run, restart, upgrade, uninstall and journeys on each supported OS/architecture | User + P5 guided acceptance | Required before claiming that exact platform supported |
+| V08 | Fresh install, first run, restart, upgrade, uninstall and journeys on each supported OS/architecture | User + P6 guided acceptance | Required before claiming that exact platform supported |
 | V09 | Minimal integration check against the explicitly chosen test AWS context | Later controlled validation | Synthetic tests cannot establish real provider/network behavior; scope separately before live use |
-| V10 | Fresh dependency advisory, license, history/privacy and final candidate review | P4/P6 release preparation | Prior scans do not establish current public-release readiness |
+| V10 | Fresh dependency advisory, license, history/privacy and final candidate review | P4/P7 release preparation | Prior scans do not establish current public-release readiness |
 
 Device checks will resume sequentially with one action, expected result and recorded outcome at a time. No current user response is needed. Any live AWS validation must use an explicitly selected test context and bounded operations; query execution may incur cost. No live AWS action is authorized by this planning document.
 
@@ -100,7 +106,7 @@ Device checks will resume sequentially with one action, expected result and reco
 | Unsigned, identity-free distribution | Repository requirement | No publisher certificates, Apple Developer IDs, notarization or personal publisher metadata |
 | Exact approved CLI operations and validated arguments | P1-02 and P1-04 validated locally | The same 18 resource-read schemas remain; desktop CLI is re-enabled with frozen verified credentials and isolated child execution |
 | Explicit legacy and named-session SSO support | Implemented and locally validated in P1-03 | Frozen STS-verified credentials serve resource calls; unsupported credential/endpoint indirection fails before provider work; live renewal and provider behavior remain unverified |
-| Retain the current frontend; hide unfinished AI/global-search controls in beta | Implemented in P2 | Focus effort on a complete investigation workflow |
+| Preserve the existing frontend as Classic; add Studio in P5 | Approved on 2026-09-04 | Keep a recoverable baseline and a design switch; retain the existing workflow, trust boundaries and honest beta controls |
 | Numeric performance/resource budgets | P3 local limits implemented; synthetic timings recorded | See [P3 exit evidence](p3-exit-evidence.md); native performance and memory gates remain pending |
 | Windows NSIS; Ubuntu deb plus secondary AppImage; existing macOS DMG/ZIP | Proposed P4 packaging | OS versions/architectures remain provisional until device inventory and build evidence |
 
@@ -112,4 +118,4 @@ For each work ID, record: source revision/diff, intended behavior, acceptance ca
 
 Phase completion uses the exit criteria in that phase's document. A known context leak, forbidden execution, false save success or lost/hidden failure keeps its unit open. A pending native result remains attached to the candidate and blocks the corresponding platform/performance claim.
 
-P4 hands a candidate to P5. P5 establishes device evidence. P6 packages the portfolio explanation, recorded decisions, demo and release evidence. A GitHub action, push, tag, draft release or public publication remains a later explicit action governed by [AGENTS.md](../../AGENTS.md). The authorized local P1–P3 commits do not authorize any of those remote actions.
+P5 adds the creative interface after the original P4 implementation. Preserve its Classic baseline and validate Studio locally, then rebuild the full P4 candidate set from the final reviewed design source. The prior P4 artifact evidence does not certify changed frontend bytes. P6 establishes device evidence on that exact candidate. P7 packages the portfolio explanation, recorded decisions, demo and release evidence. A GitHub action, push, tag, draft release or public publication remains a later explicit action governed by [AGENTS.md](../../AGENTS.md). The authorized local P1–P3 commits do not authorize any of those remote actions.

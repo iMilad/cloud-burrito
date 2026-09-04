@@ -1,12 +1,14 @@
 # P4 — Native artifacts from one source candidate
 
+> Roadmap update (2026-09-04): the new [P5 creative interface phase](phase-5.md) runs before device validation, now P6. P4 implementation evidence remains unchanged. Rebuild the full candidate set from the final P5 source before P6; existing package checks do not certify the redesigned frontend.
+
 **All nine local implementation/handoff units are committed. Both macOS pairs pass native inspection; complete candidate acceptance remains open for Windows/Ubuntu.**
 
 See [P4 final evidence](p4-exit-evidence.md) for actual artifacts, repeat-build results and remaining gates.
 
 The original plan was source-reviewed on 2026-09-03 against v0.2.9 (`095d1ad`). Implementation follows the completed P3 source at `e82dcb5`; each unit has a separate local commit and evidence. [P4-01](p4-01-evidence.md) defines the versioned candidate matrix. Rust/Tauri remains the application stack.
 
-P4 produces inspected native artifacts and the evidence needed for P5. P5 performs actual installation, first launch, upgrade, uninstall, and journey acceptance on declared devices. Outstanding [P0 device evidence](phase-0.md#platform-decision-still-open) remains a release prerequisite, not a blocker to finishing this plan. No device checks are requested during planning.
+P4 produces inspected native artifacts and the evidence needed for P6. P6 performs actual installation, first launch, upgrade, uninstall, and journey acceptance on declared devices. Outstanding [P0 device evidence](phase-0.md#platform-decision-still-open) remains a release prerequisite, not a blocker to finishing this plan. No device checks are requested during planning.
 
 ## Historical source baseline at planning
 
@@ -30,7 +32,7 @@ P4 produces inspected native artifacts and the evidence needed for P5. P5 perfor
 | Windows alternative | MSI deferred unless a concrete managed-install requirement appears | Additional packaging/runtime/elevation validation if brought into scope |
 | Ubuntu artifacts | `.deb` primary, AppImage secondary; provisional x64 | Actual Ubuntu release/architecture, native library baseline, and both formats' compatibility |
 | Linux build baseline | Oldest declared supported base that provides required Tauri native dependencies | Select after inventory; no blanket “all Ubuntu/Linux” support claim |
-| Data location | Provisionally retain the current per-user data directory for the first cross-platform release | A move to OS-specific locations requires an explicit versioned migration design and P5 coverage |
+| Data location | Provisionally retain the current per-user data directory for the first cross-platform release | A move to OS-specific locations requires an explicit versioned migration design and P6 coverage |
 | Updating | Manual replacement/installer upgrade for the first release | Do not introduce an updater, update endpoint, or signing key in this phase |
 
 The NSIS/MSI options are supported by [Tauri's Windows installer documentation](https://v2.tauri.app/distribute/windows-installer/); NSIS is the proposed first format to keep one Windows acceptance path. Tauri recommends building on Windows rather than relying on its less-tested cross-compilation path. The choices above remain project decisions, not claims of completed compatibility.
@@ -44,7 +46,7 @@ Implementation depends on P1's command, credential, process, and filesystem boun
 - Record target triple, CPU architecture, minimum/validated OS versions, package formats, WebView/runtime assumptions, and validation owner for every matrix row.
 - Distinguish `planned`, `build-verified`, and `device-validated`; do not promote a row merely because its compiler target exists.
 - Retain both existing macOS artifact pairs. Keep Windows x64 and Ubuntu x64 provisional until device evidence arrives.
-- Output: one versioned matrix used by build scripts, manifest generation, download documentation, and P5.
+- Output: one versioned matrix used by build scripts, manifest generation, download documentation, and P6.
 - Acceptance: no artifact or support claim exists outside the matrix; unresolved rows are visibly pending rather than silently dropped.
 
 ### P4-02 — Close runtime portability gaps
@@ -54,7 +56,7 @@ Implementation depends on P1's command, credential, process, and filesystem boun
 - Keep application data separate from installation files and user-owned AWS configuration. Packaging and uninstall policy must not delete AWS profiles, credentials, or SSO caches.
 - Preserve existing settings/layout data; if migration becomes necessary, define backup, conflict, failure, and rollback behavior before moving files.
 - Separate Rust/Node/native build tools from end-user runtime requirements. Document AWS CLI needs for the CLI widget and supported authentication setup; do not bundle credentials or silently install the CLI.
-- Acceptance: platform-specific path/executable behavior has deterministic coverage; actual desktop launch and persistence remain P5 checks.
+- Acceptance: platform-specific path/executable behavior has deterministic coverage; actual desktop launch and persistence remain P6 checks.
 
 ### P4-03 — Separate shared build logic from platform packaging
 
@@ -70,8 +72,8 @@ Implementation depends on P1's command, credential, process, and filesystem boun
 - Use NSIS as the first installer and propose a per-user app installation. Inspect generated behavior; do not promise zero elevation for every runtime/setup condition.
 - Select Evergreen WebView2 with an explicit missing-runtime check and bootstrapper policy. State that runtime acquisition can require network access; do not advertise an offline installer.
 - If offline installation becomes required, assess a separate standalone-runtime variant, including size, redistribution, update, and validation costs, before adding it.
-- Keep application executables/installers unsigned and free of personal publisher metadata. Record expected OS warning behavior for P5 rather than weakening OS protections.
-- Acceptance: installer contents, target architecture, version, install scope, runtime policy, and absence of app publisher certificates are inspected; install/upgrade/uninstall results are still pending P5.
+- Keep application executables/installers unsigned and free of personal publisher metadata. Record expected OS warning behavior for P6 rather than weakening OS protections.
+- Acceptance: installer contents, target architecture, version, install scope, runtime policy, and absence of app publisher certificates are inspected; install/upgrade/uninstall results are still pending P6.
 
 Tauri documents the available [WebView2 installation modes](https://v2.tauri.app/distribute/windows-installer/#webview2-installation-options). Microsoft recommends checking for the runtime even when it is commonly preinstalled; its [distribution guidance](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution) distinguishes online bootstrapper and offline standalone deployment. Evergreen receives runtime updates; a fixed runtime transfers update maintenance to the application distributor.
 
@@ -80,7 +82,7 @@ Tauri documents the available [WebView2 installation modes](https://v2.tauri.app
 - Build `.deb` and AppImage from the same Linux target and declared baseline; keep package metadata, desktop entry, icons, and executable identity consistent.
 - Inspect generated Debian dependencies against the chosen Ubuntu release. Do not copy development-package requirements into end-user instructions unchanged.
 - Build against the oldest declared supported base with Tauri v2's required WebKitGTK availability; record glibc/native-library requirements. Do not choose a moving `ubuntu-latest` label as the compatibility contract.
-- Treat AppImage as an additional distribution format, not proof of compatibility with every Linux system. Record remaining host/runtime requirements and defer actual desktop execution to P5.
+- Treat AppImage as an additional distribution format, not proof of compatibility with every Linux system. Record remaining host/runtime requirements and defer actual desktop execution to P6.
 - Keep application/runtime permissions narrow; do not add root-running application behavior, background services, or repository installation hooks for convenience.
 - Acceptance: both payloads have the declared architecture/version, expected files/dependencies, and no unexplained maintainer scripts or private data.
 
@@ -92,7 +94,7 @@ Tauri's [Debian packaging guidance](https://v2.tauri.app/distribute/debian/) cov
 - Preserve executable architecture checks, plist validation, DMG integrity checks, and app/binary/DMG publisher-identity inspection from the existing release workflow.
 - Preserve app bundle structure, permissions, and links when creating the ZIP; ensure DMG and ZIP contain the same candidate payload.
 - Keep the explicit no-sign build path and cleared Apple build environment. Do not add Developer ID, notarization, stapling, certificates, team/account IDs, or personal publisher fields.
-- Acceptance: both artifact pairs pass build-time inspection; Gatekeeper behavior and actual ARM64/Intel operation are recorded separately in P5.
+- Acceptance: both artifact pairs pass build-time inspection; Gatekeeper behavior and actual ARM64/Intel operation are recorded separately in P6.
 
 The governing boundary is [AGENTS.md](../../AGENTS.md), and the existing inspection/staging behavior is in [release.yml](../../.github/workflows/release.yml#L216). “Unsigned” must not be presented as trusted-publisher authentication.
 
@@ -122,26 +124,26 @@ Existing foundations: [version checks](../../scripts/check-release-version.py#L1
 | 2 | `build-ubuntu` | Declared baseline/target, `.deb` + AppImage; depends on validation |
 | 3 | `inspect-artifacts` | Per-format payload/metadata/identity/privacy checks; depends on all required builds |
 | 4 | `assemble-candidate` | Complete manifest, verified checksums, redacted build evidence; depends on inspection |
-| 5 | P5 handoff | Artifact transfer and test instructions; no automatic release/publication |
+| 5 | P6 handoff | Artifact transfer and test instructions; no automatic release/publication |
 
 Acceptance: a local or future CI candidate can be assembled without a release tag. The current tag-triggered Release workflow remains a separate publication path; any future extension must require all declared platform artifacts and preserve its immutable-tag and draft-only safeguards.
 
-### P4-09 — Hand over one inspected candidate to P5
+### P4-09 — Hand over one inspected candidate to P6
 
 - Provide the exact artifact set, source commit, checksums, compatibility matrix, runtime/network prerequisites, known limitations, and redacted build logs.
 - Prepare platform-specific checksum and installation guidance after the matrix is frozen; mark OS warning expectations honestly and avoid blanket security-disable instructions.
-- Include P5 cases for fresh install, missing runtime, first launch without credentials, CB-J01–CB-J05, restart/persistence, upgrade from the supported prior version, and uninstall/data-retention behavior.
-- Acceptance: P5 can identify the exact candidate and expected result for each case. No device result is marked passed by this handoff.
+- Include P6 cases for fresh install, missing runtime, first launch without credentials, CB-J01–CB-J05, restart/persistence, upgrade from the supported prior version, and uninstall/data-retention behavior.
+- Acceptance: P6 can identify the exact candidate and expected result for each case. No device result is marked passed by this handoff.
 
 ## Completion and release boundary
 
-- [x] P4 planning is complete: ordered work, provisional decisions, dependencies, build evidence, and P5 handoff are defined.
+- [x] P4 planning is complete: ordered work, provisional decisions, dependencies, build evidence, and P6 handoff are defined.
 - [x] All nine P4 local implementation/handoff units are recorded; actual artifact acceptance remains separate.
 - [ ] P0 device inventory and build/launch evidence have frozen the declared matrix.
-- [x] Applicable P1–P3 local source evidence is linked with the per-source P4 results; native acceptance remains P5.
+- [x] Applicable P1–P3 local source evidence is linked with the per-source P4 results; native acceptance remains P6.
 - [ ] Every declared artifact is built and inspected from one source commit; checksums/privacy/provenance gates pass.
 
-After P4 hands over the inspected candidate, P5 completes actual native installation, operation, upgrade, and uninstall acceptance. That is the next phase's gate, not a prerequisite for building the P4 candidate; it remains required before the corresponding platform-support claim or public release.
+After P4 hands over the inspected candidate, P6 completes actual native installation, operation, upgrade, and uninstall acceptance. That is the P6 gate, not a prerequisite for building the P4 candidate; it remains required before the corresponding platform-support claim or public release.
 
 No tag, release draft, upload, repository publication, signing, or device execution is authorized by this planning document. Follow [AGENTS.md](../../AGENTS.md) for the later approved draft-release sequence; public draft publication remains a separate explicit decision. Unresolved device evidence affects readiness to release, while this planning work remains complete.
 

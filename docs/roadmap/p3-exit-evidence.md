@@ -1,5 +1,7 @@
 # P3 exit — Local performance work complete
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 P3-01 through P3-08 are implemented and separately committed locally. The language and architecture remain Rust, Tauri and vanilla JavaScript. P4-01 is next: freeze the unsigned artifact/compatibility contract before preparing platform packages. Native support and native performance remain unverified.
 
 ## Review and rollback map

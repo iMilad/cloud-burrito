@@ -12,7 +12,7 @@ Agree what the beta must do, identify every first-party execution path, define o
 
 | Output | Current state |
 | --- | --- |
-| Beta scope and canonical P0–P6 sequence | Recorded in [roadmap](README.md) |
+| Beta scope and canonical P0–P7 sequence | Recorded in [roadmap](README.md) |
 | Tauri/AWS/widget operation inventory | Recorded: 14 commands, 21 registry entries, 13 dispatch paths; provider and CLI proof limits explicit |
 | Five release-critical journeys | Contracts below; none verified end to end |
 | Local development baseline | Static checks, helper tests, 45 Rust tests and Clippy pass; limitations below |

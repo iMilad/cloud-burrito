@@ -229,7 +229,7 @@ jobs:
             --input-dir "$INPUTS/p4-build-ubuntu-x86_64" \
             --output "$OUTPUT"
           python3 scripts/assemble_candidate.py verify "$OUTPUT"
-      - name: Retain the complete unsigned set for a separately authorized P5 handoff
+      - name: Retain the complete unsigned set for a separately authorized P6 handoff
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: p4-complete-unsigned-candidate

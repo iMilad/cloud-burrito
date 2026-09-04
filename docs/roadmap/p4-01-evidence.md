@@ -1,5 +1,7 @@
 # P4-01 — Versioned artifact and compatibility contract
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 `packaging/targets.json` is the shared `p4-v1` contract: two macOS architectures with DMG/app ZIP pairs, Windows x64 MSVC with one NSIS installer, and Ubuntu 22.04 x64 with Debian/AppImage packages. It preserves all seven artifacts and the application identity. The contract distinguishes planned, build-verified and device-validated evidence; every row currently remains planned, with no validated OS entry.
 
 Candidate compatibility floors are macOS 13, Windows 11 24H2 x64 and Ubuntu 22.04 x64. These are conservative project test targets, not verified support or claims about upstream minimum requirements. macOS previously inherited Tauri's lower default; explicitly narrowing the candidate floor avoids promising old webview behavior without tests. Windows 10, Windows ARM64, Linux ARM64 and other distributions are outside this first candidate. Actual laptop inventory may revise the matrix with a recorded reason before release.

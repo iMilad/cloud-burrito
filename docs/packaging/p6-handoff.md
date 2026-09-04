@@ -1,8 +1,10 @@
-# P5 candidate handoff
+# P6 candidate handoff
+
+Renumbered from P5 on 2026-09-04. The [new P5](../roadmap/phase-5.md) changes the interface before device validation. Rebuild all target artifacts from its final reviewed source before accepting the redesigned candidate; the P4 results below describe the preserved pre-design source.
 
 **Handoff prepared; the complete candidate remains pending. No device test has passed.** Both macOS architecture pairs have passed build-time inspection; native Windows and Ubuntu build hosts are unavailable in this task. The owner has three laptops, but their exact OS versions and CPU architectures have not been recorded. A macOS ARM64 build does not validate Intel hardware.
 
-This handoff authorizes no installation, native app launch, runtime download, AWS access, release or publication. The examples below are instructions for a later explicitly authorized P5 session. Use [the P5 plan](../roadmap/phase-5.md) for the single acceptance checklist.
+This handoff authorizes no installation, native app launch, runtime download, AWS access, release or publication. The examples below are instructions for a later explicitly authorized P6 session. Use [the P6 plan](../roadmap/phase-6.md) for the single acceptance checklist.
 
 ## Identify the candidate before testing
 

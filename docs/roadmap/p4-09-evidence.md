@@ -1,5 +1,7 @@
 # P4-09 — Native candidate handoff and final inspection fixes
 
+> Phase numbering note (2026-09-04): this historical record uses P5 for device validation and P6 for the portfolio. Those future gates are now [P6](phase-6.md) and [P7](phase-7.md), following the inserted [P5 design phase](phase-5.md). Recorded results, source identities and work IDs are unchanged.
+
 Implementation and handoff preparation completed locally on 2026-09-04. Real
 candidate acceptance remains conditional on the complete four-target artifact
 set. [Final evidence](p4-exit-evidence.md) records actual build outcomes and exact
@@ -19,8 +21,8 @@ Two reviewed JSON checksum annotations were corrected for scanner syntax; the
 public values themselves did not change. Temporary source paths are canonicalized
 before compiler path remapping.
 
-The [P5 handoff](../packaging/p5-handoff.md) supplies filename/checksum/installation
-instructions. [P5](phase-5.md) has five ordered sections and a shared acceptance
+The [P5 handoff](../packaging/p6-handoff.md) supplies filename/checksum/installation
+instructions. [P5](phase-6.md) has five ordered sections and a shared acceptance
 checklist covering runtime/first launch, five product journeys, persistence,
 upgrade/reinstall and removal with data retained. No device result is passed.
 

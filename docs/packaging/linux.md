@@ -4,7 +4,7 @@
 artifact matrix. Its Linux row declares native Ubuntu 22.04 x64 with glibc 2.35
 and WebKitGTK 4.1 as the build baseline. The `.deb` and AppImage both contain an
 x86-64 application. Ubuntu 22.04 is a candidate baseline; newer Ubuntu releases
-and other distributions need their own P5 evidence. Static checks do not turn
+and other distributions need their own P6 evidence. Static checks do not turn
 this into a claim of support for every Linux desktop.
 
 ## Build dependencies and application runtime
@@ -39,7 +39,7 @@ chooses a public project contact, review that separately.
 AppImage does not remove the glibc compatibility floor or all host desktop
 requirements. FUSE availability can affect execution: Ubuntu 22.04 hosts may
 need the FUSE 2 compatibility library even when FUSE 3 is installed. Verify the
-actual laptop's runtime route in P5. The absence of bundled GStreamer media
+actual laptop's runtime route in P6. The absence of bundled GStreamer media
 support is intentional; do not promise arbitrary media playback.
 [Tauri AppImage limitations](https://v2.tauri.app/distribute/appimage/#limitations),
 [AppImage FUSE guidance](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
@@ -48,7 +48,7 @@ AWS CLI and authentication helpers are not bundled. The package has no custom
 install/remove hooks, system service, updater or extra filesystem payload.
 Installation/upgrade/removal must preserve the user's `.cloud_burrito` directory
 and AWS files. Manual updates replace the application; actual preservation and
-desktop integration remain P5 device checks.
+desktop integration remain P6 device checks.
 
 ## Static inspection before device testing
 
@@ -84,7 +84,7 @@ Inspect the completed artifacts without installing or launching them:
   AppImage are candidate files, not a configured package repository or an
   automatically trusted distribution channel.
 
-P5 covers opening the installed application, desktop integration, permissions,
+P6 covers opening the installed application, desktop integration, permissions,
 WebKitGTK behavior, keyboard/UI journeys, manual upgrades and removal with
 settings preserved on the owner's Ubuntu laptop. A different desktop session,
 distribution or Ubuntu release needs named evidence before support is claimed.
