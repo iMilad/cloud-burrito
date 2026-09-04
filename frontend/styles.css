@@ -1338,6 +1338,28 @@ body.has-fullscreen-widget .topbar { z-index: 201; } /* keep topbar above the FS
 }
 .audit-table th { color: var(--text-muted); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
 .audit-table td.mono { font-family: var(--font-mono); }
+.diagnostics-warning {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 250;
+  max-width: min(520px, calc(100vw - 32px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  color: var(--text-primary);
+  background: var(--bg-elev);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .2);
+}
+.audit-read-warning { color: var(--warning); }
+.layout-save-warning {
+  margin: 12px 18px 0;
+  color: var(--warning);
+}
 .audit-table tr.audit-fail td { color: var(--error); }
 .audit-table tr.audit-kind-aws-blocked td { color: var(--error); }
 .audit-table tr.audit-kind-aws-blocked td:nth-child(2) {

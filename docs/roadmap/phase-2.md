@@ -20,7 +20,7 @@ Keep Rust + Tauri and the current frontend. Extract shared state/rendering helpe
 - Injected filesystem, credential, transport, and process boundaries for synthetic tests; unexpected real AWS/CLI work fails closed.
 - A supported credential/operation contract. P2 recovery text must not suggest widening policy for an operation P1 forbids.
 
-Agree those interfaces before implementing dependent UI changes. P2 planning and fixture design can proceed independently; interface mocks do not prove P1 enforcement.
+P1 now supplies these interfaces; see [P1-06 evidence](p1-06-evidence.md) for the accepted local boundary and deferred native checks. P2 planning and fixture design can proceed independently; interface mocks do not prove P1 enforcement.
 
 ## Source-grounded starting point
 

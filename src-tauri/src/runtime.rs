@@ -3,6 +3,7 @@
 
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -316,6 +317,8 @@ pub struct Runtime {
     pub aws: Arc<dyn AwsBackend>,
     pub process: Arc<dyn ProcessRunner>,
     pub clock: Arc<dyn Clock>,
+    audit_write_failed: Arc<AtomicBool>,
+    audit_request_id: Option<String>,
 }
 
 impl Default for Runtime {
@@ -325,13 +328,34 @@ impl Default for Runtime {
             aws: Arc::new(NativeAwsBackend),
             process: Arc::new(NativeProcessRunner),
             clock: Arc::new(SystemClock),
+            audit_write_failed: Arc::new(AtomicBool::new(false)),
+            audit_request_id: None,
         }
     }
 }
 
 impl Runtime {
-    pub fn audit(&self, entry: Value) {
-        crate::audit::append(&self.paths, entry, self.clock.now_epoch());
+    pub fn audit(&self, mut entry: Value) {
+        if let Some(id) = &self.audit_request_id {
+            entry["request_id"] = serde_json::json!(id);
+        }
+        if crate::audit::append(&self.paths, entry, self.clock.now_epoch()).is_err() {
+            // Sticky: a later successful append cannot repair a lost entry.
+            self.audit_write_failed.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn for_request(&self, id: &str) -> Self {
+        let mut scoped = self.clone();
+        scoped.audit_request_id = Some(id.into());
+        scoped
+    }
+
+    pub fn with_diagnostics(&self, mut response: Value) -> Value {
+        response["_diagnostics"] = serde_json::json!({
+            "audit_write_failed": self.audit_write_failed.load(Ordering::Relaxed),
+        });
+        response
     }
 
     #[cfg(test)]
@@ -341,6 +365,8 @@ impl Runtime {
             aws: Arc::new(NativeAwsBackend),
             process: Arc::new(NativeProcessRunner),
             clock: Arc::new(FixedClock(1_700_000_000.0)),
+            audit_write_failed: Arc::new(AtomicBool::new(false)),
+            audit_request_id: None,
         }
     }
 }

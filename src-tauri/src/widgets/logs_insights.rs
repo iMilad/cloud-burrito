@@ -6,7 +6,9 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use aws_sdk_cloudwatchlogs::operation::stop_query::StopQueryOutput;
 use aws_sdk_cloudwatchlogs::types::QueryStatus;
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use serde_json::{json, Value};
 
 use super::{cloudwatch_logs, err_msg, WidgetCtx};
@@ -20,7 +22,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     match ctx.input_str("mode", "query").as_str() {
         "groups" => cloudwatch_logs::fetch_groups(ctx).await,
         "query" => run_query(ctx).await,
-        other => json!({"ok": false, "error": format!("unknown mode: {other}")}),
+        _ => json!({"ok": false, "error": "Unsupported query mode."}),
     }
 }
 
@@ -100,18 +102,19 @@ async fn run_query(ctx: &WidgetCtx) -> Value {
                 out["region"] = json!(ctx.region);
                 return out;
             }
-            Some(QueryStatus::Failed)
-            | Some(QueryStatus::Cancelled)
-            | Some(QueryStatus::Timeout) => {
-                return json!({"ok": false, "error": format!("query terminated: {:?}", resp.status())});
+            Some(QueryStatus::Failed) => {
+                return json!({"ok": false, "error_type": "QueryFailed", "error": "The query failed."})
+            }
+            Some(QueryStatus::Cancelled) => {
+                return json!({"ok": false, "error_type": "QueryCancelled", "error": "The query was cancelled."})
+            }
+            Some(QueryStatus::Timeout) => {
+                return json!({"ok": false, "error_type": "QueryTimeout", "error": "AWS reported that the query timed out."})
             }
             _ => {
                 if Instant::now() >= deadline {
-                    stop_query_best_effort(ctx, &client, &query_id).await;
-                    return json!({
-                        "ok": false,
-                        "error": "query still running after 25s — narrow the time range or the query",
-                    });
+                    let cleanup = stop_query_best_effort(ctx, &client, &query_id).await;
+                    return timeout_result(cleanup);
                 }
                 tokio::time::sleep(Duration::from_millis(800)).await;
             }
@@ -125,13 +128,72 @@ async fn stop_query_best_effort(
     ctx: &WidgetCtx,
     client: &aws_sdk_cloudwatchlogs::Client,
     query_id: &str,
-) {
-    if ctx.preflight("logs", "StopQuery").is_some() {
-        return;
+) -> QueryCleanup {
+    let outcome = if ctx.preflight("logs", "StopQuery").is_some() {
+        QueryCleanup::Denied
+    } else {
+        cleanup_result(client.stop_query().query_id(query_id).send().await)
+    };
+    ctx.log("query cleanup", json!({"cleanup_status": outcome.status()}));
+    outcome
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryCleanup {
+    Stopped,
+    NotConfirmed,
+    Denied,
+    Failed,
+}
+
+impl QueryCleanup {
+    fn status(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::NotConfirmed => "not_confirmed",
+            Self::Denied => "denied",
+            Self::Failed => "failed",
+        }
     }
-    if let Err(e) = client.stop_query().query_id(query_id).send().await {
-        ctx.log("stop_query failed", json!({"error": err_msg(e)}));
+}
+
+fn cleanup_result<E: ProvideErrorMetadata>(result: Result<StopQueryOutput, E>) -> QueryCleanup {
+    match result {
+        Ok(output) if output.success() => QueryCleanup::Stopped,
+        Ok(_) => QueryCleanup::NotConfirmed,
+        Err(error)
+            if matches!(
+                error.code(),
+                Some(
+                    "AccessDenied"
+                        | "AccessDeniedException"
+                        | "UnauthorizedException"
+                        | "UnauthorizedOperation"
+                )
+            ) =>
+        {
+            QueryCleanup::Denied
+        }
+        Err(_) => QueryCleanup::Failed,
     }
+}
+
+fn timeout_result(cleanup: QueryCleanup) -> Value {
+    let message = match cleanup {
+        QueryCleanup::Stopped => "Query polling reached its time limit. AWS confirmed that the query was stopped. Narrow the time range or query before retrying.",
+        QueryCleanup::NotConfirmed => "Query polling reached its time limit. AWS did not confirm that the query was stopped; it may still be running.",
+        QueryCleanup::Denied => "Query polling reached its time limit. The stop request was denied; the query may still be running.",
+        QueryCleanup::Failed => "Query polling reached its time limit. The stop request failed; the query may still be running.",
+    };
+    json!({
+        "ok": false,
+        "error_type": "QueryTimeout",
+        "error": message,
+        "cleanup": {
+            "status": cleanup.status(),
+            "remote_stop_confirmed": cleanup == QueryCleanup::Stopped,
+        },
+    })
 }
 
 /// Map Logs Insights result rows (field/value pairs per row) onto the closed
@@ -186,5 +248,54 @@ mod tests {
         let t = results_table(&[]);
         assert_eq!(t["render"], "table");
         assert_eq!(t["rows"], json!([]));
+    }
+
+    #[test]
+    fn timeout_reports_only_confirmed_stop_as_stopped() {
+        use aws_smithy_types::error::metadata::ErrorMetadata;
+
+        for (success, expected) in [
+            (true, QueryCleanup::Stopped),
+            (false, QueryCleanup::NotConfirmed),
+        ] {
+            let output = StopQueryOutput::builder().success(success).build();
+            let cleanup = cleanup_result::<ErrorMetadata>(Ok(output));
+            assert_eq!(cleanup, expected);
+            let result = timeout_result(cleanup);
+            assert_eq!(result["ok"], false);
+            assert_eq!(result["error_type"], "QueryTimeout");
+            assert_eq!(result["cleanup"]["remote_stop_confirmed"], success);
+            if !success {
+                assert!(result["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("may still be running"));
+            }
+        }
+    }
+
+    #[test]
+    fn failed_or_denied_stop_never_leaks_service_metadata_or_claims_completion() {
+        use aws_smithy_types::error::metadata::ErrorMetadata;
+
+        for (code, expected) in [
+            ("AccessDeniedException", QueryCleanup::Denied),
+            ("SYNTHETIC_PRIVATE_CODE_MARKER", QueryCleanup::Failed),
+        ] {
+            let error = ErrorMetadata::builder()
+                .code(code)
+                .message("SYNTHETIC_PRIVATE_MESSAGE_MARKER")
+                .build();
+            let cleanup = cleanup_result(Err(error));
+            assert_eq!(cleanup, expected);
+            let result = timeout_result(cleanup);
+            assert_eq!(result["cleanup"]["status"], expected.status());
+            assert_eq!(result["cleanup"]["remote_stop_confirmed"], false);
+            assert!(result["error"]
+                .as_str()
+                .unwrap()
+                .contains("may still be running"));
+            assert!(!result.to_string().contains("SYNTHETIC_PRIVATE"));
+        }
     }
 }

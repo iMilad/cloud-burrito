@@ -90,7 +90,31 @@
 
   // ===== Backend handshake (Tauri ↔ Rust core) =====
   const isTauri = typeof window.__TAURI__ !== "undefined";
-  const tauriInvoke = isTauri ? window.__TAURI__.core.invoke : null;
+  const tauriInvoke = isTauri ? async (command, args) => {
+    let result;
+    try {
+      result = await window.__TAURI__.core.invoke(command, args);
+    } catch (_) {
+      // Bridge failures can carry private native diagnostics. Resource data
+      // remains in successful response models; unexpected errors stay fixed.
+      throw new Error("Desktop request failed. Try again.");
+    }
+    observeDiagnostics(result);
+    if (["settings_set", "dashboard_set", "policy_set"].includes(command) && result?.ok === false) {
+      throw new Error("Changes were rejected. Review the input and try again.");
+    }
+    return result;
+  } : null;
+
+  function observeDiagnostics(result) {
+    if (result?._diagnostics?.audit_write_failed !== true || $("#audit-write-warning")) return;
+    // A lost entry cannot be restored by a later successful write. Keep this
+    // warning for the session, even if older responses arrive afterward.
+    const warning = el("div", { id: "audit-write-warning", class: "diagnostics-warning", role: "status" },
+      el("span", {}, "Some audit entries could not be saved. Inspection is still available."),
+      el("button", { class: "btn btn-ghost small", type: "button", onclick: openAuditPanel }, "Open audit log"));
+    document.body.appendChild(warning);
+  }
 
   // When the page is opened directly in a browser (no Tauri shell), append a
   // small "browser mode" tag next to the brand name. In Tauri mode the tag
@@ -117,7 +141,7 @@
     } catch (e) {
       indicator.dataset.state = "offline";
       label.textContent = "core offline";
-      console.warn("Backend ping failed:", e);
+      console.warn("Backend ping failed.");
     }
   }
 
@@ -350,6 +374,15 @@
     delete node._resultContext;
   }
 
+  function requestFailureLabel(result) {
+    const outcome = result?._request?.outcome;
+    if (outcome === "denied" || result?.render === "permission_denied") return "Denied";
+    if (outcome === "cancelled") return "Cancelled";
+    if (outcome === "failed" || result?.ok === false || result?.error
+        || (result?.render === "raw_json" && result.data?.error)) return "Failed";
+    return "";
+  }
+
   function beginOwnedRequest(owner, contextOverride) {
     if (!owner) throw new Error("A request owner is required.");
     invalidateRequests(owner);
@@ -469,7 +502,7 @@
       cachedSettings = await tauriInvoke("settings_get");
       return cachedSettings;
     } catch (e) {
-      console.warn("settings_get failed:", e);
+      console.warn("Settings could not be loaded.");
       return null;
     }
   }
@@ -515,9 +548,10 @@
     setTimeout(() => { $("#scrim").hidden = true; }, 220);
   }
 
+  let settingsSavePending = false;
   async function saveSettings(e) {
     e.preventDefault();
-    if (!isTauri) return;
+    if (!isTauri || settingsSavePending) return;
     // Send empty strings for blank inputs — the backend treats empty as
     // "fall back to default" so the user doesn't need to retype defaults.
     const params = {
@@ -528,29 +562,37 @@
     };
     const status = $("#settings-status");
     status.textContent = "Saving…";
-    const configuration = ++configurationGeneration;
-    ++currentSelectionId;
-    lastSetAccountResult = null;
-    lastAuthStatus = null;
-    document.querySelectorAll(".widget").forEach(widget => {
-      invalidateRequests(tileItemFor(widget));
-      clearWidgetResults(widget);
-      widget.querySelectorAll(".pipeline-pin-card").forEach(card => {
-        invalidateRequests(card);
-        delete card.dataset.loaded;
-        const result = $(".pipeline-pin-result", card);
-        if (result) { clear(result); result.textContent = "Refresh to verify the updated configuration."; }
-        const stamp = $(".pipeline-pin-updated", card);
-        if (stamp) stamp.textContent = "";
-        const badge = $(".pipeline-pin-status", card);
-        if (badge) { badge.className = "badge badge-neutral pipeline-pin-status"; badge.textContent = "Not refreshed"; }
-      });
-    });
-    setPillInFlight("auth: configuration changed — verify account …");
+    const configuration = configurationGeneration;
+    const selection = currentSelectionId;
+    settingsSavePending = true;
+    $("#settings-save").disabled = true;
     try {
-      cachedSettings = await tauriInvoke("settings_set", { params });
+      const saved = await tauriInvoke("settings_set", { params });
       if (configuration !== configurationGeneration) return;
+      cachedSettings = saved;
       status.textContent = "Saved.";
+      // A rejected save leaves the draft and verified view intact. A late
+      // accepted callback also cannot replace a newer account selection.
+      if (selection !== currentSelectionId) return;
+      ++configurationGeneration;
+      ++currentSelectionId;
+      lastSetAccountResult = null;
+      lastAuthStatus = null;
+      document.querySelectorAll(".widget").forEach(widget => {
+        invalidateRequests(tileItemFor(widget));
+        clearWidgetResults(widget);
+        widget.querySelectorAll(".pipeline-pin-card").forEach(card => {
+          invalidateRequests(card);
+          delete card.dataset.loaded;
+          const result = $(".pipeline-pin-result", card);
+          if (result) { clear(result); result.textContent = "Refresh to verify the updated configuration."; }
+          const stamp = $(".pipeline-pin-updated", card);
+          if (stamp) stamp.textContent = "";
+          const badge = $(".pipeline-pin-status", card);
+          if (badge) { badge.className = "badge badge-neutral pipeline-pin-status"; badge.textContent = "Not refreshed"; }
+        });
+      });
+      setPillInFlight("auth: configuration changed — verify account …");
       // Re-apply to the Pipeline Runs config inputs so the user doesn't see
       // stale placeholders the next time they look at it.
       prefillPipelineConfig(cachedSettings);
@@ -559,6 +601,9 @@
     } catch (err) {
       if (configuration !== configurationGeneration) return;
       status.textContent = "Save failed: " + err;
+    } finally {
+      settingsSavePending = false;
+      $("#settings-save").disabled = false;
     }
   }
 
@@ -687,46 +732,66 @@
   // and reconstruct what the app did from core startup to now.
   function auditRowFor(entry) {
     const ts = entry.ts ? new Date(entry.ts * 1000).toLocaleTimeString("en-GB", { hour12: false }) : "";
-    let kindLabel = entry.kind || "?";
-    let kindClass = "audit-kind-" + (entry.kind || "unknown").replace(/[^a-z-]/gi, "");
+    const field = (key) => typeof entry[key] === "string" ? entry[key].slice(0, 160) : "";
+    let kindLabel = field("kind") || "?";
+    let kindClass = "audit-kind-" + kindLabel.replace(/[^a-z-]/gi, "");
     let primary = "";
     let detail = "";
     let extra = "";
     switch (entry.kind) {
+      case "request": {
+        const outcomes = { started: "Started", succeeded: "Succeeded", failed: "Failed", denied: "Denied", cancelled: "Cancelled (result discarded)" };
+        kindLabel = "Request";
+        primary = field("command");
+        detail = Object.hasOwn(outcomes, entry.event) ? outcomes[entry.event] : "Unknown outcome";
+        extra = [field("request_id"), field("account_id"), field("region"), field("error_type")].filter(Boolean).join(" · ");
+        if (entry.event === "denied" || entry.event === "failed") kindClass += " audit-fail";
+        break;
+      }
       case "lifecycle":
-        primary = entry.event || "";
-        detail = Object.entries(entry)
-          .filter(([k]) => !["kind", "event", "ts"].includes(k))
-          .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
-          .join(" · ");
+        primary = field("event");
+        detail = [field("account_id"), field("region"), field("error_type")].filter(Boolean).join(" · ");
         break;
       case "rpc":
-        primary = entry.method || "";
+        primary = field("method");
         detail = entry.ok === false
-          ? `FAILED${entry.error_type ? " · " + entry.error_type : ""}`
+          ? `FAILED${field("error_type") ? " · " + field("error_type") : ""}`
           : "ok";
         extra = entry.duration_ms != null ? `${entry.duration_ms} ms` : "";
         if (entry.ok === false) kindClass += " audit-fail";
         break;
       case "aws":
-        primary = `${entry.service || "?"}.${entry.operation || "?"}`;
-        detail = [entry.account_id, entry.region].filter(Boolean).join(" / ");
-        if (entry.reason) extra = entry.reason;
+        kindLabel = "Preflight";
+        primary = `${field("service") || "?"}.${field("operation") || "?"}`;
+        detail = "Permission check allowed; execution not confirmed";
+        extra = [field("account_id"), field("region")].filter(Boolean).join(" / ");
         break;
       case "aws-blocked":
-        kindLabel = "aws-BLOCKED";
-        primary = `${entry.service || "?"}.${entry.operation || "?"}`;
-        detail = "blocked by the app's operation rules";
+        kindLabel = "Preflight";
+        primary = `${field("service") || "?"}.${field("operation") || "?"}`;
+        detail = "Permission check denied";
         kindClass += " audit-fail";
         break;
-      case "widget":
-        primary = entry.widget || "";
-        detail = entry.message || "";
-        if (entry.reason) extra = entry.reason;
+      case "widget": {
+        primary = field("widget");
+        const cleanupLabels = {
+          stopped: "Query cleanup: AWS confirmed stopped",
+          not_confirmed: "Query cleanup: remote stop not confirmed",
+          denied: "Query cleanup: stop denied; remote status unknown",
+          failed: "Query cleanup: stop request failed; remote status unknown",
+          not_attempted: "Query cleanup: stop not attempted",
+        };
+        const cleanup = field("cleanup_status");
+        detail = entry.event === "query_cleanup" && Object.hasOwn(cleanupLabels, cleanup)
+          ? cleanupLabels[cleanup] : field("error_type") || "Widget diagnostic";
+        const failed = entry.failed_count ?? entry.failed;
+        const failedCount = Number.isSafeInteger(failed) && failed >= 0 ? `${failed} failed` : "";
+        extra = [field("request_id"), failedCount].filter(Boolean).join(" · ");
+        if (cleanup === "denied" || cleanup === "failed" || failed > 0) kindClass += " audit-fail";
         break;
+      }
       default:
-        primary = entry.event || entry.method || entry.operation || "";
-        detail = entry.message || "";
+        primary = "Unrecognized audit event";
     }
     return el("tr", { class: kindClass },
       el("td", { class: "mono muted" }, ts),
@@ -739,26 +804,42 @@
 
   async function refreshAudit() {
     if (!isTauri) return;
+    const wrap = $("#audit-table-wrap");
+    let warning = $("#audit-read-warning");
+    if (!warning) {
+      warning = el("p", { id: "audit-read-warning", class: "audit-read-warning small", role: "status", hidden: true });
+      wrap.before(warning);
+    }
+    const showFailure = () => {
+      warning.textContent = "Audit history could not be read. Previously displayed entries are unchanged.";
+      warning.hidden = false;
+    };
     let res;
     try {
       res = await tauriInvoke("audit_tail", { params: { limit: 300 } });
     } catch (e) {
-      console.warn("audit_tail failed:", e);
+      console.warn("Audit history could not be read.");
+      showFailure();
       return;
     }
-    const wrap = $("#audit-table-wrap");
+    if (!res || res.ok === false || !Array.isArray(res.entries)) {
+      showFailure();
+      return;
+    }
+    warning.hidden = true;
     clear(wrap);
-    const entries = (res && res.entries) || [];
+    const entries = res.entries.filter(entry => entry && typeof entry === "object" && !Array.isArray(entry));
     if (entries.length === 0) {
       wrap.appendChild(el("div", { class: "muted small" }, "No entries yet."));
       return;
     }
     // Count summary at the top so the user gets an instant read.
     const counts = entries.reduce((acc, e) => {
-      acc[e.kind] = (acc[e.kind] || 0) + 1;
+      const kind = typeof e.kind === "string" ? e.kind : "unknown";
+      acc.set(kind, (acc.get(kind) || 0) + 1);
       return acc;
-    }, {});
-    const summary = Object.entries(counts)
+    }, new Map());
+    const summary = Array.from(counts.entries())
       .sort()
       .map(([k, n]) => `${k}=${n}`)
       .join(" · ");
@@ -1097,7 +1178,7 @@
     const accountId = opt.dataset.accountId;
     const ssoSession = opt.dataset.ssoSession || "";
     if (!accountId) {
-      console.warn(`Profile ${profile} has no sso_account_id; cannot assume role.`);
+      console.warn("Selected profile has no SSO account configured.");
       return;
     }
     topbarState.profile = profile;
@@ -1130,7 +1211,7 @@
       });
     } catch (e) {
       if (myId !== currentSelectionId) return; // newer selection won — discard
-      console.warn("aws_set_account threw:", e);
+      console.warn("Account verification request failed.");
       lastSetAccountResult = { ok: false, error: String(e) };
       writeLastSelection(profile, region);
       refreshAuthStatus();
@@ -1146,7 +1227,7 @@
 
     lastSetAccountResult = res;
     if (!res.ok) {
-      console.warn("aws_set_account:", res);
+      console.warn("Account verification failed.");
     }
     // A deliberate default account/region switch reloads every inherited widget.
     // Pinned tiles are skipped because they intentionally ignore the topbar.
@@ -1238,7 +1319,7 @@
       if (requestId !== currentProfilesRequestId || configuration !== configurationGeneration
           || selection !== currentSelectionId) return;
     } catch (e) {
-      console.warn("background aws_list_profiles failed:", e);
+      console.warn("Profile list could not be refreshed.");
       // Don't clobber cached UI on transient failure.
       return;
     }
@@ -1253,7 +1334,7 @@
         accSel.disabled = true;
         syncTopbarPicker(accSel);
       }
-      console.warn("aws_list_profiles returned 0 profiles:", info);
+      console.warn("No supported profiles were returned.");
       return;
     }
     writeProfilesCache(info);
@@ -1907,7 +1988,7 @@
         ctx, request,
       );
       if (!request.accept(result)) return;
-      if (result && result.render === "table") {
+      if (result && result.render === "table" && !requestFailureLabel(result)) {
         const rows = Array.isArray(result.rows) ? result.rows : [];
         const latest = rows[0] || null;
         if (statusEl) {
@@ -1934,7 +2015,7 @@
       }
       if (statusEl) {
         statusEl.className = "badge badge-error pipeline-pin-status";
-        statusEl.textContent = "Error";
+        statusEl.textContent = requestFailureLabel(result) || "Error";
       }
       if (resultHost) {
         resultHost.className = "pipeline-pin-result";
@@ -2632,6 +2713,25 @@
   }
   renderStackDetail.nextId = 0;
 
+  // Only console origins deliberately supported by this beta. Match the raw
+  // authority as well as the parsed URL: URL() normalizes explicit :443,
+  // whitespace and some confusing host spellings before exposing hostname.
+  function supportedConsoleUrl(value) {
+    if (typeof value !== "string" || value.length > 4096
+        || /[\s\u0000-\u001f\u007f\\]/u.test(value)
+        || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(value)) return null;
+    const authority = value.match(/^https:\/\/([^/?#]+)(?:[/?#]|$)/i)?.[1].toLowerCase();
+    const hosts = ["console.aws.amazon.com", "eu-west-1.console.aws.amazon.com", "us-east-1.console.aws.amazon.com"];
+    if (!hosts.includes(authority)) return null;
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port
+        && hosts.includes(url.hostname) ? url.href : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function renderExecutionDetail(host, spec) {
     clear(host);
     if (spec && spec.error) {
@@ -2658,16 +2758,19 @@
       if (a.summary) block.appendChild(el("div", { class: "exec-summary small" }, a.summary));
       if (a.error) block.appendChild(el("div", { class: "exec-error small" }, a.error));
       const actionsRow = el("div", { class: "exec-action-links" });
-      if (a.external_url) {
+      const consoleUrl = supportedConsoleUrl(a.external_url);
+      if (consoleUrl) {
         actionsRow.appendChild(el("a", {
-          class: "exec-link small", href: a.external_url, target: "_blank", rel: "noopener",
+          class: "exec-link small", href: consoleUrl, target: "_blank", rel: "noopener noreferrer",
         }, "Open in AWS Console ↗"));
         const copyBtn = el("button", {
           class: "exec-btn exec-icon-btn small", type: "button",
-          title: "Copy link", "aria-label": "Copy link",
+          title: "Copy AWS Console link", "aria-label": "Copy AWS Console link",
         }, "⧉");
-        copyBtn.addEventListener("click", () => copyToClipboard(a.external_url, copyBtn));
+        copyBtn.addEventListener("click", () => copyToClipboard(consoleUrl, copyBtn));
         actionsRow.appendChild(copyBtn);
+      } else if (a.external_url) {
+        actionsRow.appendChild(el("span", { class: "muted small" }, "External link unavailable: unsupported console URL."));
       }
       const logHost = el("div", { class: "exec-log" });
       if (a.provider === "CodeBuild" && a.external_execution_id) {
@@ -2785,8 +2888,17 @@
     if (spec.error) {
       host.appendChild(el("div", { class: "muted small" }, "Error: " + spec.error));
     }
+    const incomplete = spec.partial === true || spec.status === "partial" || spec.status === "failed" || !!spec.error;
+    if (spec.counts && incomplete) {
+      const count = (key) => Number.isSafeInteger(spec.counts[key]) && spec.counts[key] >= 0 ? spec.counts[key] : 0;
+      host.appendChild(el("div", { class: "muted small" },
+        `Query coverage: ${count("succeeded")} succeeded, ${count("failed")} failed, ${count("timed_out")} timed out, ${count("queried")} queried.`));
+    }
     if (rows.length === 0) {
-      host.appendChild(el("div", { class: "muted small" }, "No error events in the last " + (spec.hours || "?") + " hours."));
+      const empty = incomplete
+        ? "Error counts are incomplete; absence of rows does not establish zero errors."
+        : "No error events in the last " + (spec.hours || "?") + " hours.";
+      host.appendChild(el("div", { class: "muted small" }, empty));
       return;
     }
     const max = Math.max(1, ...rows.map(r => Number(r.errors) || 0));
@@ -4406,7 +4518,7 @@
       if (!request.accept(result)) return;
       const stamp = new Date().toLocaleTimeString();
       if (updatedEl) updatedEl.textContent = stamp;
-      if (result && (result.render === "table" || result.render === "raw_json")) {
+      if (result && !requestFailureLabel(result) && (result.render === "table" || result.render === "raw_json")) {
         if (statusEl) {
           const rowCount = result.render === "table" && Array.isArray(result.rows) ? result.rows.length : null;
           statusEl.className = "badge badge-success pipeline-pin-status";
@@ -4421,7 +4533,7 @@
       }
       if (statusEl) {
         statusEl.className = "badge badge-error pipeline-pin-status";
-        statusEl.textContent = result && result.render === "permission_denied" ? "Denied" : "Error";
+        statusEl.textContent = requestFailureLabel(result) || "Error";
       }
       if (resultHost) {
         if (result && result.render) {
@@ -5265,7 +5377,7 @@ def fetch(ctx):
     const saved = await loadLayout();
     if (saved && Array.isArray(saved) && saved.length > 0) {
       saved.forEach(ensureSavedTileElement);
-      try { grid.load(saved); } catch (e) { console.warn("Could not restore layout:", e); }
+      try { grid.load(saved); } catch (e) { console.warn("Could not restore layout."); }
       // GridStack only restores position/size; per-tile config is opaque to
       // it. Walk the saved entries and stamp config back onto each tile.
       saved.forEach(t => {
@@ -5301,8 +5413,10 @@ def fetch(ctx):
     if (isTauri) {
       try {
         await tauriInvoke("dashboard_set", { params: { tiles } });
+        $("#layout-save-warning")?.remove();
       } catch (e) {
-        console.warn("dashboard_set failed:", e);
+        console.warn("Dashboard could not be saved.");
+        showLayoutSaveWarning("Dashboard changes were not saved. The current layout is still displayed.");
       }
       return;
     }
@@ -5319,7 +5433,7 @@ def fetch(ctx):
         const tiles = (resp && Array.isArray(resp.tiles)) ? resp.tiles : [];
         return tiles.length > 0 ? tiles : null;
       } catch (e) {
-        console.warn("dashboard_get failed:", e);
+        console.warn("Dashboard could not be loaded.");
         return null;
       }
     }
@@ -5331,12 +5445,23 @@ def fetch(ctx):
     }
   }
 
+  function showLayoutSaveWarning(message) {
+    let warning = $("#layout-save-warning");
+    if (!warning) {
+      warning = el("p", { id: "layout-save-warning", class: "layout-save-warning", role: "status" });
+      $(".dashboard").before(warning);
+    }
+    warning.textContent = message;
+  }
+
   async function resetLayout() {
     if (isTauri) {
       try {
         await tauriInvoke("dashboard_set", { params: { tiles: [] } });
       } catch (e) {
-        console.warn("dashboard_set(reset) failed:", e);
+        console.warn("Dashboard reset could not be saved.");
+        showLayoutSaveWarning("Layout reset was not saved. The current layout is unchanged.");
+        return;
       }
       location.reload();
       return;

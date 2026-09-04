@@ -26,6 +26,7 @@ struct PackageRow {
     latest_version: String,
     last_published: String,
     versions: Vec<String>,
+    detail_failed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +85,7 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         });
     }
 
-    let mut out: Vec<Value> = Vec::with_capacity(packages.len());
+    let mut out: Vec<PackageRow> = Vec::with_capacity(packages.len());
     for package in packages {
         let row =
             match latest_package_row(ctx, &client, &domain, &repository, package, &domain_owner)
@@ -93,13 +94,24 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
                 Ok(row) => row,
                 Err(render) => return render,
             };
-        out.push(json!({
-            "package": row.package,
-            "latest_version": row.latest_version,
-            "last_published": row.last_published,
-            "versions": row.versions,
-        }));
+        out.push(row);
     }
+    package_table(out)
+}
+
+fn package_table(rows: Vec<PackageRow>) -> Value {
+    let failed_count = rows.iter().filter(|row| row.detail_failed).count();
+    let mut out: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "package": row.package,
+                "latest_version": row.latest_version,
+                "last_published": row.last_published,
+                "versions": row.versions,
+            })
+        })
+        .collect();
     out.sort_by_key(|row| {
         row.get("package")
             .and_then(Value::as_str)
@@ -107,11 +119,14 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             .to_ascii_lowercase()
     });
 
-    json!({
-        "render": "table",
-        "columns": ["package", "latest_version", "last_published"],
-        "rows": out,
-    })
+    with_partial_failure(
+        json!({
+            "render": "table",
+            "columns": ["package", "latest_version", "last_published"],
+            "rows": out,
+        }),
+        failed_count,
+    )
 }
 
 /// Resolve publish dates for one package's version snapshot. The package list
@@ -137,7 +152,7 @@ pub async fn fetch_version_history(ctx: &WidgetCtx) -> Value {
     }
 
     let client = Client::new(&ctx.sdk);
-    let mut rows: Vec<(usize, Value)> = Vec::with_capacity(seeds.len());
+    let mut rows: Vec<(usize, Value, bool)> = Vec::with_capacity(seeds.len());
     let mut requests = Vec::new();
 
     for (index, seed) in seeds.into_iter().enumerate() {
@@ -145,6 +160,7 @@ pub async fn fetch_version_history(ctx: &WidgetCtx) -> Value {
             rows.push((
                 index,
                 json!({"version": seed.version, "published": seed.published}),
+                false,
             ));
             continue;
         }
@@ -168,34 +184,59 @@ pub async fn fetch_version_history(ctx: &WidgetCtx) -> Value {
 
     let described = stream::iter(requests)
         .map(|(index, version, request)| async move {
-            let row = match request.send().await {
-                Ok(response) => json!({
-                    "version": version,
-                    "published": dt_iso(
-                        response
-                            .package_version()
-                            .and_then(|description| description.published_time())
-                    ),
-                }),
-                Err(error) => json!({
-                    "version": version,
-                    "published": "",
-                    "error": err_msg(error),
-                }),
+            let (row, failed) = match request.send().await {
+                Ok(response) => (
+                    json!({
+                        "version": version,
+                        "published": dt_iso(
+                            response
+                                .package_version()
+                                .and_then(|description| description.published_time())
+                        ),
+                    }),
+                    false,
+                ),
+                Err(error) => (
+                    json!({
+                        "version": version,
+                        "published": "",
+                        "error": err_msg(error),
+                    }),
+                    true,
+                ),
             };
-            (index, row)
+            (index, row, failed)
         })
         .buffer_unordered(VERSION_DETAIL_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
     rows.extend(described);
-    rows.sort_by_key(|(index, _)| *index);
+    version_history(&package, rows)
+}
 
-    json!({
-        "render": "codeartifact_version_history",
-        "package": package,
-        "versions": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
-    })
+fn version_history(package: &str, mut rows: Vec<(usize, Value, bool)>) -> Value {
+    rows.sort_by_key(|(index, _, _)| *index);
+    let failed_count = rows.iter().filter(|(_, _, failed)| *failed).count();
+    with_partial_failure(
+        json!({
+            "render": "codeartifact_version_history",
+            "package": package,
+            "versions": rows.into_iter().map(|(_, row, _)| row).collect::<Vec<_>>(),
+        }),
+        failed_count,
+    )
+}
+
+/// Failure is an explicit SDK outcome, never inferred from resource text.
+fn with_partial_failure(mut response: Value, failed_count: usize) -> Value {
+    if failed_count > 0 {
+        response["ok"] = json!(false);
+        response["partial"] = json!(true);
+        response["status"] = json!("partial");
+        response["error_type"] = json!("PartialFailure");
+        response["failed_count"] = json!(failed_count);
+    }
+    response
 }
 
 fn version_seeds(value: Option<&Value>) -> Vec<VersionSeed> {
@@ -333,6 +374,7 @@ async fn latest_package_row(
                 latest_version: String::new(),
                 last_published: format!("error: {}", err_msg(e)),
                 versions: Vec::new(),
+                detail_failed: true,
             });
         }
     };
@@ -347,6 +389,7 @@ async fn latest_package_row(
             latest_version,
             last_published: String::new(),
             versions: recent_versions,
+            detail_failed: false,
         });
     }
 
@@ -373,6 +416,7 @@ async fn latest_package_row(
                 latest_version,
                 last_published: format!("error: {}", err_msg(e)),
                 versions: recent_versions,
+                detail_failed: true,
             });
         }
     };
@@ -382,6 +426,7 @@ async fn latest_package_row(
         latest_version,
         last_published: dt_iso(described.package_version().and_then(|p| p.published_time())),
         versions: recent_versions,
+        detail_failed: false,
     })
 }
 
@@ -470,5 +515,43 @@ mod tests {
         assert_eq!(seeds[1].version, "1.2.2");
         assert!(seeds[1].published.is_empty());
         assert_eq!(seeds[2].version, "1.1.0");
+    }
+
+    #[test]
+    fn package_enrichment_failure_is_partial_without_scanning_row_text() {
+        let row = |failed| PackageRow {
+            package: "synthetic-package".into(),
+            latest_version: "1.0.0".into(),
+            last_published: "error: synthetic row text".into(),
+            versions: vec!["1.0.0".into()],
+            detail_failed: failed,
+        };
+        let successful = package_table(vec![row(false)]);
+        assert_eq!(crate::request::outcome(&successful), "succeeded");
+        assert!(successful.get("partial").is_none());
+        let failed = package_table(vec![row(true)]);
+        assert_eq!(crate::request::outcome(&failed), "failed");
+        assert_eq!(failed["rows"], successful["rows"]);
+        assert_eq!(failed["ok"], false);
+        assert_eq!(failed["partial"], true);
+        assert_eq!(failed["status"], "partial");
+        assert_eq!(failed["failed_count"], 1);
+    }
+
+    #[test]
+    fn version_enrichment_failure_preserves_order_rows_and_partial_classification() {
+        let known = json!({"version": "1.0.2", "published": "2026-01-01T00:00:00Z"});
+        let unavailable = json!({"version": "1.0.1", "published": "", "error": "The AWS request failed. Check the connection and try again."});
+        let result = version_history(
+            "synthetic-package",
+            vec![(1, unavailable.clone(), true), (0, known.clone(), false)],
+        );
+        assert_eq!(result["versions"], json!([known, unavailable]));
+        assert_eq!(result["package"], "synthetic-package");
+        assert_eq!(result["error_type"], "PartialFailure");
+        assert_eq!(result["failed_count"], 1);
+        assert_eq!(crate::request::outcome(&result), "failed");
+        let complete = version_history("synthetic-package", vec![(0, known, false)]);
+        assert_eq!(crate::request::outcome(&complete), "succeeded");
     }
 }

@@ -1,8 +1,8 @@
 # P1 — Build the trust boundary
 
-Status: **P1 in progress. P1-01 through P1-05 complete locally; P1-06 is next. Native validation pending.**
+Status: **P1-01 through P1-06 complete locally. Native/provider/device validation remains pending.**
 
-Original source reference: `0.2.9` / `095d1ad`, reviewed 2026-09-03. [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md) record implementation now in local baseline `a879851`. [P1-04 evidence](p1-04-evidence.md) tracks the separate constrained-CLI change. Remaining work is planned; this document does not certify the current app. Read the [operation inventory](aws-operation-inventory.md) and [journey contracts](phase-0.md) alongside it.
+Original source reference: `0.2.9` / `095d1ad`, reviewed 2026-09-03. [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md) record implementation now in local baseline `a879851`. [P1-04 evidence](p1-04-evidence.md) tracks the separate constrained-CLI change. [P1-05](p1-05-evidence.md) and [P1-06 evidence](p1-06-evidence.md) record result ownership and command/rendering/audit acceptance. This is local implementation evidence, not public-release or platform certification. Read the [operation inventory](aws-operation-inventory.md) and [journey contracts](phase-0.md) alongside it.
 
 ## Outcome
 
@@ -18,7 +18,7 @@ P0 device checks may remain pending while this work is planned. Implementation c
 | Original CLI process inherits its environment | P1-02 rejects unsupported operations/options; P1-04 replaces P1-03's temporary CLI block with exact verified credentials and an isolated child environment/home/cwd/null configuration; offline checks pass |
 | Original runner buffers output before applying its stdout limit | P1-04 implements concurrent streaming caps of 2 MiB stdout and 256 KiB stderr, a 30-second-or-expiry deadline, and direct-child termination/reaping; synthetic supervisor checks pass, native behavior remains unverified |
 | Original [context.rs](../../src-tauri/src/aws/context.rs) resolved credentials without account verification and changed global config environment | P1-03 uses explicit SSO snapshots and frozen credentials shared by STS verification and resource clients; expiry, refresh and principal checks precede reuse |
-| Original [commands.rs](../../src-tauri/src/commands.rs) published the last completion; [state.rs](../../src-tauri/src/state.rs) cached only profile/account/region | P1-03 versions connection attempts, verifies pinned contexts independently, keys caches by verified identity/configuration/session and invalidates changed contexts; broader tile ownership remains P1-05 |
+| Original [commands.rs](../../src-tauri/src/commands.rs) published the last completion; [state.rs](../../src-tauri/src/state.rs) cached only profile/account/region | P1-03 versions connection attempts, verifies pinned contexts independently, keys caches by verified identity/configuration/session and invalidates changed contexts; P1-05 adds broader tile/detail/selector ownership |
 | [widgets/mod.rs](../../src-tauri/src/widgets/mod.rs) records preflight, which may cover multiple subsequent requests | Distinguish permission decisions, provider activity and completed operations |
 | The existing [Tauri capability](../../src-tauri/capabilities/default.json) is limited to named commands and a local main window | Preserve that boundary and enforce validation inside each exposed command |
 
@@ -96,6 +96,8 @@ The SDK's default credential chain can discover credentials beyond a profile lab
 
 ### P1-06 — Close command, rendering and audit gaps
 
+**Complete locally, 2026-09-04.** Strict bounded inputs, safe external links, redacted diagnostics, explicit application outcomes, partial-result reporting and visible audit failures are implemented. See [P1-06 evidence](p1-06-evidence.md) for production-boundary tests and review findings.
+
 **Depends on:** P1-02–05. **Touchpoints:** Tauri capability/build manifest, command input validation, `audit.rs`, widget preflights and frontend rendering.
 
 - Bound exposed JSON inputs, array/page limits and audit-tail requests; reject unknown widget/command shapes before provider work. Preserve local-only command access and the existing CSP.
@@ -109,7 +111,7 @@ Tauri capabilities govern which windows/webviews may reach commands and permissi
 
 ## Planned acceptance evidence
 
-P1-02's operation/argument denial cases and P1-03's identity, connection-ordering, configuration/refresh and auth-poll cases pass locally; their historical evidence is unchanged. P1-04 handoff/environment/cleanup checks also pass, including preservation of cleanup failure after context invalidation; see [its evidence](p1-04-evidence.md). P1-05 tile/detail/selector ownership cases now pass through the production frontend with a synthetic bridge. Rendering/audit and native-runtime contracts remain open. The table retains the phase-wide acceptance contract, including already covered cases.
+P1-02's operation/argument denial cases and P1-03's identity, connection-ordering, configuration/refresh and auth-poll cases pass locally; their historical evidence is unchanged. P1-04 handoff/environment/cleanup checks also pass, including preservation of cleanup failure after context invalidation; see [its evidence](p1-04-evidence.md). P1-05 tile/detail/selector ownership cases now pass through the production frontend with a synthetic bridge. P1-06 command/rendering/audit cases also pass locally. Native-runtime/provider/device evidence remains open. The table retains the phase-wide acceptance contract, including already covered cases.
 
 | Case | Required observable result | Contract |
 | --- | --- | --- |
@@ -128,4 +130,4 @@ P1-02's operation/argument denial cases and P1-03's identity, connection-orderin
 
 P1 is complete only after the implementation exists, the deterministic cases pass through production boundaries, and a focused security review covers the changed paths. Preserve native process/provider checks in the validation ledger until real OS evidence exists; do not describe a synthetic pass as full platform verification.
 
-P2 receives verified context/result/error contracts. P3 receives cancellation ownership, process byte limits and cache identity rules. P4 receives executable/environment/storage portability requirements. **P1-01–05 are complete locally. P1-06 is next:** close command, rendering and audit gaps. Full P1 remains incomplete until that separate unit passes; deferred live/native validation stays open.
+P2 receives verified context/result/error contracts. P3 receives cancellation ownership, process byte limits and cache identity rules. P4 receives executable/environment/storage portability requirements. **P1-01–06 are complete locally. Next: P2-01**, truthful settings/dashboard persistence. Deferred live/native validation stays open and still blocks corresponding support/release claims.

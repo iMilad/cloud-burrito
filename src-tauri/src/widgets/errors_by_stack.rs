@@ -1,6 +1,7 @@
 //! Errors by Stack — count ERROR log lines per log group over a window using
 //! CloudWatch Logs Insights. The top 20 most-recently-created matching groups
-//! are queried concurrently; wall time is bounded by the slowest single query.
+//! are queried concurrently. A polling timeout does not stop the remote query;
+//! failures must not be presented as confirmed zero error counts.
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -65,15 +66,56 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     });
     let results = join_all(futs).await;
 
+    let out = errors_chart(hours, results);
+    if out["status"] != "complete" {
+        ctx.log("query results incomplete", out["counts"].clone());
+    }
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryFailure {
+    StartFailed,
+    MissingQueryId,
+    PollFailed,
+    Failed,
+    Cancelled,
+    RemoteTimeout,
+    PollTimeout,
+}
+
+fn errors_chart(hours: i64, results: Vec<(String, Result<i64, QueryFailure>)>) -> Value {
+    let queried = results.len();
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut timed_out = 0usize;
+    let mut remote_status_unknown = 0usize;
     let mut rows: Vec<(String, i64)> = Vec::new();
-    for (group, total) in results {
-        match total {
-            Ok(t) if t > 0 => rows.push((group, t)),
-            Ok(_) => {}
-            Err(err) => ctx.log(
-                "cw_insights failed",
-                json!({"log_group": group, "error": err}),
-            ),
+    for (group, result) in results {
+        match result {
+            Ok(total) => {
+                succeeded += 1;
+                if total > 0 {
+                    rows.push((group, total));
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                if matches!(
+                    error,
+                    QueryFailure::RemoteTimeout | QueryFailure::PollTimeout
+                ) {
+                    timed_out += 1;
+                }
+                if matches!(
+                    error,
+                    QueryFailure::MissingQueryId
+                        | QueryFailure::PollFailed
+                        | QueryFailure::PollTimeout
+                ) {
+                    remote_status_unknown += 1;
+                }
+            }
         }
     }
     rows.sort_by_key(|row| std::cmp::Reverse(row.1));
@@ -82,7 +124,32 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         .map(|(stack, errors)| json!({"stack": stack, "errors": errors}))
         .collect();
 
-    json!({"render": "errors_chart", "hours": hours, "rows": out})
+    let mut result = json!({
+        "render": "errors_chart", "hours": hours, "rows": out,
+        "ok": failed == 0,
+        "status": if failed == 0 { "complete" } else if succeeded > 0 { "partial" } else { "failed" },
+        "partial": failed > 0 && succeeded > 0,
+        "counts": { "queried": queried, "succeeded": succeeded, "failed": failed, "timed_out": timed_out, "remote_status_unknown": remote_status_unknown },
+        "cleanup": { "status": "not_attempted", "remote_queries_may_still_run": remote_status_unknown > 0 },
+    });
+    if failed > 0 {
+        result["error_type"] = json!(if succeeded > 0 {
+            "PartialFailure"
+        } else {
+            "QueryFailed"
+        });
+        let mut message = if succeeded > 0 {
+            "Some query results are unavailable; displayed error counts are incomplete."
+        } else {
+            "No query results were confirmed; error counts are unavailable."
+        }
+        .to_string();
+        if remote_status_unknown > 0 {
+            message.push_str(" Some remote queries may still be running; no stop was attempted.");
+        }
+        result["error"] = json!(message);
+    }
+    result
 }
 
 /// Start an Insights query and poll until Complete, summing the `errors` column.
@@ -91,7 +158,7 @@ async fn cw_insights_count(
     group: &str,
     start: i64,
     end: i64,
-) -> Result<i64, String> {
+) -> Result<i64, QueryFailure> {
     let started = client
         .start_query()
         .log_group_name(group)
@@ -101,10 +168,10 @@ async fn cw_insights_count(
         .limit(100)
         .send()
         .await
-        .map_err(err_msg)?;
+        .map_err(|_| QueryFailure::StartFailed)?;
     let query_id = started
         .query_id()
-        .ok_or_else(|| "no queryId returned".to_string())?
+        .ok_or(QueryFailure::MissingQueryId)?
         .to_string();
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -114,7 +181,7 @@ async fn cw_insights_count(
             .query_id(&query_id)
             .send()
             .await
-            .map_err(err_msg)?;
+            .map_err(|_| QueryFailure::PollFailed)?;
         match resp.status() {
             Some(QueryStatus::Complete) => {
                 let mut total = 0i64;
@@ -129,17 +196,102 @@ async fn cw_insights_count(
                 }
                 return Ok(total);
             }
-            Some(QueryStatus::Failed)
-            | Some(QueryStatus::Cancelled)
-            | Some(QueryStatus::Timeout) => {
-                return Err(format!("query terminated: {:?}", resp.status()));
-            }
+            Some(QueryStatus::Failed) => return Err(QueryFailure::Failed),
+            Some(QueryStatus::Cancelled) => return Err(QueryFailure::Cancelled),
+            Some(QueryStatus::Timeout) => return Err(QueryFailure::RemoteTimeout),
             _ => {
                 if Instant::now() >= deadline {
-                    return Err("query timeout (30s budget exhausted)".to_string());
+                    return Err(QueryFailure::PollTimeout);
                 }
                 tokio::time::sleep(Duration::from_millis(400)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_results_keep_resource_counts_and_exclude_failed_group_diagnostics() {
+        let result = errors_chart(
+            24,
+            vec![
+                ("synthetic-resource-low".into(), Ok(2)),
+                ("synthetic-resource-high".into(), Ok(7)),
+                ("synthetic-resource-zero".into(), Ok(0)),
+                (
+                    "SYNTHETIC_PRIVATE_GROUP_MARKER".into(),
+                    Err(QueryFailure::StartFailed),
+                ),
+                (
+                    "SYNTHETIC_PRIVATE_TIMEOUT_MARKER".into(),
+                    Err(QueryFailure::PollTimeout),
+                ),
+            ],
+        );
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result["partial"], true);
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error_type"], "PartialFailure");
+        assert_eq!(
+            result["counts"],
+            json!({"queried": 5, "succeeded": 3, "failed": 2, "timed_out": 1, "remote_status_unknown": 1})
+        );
+        assert_eq!(
+            result["rows"],
+            json!([
+                {"stack": "synthetic-resource-high", "errors": 7},
+                {"stack": "synthetic-resource-low", "errors": 2},
+            ])
+        );
+        assert_eq!(result["cleanup"]["status"], "not_attempted");
+        assert_eq!(result["cleanup"]["remote_queries_may_still_run"], true);
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("may still be running"));
+        assert!(!result.to_string().contains("SYNTHETIC_PRIVATE"));
+    }
+
+    #[test]
+    fn complete_zero_results_and_total_failure_are_distinct() {
+        let zero = errors_chart(24, vec![("synthetic-zero".into(), Ok(0))]);
+        assert_eq!(zero["status"], "complete");
+        assert_eq!(zero["ok"], true);
+        assert_eq!(zero["rows"], json!([]));
+        assert!(zero.get("error").is_none());
+
+        let failed = errors_chart(
+            24,
+            vec![(
+                "SYNTHETIC_PRIVATE_GROUP_MARKER".into(),
+                Err(QueryFailure::Failed),
+            )],
+        );
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["ok"], false);
+        assert_eq!(failed["partial"], false);
+        assert_eq!(failed["rows"], json!([]));
+        assert_eq!(failed["counts"]["succeeded"], 0);
+        assert_eq!(failed["cleanup"]["remote_queries_may_still_run"], false);
+        assert!(failed["error"].as_str().unwrap().contains("unavailable"));
+        assert!(!failed.to_string().contains("SYNTHETIC_PRIVATE"));
+    }
+
+    #[test]
+    fn service_timeout_and_unknown_remote_state_are_counted_separately() {
+        let result = errors_chart(
+            24,
+            vec![
+                ("synthetic-one".into(), Err(QueryFailure::RemoteTimeout)),
+                ("synthetic-two".into(), Err(QueryFailure::PollFailed)),
+                ("synthetic-three".into(), Err(QueryFailure::MissingQueryId)),
+            ],
+        );
+        assert_eq!(result["counts"]["timed_out"], 1);
+        assert_eq!(result["counts"]["remote_status_unknown"], 2);
+        assert_eq!(result["cleanup"]["remote_queries_may_still_run"], true);
     }
 }

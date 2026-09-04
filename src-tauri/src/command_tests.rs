@@ -816,7 +816,7 @@ async fn selected_role_or_sso_session_change_blocks_work_before_new_resolution()
         }
         let result = widget_fetch_impl(
             &fixture.state,
-            json!({"widget": "logs-insights", "inputs": {}}),
+            json!({"widget": "logs-insights", "inputs": {"log_group":"/synthetic/group", "query":"fields @message"}}),
         )
         .await
         .unwrap();
@@ -961,7 +961,13 @@ async fn inherited_cli_receives_exact_sts_verified_credentials_without_payload_f
     params["inputs"]["region"] = json!("eu-west-1");
     params["inputs"]["aws_config_path"] = json!("synthetic-untrusted.ini");
     params["inputs"]["credentials"] = json!({"access_key_id": "CB_SYNTHETIC_UNTRUSTED"});
-    let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    let rejected = widget_fetch_impl(&fixture.state, params).await.unwrap();
+    assert_eq!(rejected["error_type"], "InvalidRequest");
+    fixture.no_process();
+    // The clean supported request still receives the exact verified session.
+    let result = widget_fetch_impl(&fixture.state, cli_params())
+        .await
+        .unwrap();
     assert_eq!(result["render"], "table");
     assert_eq!(result["action"], "sts:GetCallerIdentity");
     assert_eq!(result["account_id"], ACCOUNT_A);
@@ -1070,7 +1076,7 @@ async fn cli_cannot_use_absent_or_invalid_context_as_an_ambient_credentials_fall
     incomplete["context"] = json!({"mode": "pinned", "profile": "demo-a", "region": "us-east-1"});
     assert_eq!(
         widget_fetch_impl(&fixture.state, incomplete).await.unwrap()["error_type"],
-        "InvalidContext"
+        "InvalidRequest"
     );
     let invalid = widget_fetch_impl(&fixture.state, pinned_cli("demo-a", ACCOUNT_B))
         .await
@@ -1294,6 +1300,7 @@ async fn cli_cleanup_failure_is_visible_even_after_the_context_is_superseded() {
                 .await
                 .unwrap();
             assert_eq!(result["error_type"], "CliCleanupFailed");
+            assert_eq!(result["_request"]["outcome"], "failed");
         } else {
             let (mut cancelled, finish) = fixture.process.wait_for_cancellation();
             let pending = widget_fetch_impl(&fixture.state, cli_params());
@@ -1323,6 +1330,7 @@ async fn cli_cleanup_failure_is_visible_even_after_the_context_is_superseded() {
                 .unwrap();
             let result = pending.await.unwrap();
             assert_eq!(result["error_type"], "CliCleanupFailed");
+            assert_eq!(result["_request"]["outcome"], "failed");
             assert_eq!(result["_request"]["profile"], "demo-a");
             assert_eq!(result["_request"]["account_id"], ACCOUNT_A);
             assert_eq!(fixture.state.current_ctx().unwrap().account_id, ACCOUNT_B);
@@ -1427,7 +1435,11 @@ async fn both_query_workflows_require_stop_permission_before_pinned_provider_wor
         for widget in ["logs-insights", "errors-by-stack"] {
             let mut params = pinned("demo-a", ACCOUNT_A);
             params["widget"] = json!(widget);
-            params["inputs"] = json!({"log_group": "/synthetic/group", "query": "fields @message", "stack_name": "synthetic-stack"});
+            params["inputs"] = if widget == "logs-insights" {
+                json!({"log_group":"/synthetic/group", "query":"fields @message"})
+            } else {
+                json!({})
+            };
             let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
             assert_eq!(result["render"], "permission_denied");
             assert_eq!(result["action"], "logs:StartQuery");
@@ -1443,7 +1455,7 @@ async fn both_query_workflows_require_stop_permission_before_pinned_provider_wor
 }
 
 #[tokio::test]
-async fn verified_widget_input_errors_return_without_any_sdk_http_work() {
+async fn widget_input_errors_return_before_any_additional_provider_work() {
     let fixture = Fixture::new();
     fixture.connect_a("CB_SYNTHETIC_A1", 3000).await;
     let result = widget_fetch_impl(
@@ -1453,9 +1465,164 @@ async fn verified_widget_input_errors_return_without_any_sdk_http_work() {
     .await
     .unwrap();
     assert_eq!(result["ok"], false);
-    assert_eq!(result["error"], "log_group is required");
-    assert_eq!(result["_request"]["account_id"], ACCOUNT_A);
+    assert_eq!(result["error_type"], "InvalidRequest");
+    assert!(result["_request"]["account_id"].is_null());
     assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
     fixture.no_process();
+}
+
+include!("command_input_tests.rs");
+
+fn audit_events_for(fixture: &Fixture, id: &Value) -> Vec<Value> {
+    crate::audit::tail(&fixture.state.runtime.paths, 1000)
+        .into_iter()
+        .filter(|entry| entry["kind"] == "request" && entry["request_id"] == *id)
+        .collect()
+}
+
+#[tokio::test]
+async fn request_lifecycle_has_one_terminal_outcome_and_no_client_arguments_in_audit() {
+    let fixture = Fixture::new();
+    let mut denied = cli_params();
+    denied["inputs"]["command"] = json!("aws sts get-caller-identity SYNTHETIC_PRIVATE_ARGUMENT");
+    denied["request_id"] = json!("synthetic-private-client-id");
+    let denied = widget_fetch_impl(&fixture.state, denied).await.unwrap();
+    assert_eq!(denied["_request"]["outcome"], "denied");
+    assert!(!denied.to_string().contains("SYNTHETIC_PRIVATE_ARGUMENT"));
+    let events = audit_events_for(&fixture, &denied["_request"]["audit_id"]);
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| e["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["denied"]
+    );
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+
+    fixture.connect_a("CB_SYNTHETIC_AUDIT", 3000).await;
+    for succeeds in [true, false] {
+        if succeeds {
+            fixture
+                .process
+                .ready(process_output("synthetic resource value"));
+        } else {
+            fixture
+                .process
+                .queue_output()
+                .send(Err("SYNTHETIC_PRIVATE_RUNNER_ARGUMENT".into()))
+                .unwrap();
+        }
+        let mut params = cli_params();
+        params["request_id"] = json!("synthetic-private-client-id");
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        let expected = if succeeds { "succeeded" } else { "failed" };
+        assert_eq!(result["_request"]["outcome"], expected);
+        assert!(!result
+            .to_string()
+            .contains("SYNTHETIC_PRIVATE_RUNNER_ARGUMENT"));
+        let events = audit_events_for(&fixture, &result["_request"]["audit_id"]);
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| e["event"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["started", expected]
+        );
+        assert_eq!(events[1]["account_id"], ACCOUNT_A);
+        let preflights = crate::audit::tail(&fixture.state.runtime.paths, 1000);
+        assert!(preflights
+            .iter()
+            .any(|e| e["request_id"] == result["_request"]["audit_id"]
+                && e["scope"] == "capability_preflight"));
+    }
+    let audit =
+        std::fs::read_to_string(fixture.state.runtime.paths.data_file("audit.log")).unwrap();
+    for marker in [
+        "synthetic-private-client-id",
+        "SYNTHETIC_PRIVATE_ARGUMENT",
+        "SYNTHETIC_PRIVATE_RUNNER_ARGUMENT",
+        "CB_SYNTHETIC_AUDIT",
+    ] {
+        assert!(!audit.contains(marker));
+    }
+}
+
+#[tokio::test]
+async fn dropping_a_pending_command_records_logical_cancellation_once() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_DROP_AUDIT", 3000).await;
+    let finish = fixture.process.queue_output();
+    let mut pending = Box::pin(widget_fetch_impl(&fixture.state, cli_params()));
+    assert!(futures::poll!(&mut pending).is_pending());
+    let started = crate::audit::tail(&fixture.state.runtime.paths, 1000)
+        .into_iter()
+        .find(|e| {
+            e["kind"] == "request" && e["command"] == "widget_fetch" && e["event"] == "started"
+        })
+        .unwrap();
+    drop(pending);
+    assert!(finish.is_closed());
+    let events = audit_events_for(&fixture, &started["request_id"]);
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| e["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["started", "cancelled"]
+    );
+}
+
+#[tokio::test]
+async fn audit_write_failure_warns_without_blocking_inspection_and_remains_visible() {
+    let fixture = Fixture::new();
+    let path = fixture.state.runtime.paths.data_file("audit.log");
+    std::fs::create_dir_all(&path).unwrap();
+    fixture.connect_a("CB_SYNTHETIC_AUDIT_FAILURE", 3000).await;
+    fixture
+        .process
+        .ready(process_output("synthetic usable result"));
+    let result = widget_fetch_impl(&fixture.state, cli_params())
+        .await
+        .unwrap();
+    assert_eq!(result["render"], "table");
+    assert_eq!(result["_diagnostics"]["audit_write_failed"], true);
+    let unreadable = audit_tail_impl(&fixture.state, json!({"limit":200}));
+    assert_eq!(unreadable["error_type"], "AuditReadFailed");
+    assert!(unreadable.get("entries").is_none());
+    std::fs::remove_dir(path).unwrap(); // Only this empty synthetic directory.
+    let auth = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(auth["logged_in"], true);
+    assert_eq!(auth["_diagnostics"]["audit_write_failed"], true);
+    assert!(!crate::audit::tail(&fixture.state.runtime.paths, 100).is_empty());
+}
+
+#[tokio::test]
+async fn provider_and_policy_failures_do_not_echo_private_source_messages() {
+    let fixture = Fixture::new();
+    fixture
+        .aws
+        .queue_credentials("demo-a")
+        .send(Err("synthetic-private-provider-marker".into()))
+        .unwrap();
+    let result = aws_set_account_impl(&fixture.state, demo("demo-a", ACCOUNT_A))
+        .await
+        .unwrap();
+    assert_eq!(result["error_type"], "CredentialsError");
+    assert_eq!(result["_request"]["outcome"], "failed");
+    assert_eq!(result["needs_sso_login"], true);
+    assert!(!result
+        .to_string()
+        .contains("synthetic-private-provider-marker"));
+    let audit =
+        std::fs::read_to_string(fixture.state.runtime.paths.data_file("audit.log")).unwrap();
+    assert!(!audit.contains("synthetic-private-provider-marker"));
+    for text in [
+        "statements: [synthetic-private-policy-marker]",
+        "statements:\n  - effect: synthetic-private-policy-marker\n    action: ['*']\n",
+    ] {
+        let error = aws::policy::Policy::parse(text).unwrap_err();
+        assert!(!error.message.contains("synthetic-private-policy-marker"));
+    }
 }

@@ -55,9 +55,9 @@ The optional AWS CLI Table widget requires a separately installed AWS CLI v2.
 - **User-narrowable policy.** An IAM-style `policy.yaml` allowlist (edited from
   the Settings panel, with live YAML syntax highlighting) further restricts which
   supported operations may run — and cannot expand the compiled registry.
-- **Full audit trail.** Every allowed or blocked AWS call preflight is appended
-  to a JSONL audit log and shown live in an in-app Audit panel, tagged `aws`,
-  `aws-blocked`, or lifecycle.
+- **Local activity diagnostics.** Correlated application outcomes and capability
+  preflights appear in the Audit panel. They are not SDK wire-call counts. Failed
+  audit writes show a visible warning; raw inputs and error payloads are excluded.
 - **Multi-account via AWS SSO.** Uses your existing `~/.aws/config` SSO profiles;
   search for a default account/region from the top bar, or pin account/region per widget.
 - **Customizable dashboard.** Drag/resize widget tiles (GridStack); the layout
@@ -211,7 +211,10 @@ discovery and process behavior still require validation on each platform.
 
 See the [P1-02 evidence](docs/roadmap/p1-02-evidence.md) for the parser contract and
 [P1-04 evidence](docs/roadmap/p1-04-evidence.md) for the environment contract,
-supervision checks and remaining native acceptance.
+supervision checks and remaining native acceptance. [P1-05](docs/roadmap/p1-05-evidence.md)
+adds result ownership; [P1-06](docs/roadmap/p1-06-evidence.md) records bounded IPC inputs,
+safe console links, redacted diagnostics and audit outcomes. P1 is complete locally;
+live AWS, installer and native-platform acceptance remain pending.
 
 ## Widgets
 
@@ -296,7 +299,7 @@ State lives in your home directory:
 | `~/.cloud_burrito/settings.json` | App settings (config path, SSO session, default profile/region) |
 | `~/.cloud_burrito/policy.yaml` | Read-only allowlist (see [Security model](#security-model)) |
 | `~/.cloud_burrito/dashboard.json` | Saved dashboard layout and per-tile config |
-| `~/.cloud_burrito/audit.log` | Append-only JSONL log of AWS call preflights and blocked calls |
+| `~/.cloud_burrito/audit.log` | Structured application outcomes and capability preflights; write failures are visible |
 
 Authentication supports inline SSO profiles and profiles referencing an
 `[sso-session]` section. Static keys, credential processes, role chains and

@@ -28,7 +28,9 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
     }
     let parsed = match parse_cli_command(&command) {
         Ok(p) => p,
-        Err(e) => return json!({"ok": false, "error": e}),
+        Err(_) => {
+            return json!({"ok": false, "error": "Only reviewed AWS read commands and arguments are supported"})
+        }
     };
     let action = format!("{}:{}", parsed.service, parsed.operation);
     if let Some(denied) = ctx.preflight_cli(&parsed.service, &parsed.operation) {
@@ -66,6 +68,9 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
         Err(error) if error == crate::process::CLEANUP_FAILED => {
             return json!({"ok": false, "error_type": "CliCleanupFailed", "error": error});
         }
+        Err(error) if error == "AWS CLI request cancelled" => {
+            return json!({"ok":false, "error_type":"Cancelled", "error":"AWS CLI request cancelled"});
+        }
         Err(error) => {
             return json!({"ok": false, "error": safe_diagnostic(&error, &access.credentials)})
         }
@@ -97,7 +102,7 @@ async fn run_cli(ctx: &WidgetCtx, parsed: &ParsedCli, action: &str) -> Value {
                 return json!({"ok": false, "error": "CLI output contained authentication material and was not displayed"});
             }
             Ok(v) => table_model(&v),
-            Err(e) => return json!({"ok": false, "error": format!("output was not JSON: {e}")}),
+            Err(_) => return json!({"ok": false, "error": "AWS CLI output was not valid JSON"}),
         }
     };
     out["action"] = json!(action);
@@ -121,7 +126,16 @@ fn safe_diagnostic(text: &str, credentials: &aws_credential_types::Credentials) 
     if contains_credentials(text, credentials) || contains_credentials(&clean, credentials) {
         return "AWS CLI execution failed; authentication details were withheld".into();
     }
-    clean.chars().take(400).collect()
+    match text {
+        "AWS CLI deadline reached" | "AWS CLI stdout exceeded its 2 MiB limit" | "AWS CLI stderr exceeded its 256 KiB limit"
+        | "AWS CLI environment has conflicting runtime settings" | "AWS CLI certificate paths must be absolute"
+        | "AWS CLI temporary directory is unavailable" | "AWS CLI temporary directory could not be created"
+        | "AWS CLI temporary directory could not be allocated" | "AWS CLI process could not be started"
+        | "AWS CLI output could not be read" | "AWS CLI exit status could not be read"
+        | "AWS CLI output pipes could not be opened"
+        | "AWS CLI v2 executable not found; use a native install or a supported absolute-Python wrapper" => text.into(),
+        _ => "AWS CLI execution failed; check the local installation and selected context".into(),
+    }
 }
 
 fn value_contains_credentials(
@@ -893,8 +907,8 @@ mod tests {
     async fn injected_process_failures_preserve_cli_error_rendering() {
         for (response, expected_error) in [
             (
-                Err("command timed out after 30s (killed)".into()),
-                "command timed out after 30s (killed)",
+                Err("AWS CLI deadline reached".into()),
+                "AWS CLI deadline reached",
             ),
             (
                 Ok(ProcessOutput {

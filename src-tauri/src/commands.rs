@@ -20,7 +20,7 @@ fn config_path_from_settings(s: &Value) -> String {
 }
 
 fn audit_aws_call(
-    state: &AppState,
+    runtime: &crate::runtime::Runtime,
     policy: &Result<aws::policy::Policy, String>,
     service: &str,
     operation: &str,
@@ -34,7 +34,7 @@ fn audit_aws_call(
             operation,
             reason,
         } => {
-            state.runtime.audit(json!({
+            runtime.audit(json!({
                 "kind": "aws",
                 "service": service,
                 "operation": operation,
@@ -48,7 +48,7 @@ fn audit_aws_call(
             operation,
             reason,
         } => {
-            state.runtime.audit(json!({
+            runtime.audit(json!({
                 "kind": "aws-blocked",
                 "service": service,
                 "operation": operation,
@@ -62,7 +62,7 @@ fn audit_aws_call(
 
     match aws::policy::gate(policy, service, operation) {
         Ok(()) => {
-            state.runtime.audit(json!({
+            runtime.audit(json!({
                 "kind": "aws",
                 "service": service,
                 "operation": operation,
@@ -72,7 +72,7 @@ fn audit_aws_call(
             Ok(())
         }
         Err(reason) => {
-            state.runtime.audit(json!({
+            runtime.audit(json!({
                 "kind": "aws-blocked",
                 "service": service,
                 "operation": operation,
@@ -96,7 +96,7 @@ pub async fn aws_set_account(state: State<'_, AppState>, params: Value) -> Resul
 }
 
 async fn aws_set_account_impl(state: &AppState, params: Value) -> Result<Value, String> {
-    let mut request = match request_envelope(&params) {
+    let mut request = match request_envelope(state, "aws_set_account", &params) {
         Ok(request) => request,
         Err(error) => return Ok(error),
     };
@@ -171,7 +171,9 @@ async fn aws_set_account_request(
     )
     .with_settings_revision(revision);
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
-    if let Err((action, reason)) = verification_gate(state, &policy, &ctx) {
+    if let Err((action, reason)) =
+        verification_gate(&request.runtime(&state.runtime), &policy, &ctx)
+    {
         return Ok(finish_connection_failure(
             state,
             attempt,
@@ -180,6 +182,7 @@ async fn aws_set_account_request(
             false,
         ));
     }
+    request.start();
     let session = match ctx.verified_session().await {
         Ok(session) => session,
         Err(error) => {
@@ -236,17 +239,32 @@ fn request_error(error_type: &str, message: &str) -> Value {
         "render": "raw_json", "data": {"error": message}})
 }
 
-fn request_envelope(params: &Value) -> Result<RequestEnvelope, Value> {
-    RequestEnvelope::from_params(params).map_err(|message| {
-        RequestEnvelope::default().attach(request_error("InvalidRequest", message))
-    })
+fn request_envelope(
+    state: &AppState,
+    command: &'static str,
+    params: &Value,
+) -> Result<RequestEnvelope, Value> {
+    let request = match RequestEnvelope::from_params(params) {
+        Ok(request) => request.audited(command, &state.runtime),
+        Err(message) => {
+            return Err(RequestEnvelope::default()
+                .audited(command, &state.runtime)
+                .attach(request_error("InvalidRequest", message)))
+        }
+    };
+    if let Err(message) = crate::validation::validate(command, params) {
+        return Err(request.attach(request_error("InvalidRequest", message)));
+    }
+    Ok(request)
 }
 
 fn finish_request(
     request: RequestEnvelope,
     result: Result<Value, String>,
 ) -> Result<Value, String> {
-    Ok(request.attach(result.unwrap_or_else(|message| request_error("RequestFailed", &message))))
+    Ok(request.attach(
+        result.unwrap_or_else(|_| request_error("RequestFailed", "The desktop request failed")),
+    ))
 }
 
 fn superseded() -> Value {
@@ -288,12 +306,12 @@ fn finish_connection_failure(
 }
 
 fn verification_gate(
-    state: &AppState,
+    runtime: &crate::runtime::Runtime,
     policy: &Result<aws::policy::Policy, String>,
     ctx: &AwsContext,
 ) -> Result<(), (String, String)> {
     audit_aws_call(
-        state,
+        runtime,
         policy,
         "sts",
         "GetCallerIdentity",
@@ -410,19 +428,36 @@ fn validate_request_context(
     Ok(())
 }
 
+#[cfg(test)]
 async fn verify_request_context(
     state: &AppState,
     resolved: &ResolvedContext,
     policy: &Result<aws::policy::Policy, String>,
 ) -> Result<std::sync::Arc<aws::context::VerifiedSession>, Value> {
+    verify_request_context_owned(state, resolved, policy, None).await
+}
+
+async fn verify_request_context_owned(
+    state: &AppState,
+    resolved: &ResolvedContext,
+    policy: &Result<aws::policy::Policy, String>,
+    mut request: Option<&mut RequestEnvelope>,
+) -> Result<std::sync::Arc<aws::context::VerifiedSession>, Value> {
+    let runtime = request
+        .as_ref()
+        .map(|r| r.runtime(&state.runtime))
+        .unwrap_or_else(|| state.runtime.clone());
     let ctx = &resolved.context;
-    if let Err((action, reason)) = verification_gate(state, policy, ctx) {
+    if let Err((action, reason)) = verification_gate(&runtime, policy, ctx) {
         let mut denial = widgets::permission_denied_render("sts", "GetCallerIdentity", &reason);
         denial["action"] = json!(action);
         denial["ok"] = json!(false);
         denial["error"] = json!(reason);
         denial["error_type"] = json!("PolicyDenied");
         return Err(denial);
+    }
+    if let Some(request) = request.as_mut() {
+        request.start();
     }
     let session = match ctx.verified_session().await {
         Ok(session) => session,
@@ -478,7 +513,7 @@ fn retain_cli_cleanup_failure(ctx: &widgets::WidgetCtx, result: &Value) -> bool 
 }
 
 async fn widget_fetch_impl(state: &AppState, params: Value) -> Result<Value, String> {
-    let mut request = match request_envelope(&params) {
+    let mut request = match request_envelope(state, "widget_fetch", &params) {
         Ok(request) => request,
         Err(error) => return Ok(error),
     };
@@ -502,9 +537,7 @@ async fn widget_fetch_request(
         );
     }
     if !widgets::is_known(&name) {
-        return Ok(
-            json!({"render": "raw_json", "data": {"error": format!("Unknown widget: {name}")}}),
-        );
+        return Ok(json!({"render": "raw_json", "data": {"error": "Unknown widget"}}));
     }
 
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
@@ -513,7 +546,12 @@ async fn widget_fetch_request(
         let command = inputs.get("command").and_then(Value::as_str).unwrap_or("");
         let parsed = match widgets::parse_cli_command(command) {
             Ok(parsed) => parsed,
-            Err(error) => return Ok(request_error("UnsupportedCommand", &error)),
+            Err(_) => {
+                return Ok(request_error(
+                    "UnsupportedCommand",
+                    "Only reviewed AWS read commands and arguments are supported",
+                ))
+            }
         };
         if let Err(reason) = aws::policy::gate_cli(&policy, &parsed.service, &parsed.operation) {
             return Ok(widgets::permission_denied_render(
@@ -529,7 +567,7 @@ async fn widget_fetch_request(
     };
     for &(service, operation) in widgets::entry_operations(&name, &inputs) {
         if let Err((action, reason)) = audit_aws_call(
-            state,
+            &request.runtime(&state.runtime),
             &policy,
             service,
             operation,
@@ -541,7 +579,8 @@ async fn widget_fetch_request(
             return Ok(denied);
         }
     }
-    let session = match verify_request_context(state, &resolved, &policy).await {
+    let session = match verify_request_context_owned(state, &resolved, &policy, Some(request)).await
+    {
         Ok(session) => session,
         Err(error) => return Ok(error),
     };
@@ -565,7 +604,7 @@ async fn widget_fetch_request(
     };
     let ctx = &resolved.context;
     let wctx = widgets::WidgetCtx {
-        runtime: state.runtime.clone(),
+        runtime: request.runtime(&state.runtime),
         sdk: session.sdk.clone(),
         account_id: session.identity.account_id.clone(),
         region: ctx.region.clone(),
@@ -611,6 +650,9 @@ async fn widget_fetch_request(
 
 #[tauri::command]
 pub async fn widget_get_source(params: Value) -> Result<Value, String> {
+    if let Err(message) = crate::validation::validate("widget_get_source", &params) {
+        return Ok(request_error("InvalidRequest", message));
+    }
     let name = params.get("widget").and_then(|v| v.as_str()).unwrap_or("");
     if name.is_empty() {
         return Ok(json!({"ok": false, "error": "missing required field 'widget'"}));
@@ -620,31 +662,74 @@ pub async fn widget_get_source(params: Value) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn settings_get(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(settings::load(&state.runtime.paths))
+    Ok(state
+        .runtime
+        .with_diagnostics(settings::load(&state.runtime.paths)))
 }
 
 #[tauri::command]
 pub async fn settings_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
+    Ok(settings_set_impl(&state, params))
+}
+
+fn local_validation(state: &AppState, command: &'static str, params: &Value) -> Option<Value> {
+    crate::validation::validate(command, params)
+        .err()
+        .map(|message| {
+            RequestEnvelope::default()
+                .audited(command, &state.runtime)
+                .attach(request_error("InvalidRequest", message))
+        })
+}
+
+fn settings_set_impl(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "settings_set", &params) {
+        return error;
+    }
     let result = settings::save(&state.runtime.paths, &params);
-    refresh_configuration_revision(&state);
-    Ok(result)
+    refresh_configuration_revision(state);
+    state.runtime.with_diagnostics(result)
 }
 
 #[tauri::command]
 pub async fn dashboard_get(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(dashboard::load(&state.runtime.paths))
+    Ok(state
+        .runtime
+        .with_diagnostics(dashboard::load(&state.runtime.paths)))
 }
 
 #[tauri::command]
 pub async fn dashboard_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    let tiles = params.get("tiles").cloned().unwrap_or_else(|| json!([]));
-    Ok(dashboard::save(&state.runtime.paths, &tiles))
+    Ok(dashboard_set_impl(&state, params))
+}
+
+fn dashboard_set_impl(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "dashboard_set", &params) {
+        return error;
+    }
+    state
+        .runtime
+        .with_diagnostics(dashboard::save(&state.runtime.paths, &params["tiles"]))
 }
 
 #[tauri::command]
 pub async fn audit_tail(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
-    Ok(json!({"entries": crate::audit::tail(&state.runtime.paths, limit)}))
+    Ok(audit_tail_impl(&state, params))
+}
+
+fn audit_tail_impl(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "audit_tail", &params) {
+        return error;
+    }
+    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+    let result = match crate::audit::try_tail(&state.runtime.paths, limit) {
+        Ok(entries) => json!({"ok":true, "entries":entries}),
+        Err(()) => request_error(
+            "AuditReadFailed",
+            "Local activity history could not be read",
+        ),
+    };
+    state.runtime.with_diagnostics(result)
 }
 
 #[tauri::command]
@@ -652,7 +737,7 @@ pub async fn aws_list_profiles(state: State<'_, AppState>) -> Result<Value, Stri
     let cfg_path = config_path_from_settings(&settings::load(&state.runtime.paths));
     let mut info = state.runtime.aws.inspect_config(&cfg_path);
     info["allowed_regions"] = json!(settings::ALLOWED_REGIONS);
-    Ok(info)
+    Ok(state.runtime.with_diagnostics(info))
 }
 
 #[tauri::command]
@@ -664,7 +749,7 @@ pub async fn aws_list_pipelines(
 }
 
 async fn aws_list_pipelines_impl(state: &AppState, params: Value) -> Result<Value, String> {
-    let mut request = match request_envelope(&params) {
+    let mut request = match request_envelope(state, "aws_list_pipelines", &params) {
         Ok(request) => request,
         Err(error) => return Ok(error),
     };
@@ -684,7 +769,7 @@ async fn aws_list_pipelines_request(
     let ctx = &resolved.context;
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
     if let Err((action, reason)) = audit_aws_call(
-        state,
+        &request.runtime(&state.runtime),
         &policy,
         "codepipeline",
         "ListPipelines",
@@ -696,7 +781,8 @@ async fn aws_list_pipelines_request(
             &format!("Request blocked: {action}: {reason}"),
         ));
     }
-    let session = match verify_request_context(state, &resolved, &policy).await {
+    let session = match verify_request_context_owned(state, &resolved, &policy, Some(request)).await
+    {
         Ok(session) => session,
         Err(error) => return Ok(error),
     };
@@ -759,7 +845,7 @@ pub async fn aws_auth_status(state: State<'_, AppState>) -> Result<Value, String
 }
 
 async fn aws_auth_status_impl(state: &AppState) -> Result<Value, String> {
-    let mut request = RequestEnvelope::default();
+    let mut request = RequestEnvelope::default().audited("aws_auth_status", &state.runtime);
     let result = aws_auth_status_request(state, &mut request).await;
     finish_request(request, result)
 }
@@ -796,7 +882,8 @@ async fn aws_auth_status_request(
         Err(_) => return Ok(out),
     };
     let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
-    let session = match verify_request_context(state, &resolved, &policy).await {
+    let session = match verify_request_context_owned(state, &resolved, &policy, Some(request)).await
+    {
         Ok(session) => session,
         Err(error) => {
             out["error"] = error
@@ -875,36 +962,31 @@ fn policy_status(state: &AppState, raw: String) -> Value {
 
 #[tauri::command]
 pub async fn policy_get(state: State<'_, AppState>) -> Result<Value, String> {
-    match aws::policy::raw_text(&state.runtime.paths) {
-        Ok(raw) => Ok(policy_status(&state, raw)),
-        Err(e) => Ok(json!({
-            "raw": "",
-            "valid": false,
-            "error": e.message,
-            "actions": [],
-            "path": aws::policy::policy_path(&state.runtime.paths).to_string_lossy(),
-        })),
-    }
+    let result = match aws::policy::raw_text(&state.runtime.paths) {
+        Ok(raw) => policy_status(&state, raw),
+        Err(e) => json!({"raw":"", "valid":false, "error":e.message, "actions":[],
+            "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()}),
+    };
+    Ok(state.runtime.with_diagnostics(result))
 }
 
 #[tauri::command]
 pub async fn policy_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
-    let text = params
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    match aws::policy::write_text(&state.runtime.paths, &text) {
-        Ok(_) => Ok(policy_status(&state, text)),
-        // Return the candidate text + error WITHOUT writing, so the editor keeps it.
-        Err(e) => Ok(json!({
-            "raw": text,
-            "valid": false,
-            "error": e.message,
-            "actions": [],
-            "path": aws::policy::policy_path(&state.runtime.paths).to_string_lossy(),
-        })),
+    Ok(policy_set_impl(&state, params))
+}
+
+fn policy_set_impl(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "policy_set", &params) {
+        return error;
     }
+    let text = params["text"].as_str().unwrap_or_default().to_string();
+    let result = match aws::policy::write_text(&state.runtime.paths, &text) {
+        Ok(_) => policy_status(state, text),
+        // Only the intentional local policy editor receives its candidate text.
+        Err(e) => json!({"raw":text, "valid":false, "error":e.message, "actions":[],
+            "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()}),
+    };
+    state.runtime.with_diagnostics(result)
 }
 
 #[cfg(test)]

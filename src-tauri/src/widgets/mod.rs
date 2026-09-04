@@ -181,20 +181,52 @@ pub fn dt_secs(dt: Option<&DateTime>) -> Option<f64> {
     dt.map(DateTime::as_secs_f64)
 }
 
-/// Flatten an error and its source chain into a single readable line. For an
-/// `SdkError` this surfaces the underlying service message (AccessDenied, etc.).
-pub fn err_msg<E: std::error::Error>(e: E) -> String {
-    let mut s = e.to_string();
-    let mut src = e.source();
-    while let Some(inner) = src {
-        let piece = inner.to_string();
-        if !piece.is_empty() && !s.contains(&piece) {
-            s.push_str(": ");
-            s.push_str(&piece);
+/// Classify only exact, reviewed service codes. SDK messages, response bodies,
+/// request IDs and source chains may contain request data or credentials.
+/// Transport/construction failures and unknown codes use the same fixed fallback.
+pub fn err_msg<E: aws_smithy_types::error::metadata::ProvideErrorMetadata>(e: E) -> String {
+    match e.code() {
+        Some(
+            "AccessDenied"
+            | "AccessDeniedException"
+            | "UnauthorizedException"
+            | "UnauthorizedOperation",
+        ) => "AWS denied this request. Check the selected account's permissions.",
+        Some(
+            "ExpiredToken"
+            | "ExpiredTokenException"
+            | "InvalidClientTokenId"
+            | "UnrecognizedClientException",
+        ) => "AWS credentials could not be verified. Reconnect the selected account.",
+        Some(
+            "Throttling"
+            | "ThrottlingException"
+            | "TooManyRequestsException"
+            | "RequestLimitExceeded",
+        ) => "AWS throttled this request. Try again later.",
+        Some("ResourceNotFound" | "ResourceNotFoundException" | "NotFoundException") => {
+            "The requested AWS resource was not found."
         }
-        src = inner.source();
+        Some(
+            "InvalidParameterException"
+            | "InvalidParameterValueException"
+            | "ValidationException"
+            | "ValidationError"
+            | "MalformedQueryException",
+        ) => "AWS rejected the request parameters. Check the widget inputs.",
+        Some(
+            "ServiceUnavailable"
+            | "ServiceUnavailableException"
+            | "InternalFailure"
+            | "InternalServerException"
+            | "InternalServerError",
+        ) => "The AWS service is temporarily unavailable. Try again later.",
+        Some("ConflictException" | "ResourceInUseException") => {
+            "AWS could not complete the request in the resource's current state."
+        }
+        _ => "The AWS request failed. Check the connection and try again.",
     }
-    s
+    .to_string()
 }
 
 /// Dispatch a fetch to the named widget. Never panics; unknown names return an
@@ -492,6 +524,75 @@ inputs:
 refresh: 0
 permissions: [codebuild:read, logs:read]
 "#;
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::err_msg;
+    use aws_sdk_cloudwatchlogs::{
+        error::SdkError, operation::get_query_results::GetQueryResultsError,
+    };
+    use aws_smithy_types::error::metadata::ErrorMetadata;
+
+    #[test]
+    fn reviewed_service_codes_use_fixed_messages_without_metadata_content() {
+        for (code, expected) in [
+            (
+                "AccessDeniedException",
+                "AWS denied this request. Check the selected account's permissions.",
+            ),
+            (
+                "ExpiredTokenException",
+                "AWS credentials could not be verified. Reconnect the selected account.",
+            ),
+            (
+                "ThrottlingException",
+                "AWS throttled this request. Try again later.",
+            ),
+            (
+                "ResourceNotFoundException",
+                "The requested AWS resource was not found.",
+            ),
+            (
+                "MalformedQueryException",
+                "AWS rejected the request parameters. Check the widget inputs.",
+            ),
+            (
+                "ServiceUnavailableException",
+                "The AWS service is temporarily unavailable. Try again later.",
+            ),
+            (
+                "ConflictException",
+                "AWS could not complete the request in the resource's current state.",
+            ),
+        ] {
+            let error = ErrorMetadata::builder()
+                .code(code)
+                .message("SYNTHETIC_PRIVATE_MESSAGE_MARKER")
+                .custom("request_id", "SYNTHETIC_PRIVATE_REQUEST_MARKER")
+                .build();
+            assert_eq!(err_msg(error), expected);
+        }
+    }
+
+    #[test]
+    fn unknown_codes_and_sdk_source_chains_are_never_echoed() {
+        let fallback = "The AWS request failed. Check the connection and try again.";
+        for code in [
+            "SYNTHETIC_PRIVATE_CODE_MARKER",
+            "AccessDeniedException:SYNTHETIC_PRIVATE_CODE_MARKER",
+        ] {
+            let error = ErrorMetadata::builder()
+                .code(code)
+                .message("SYNTHETIC_PRIVATE_MESSAGE_MARKER")
+                .build();
+            assert_eq!(err_msg(error), fallback);
+        }
+        let error: SdkError<GetQueryResultsError> = SdkError::construction_failure(
+            std::io::Error::other("SYNTHETIC_PRIVATE_SOURCE_MARKER"),
+        );
+        assert_eq!(err_msg(error), fallback);
+    }
+}
 
 #[cfg(test)]
 mod capability_tests {

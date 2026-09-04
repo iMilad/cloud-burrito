@@ -181,10 +181,12 @@ impl AwsContext {
     }
 
     fn fresh_snapshot(&self) -> Result<SsoProfileSnapshot, ContextError> {
-        self.runtime
-            .aws
-            .snapshot_sso(self)
-            .map_err(|error| self.invalidate("UnsupportedProfile", error))
+        self.runtime.aws.snapshot_sso(self).map_err(|_| {
+            self.invalidate(
+                "UnsupportedProfile",
+                "Selected profile is unsupported or its SSO configuration is invalid",
+            )
+        })
     }
 
     /// Callers authorize SSO and STS before entering this method. Refresh is
@@ -221,12 +223,12 @@ impl AwsContext {
             state.session = None;
         }
 
-        let credentials = self
-            .runtime
-            .aws
-            .resolve_sso(&snapshot)
-            .await
-            .map_err(|error| ContextError::new("CredentialsError", error))?;
+        let credentials = self.runtime.aws.resolve_sso(&snapshot).await.map_err(|_| {
+            ContextError::new(
+                "CredentialsError",
+                "SSO credentials could not be loaded or refreshed; sign in again",
+            )
+        })?;
         let expires_at = credentials.expiry().ok_or_else(|| {
             ContextError::new("CredentialsError", "SSO credentials must have an expiry")
         })?;
@@ -241,12 +243,12 @@ impl AwsContext {
             ));
         }
         let sdk = fixed_sdk_config(credentials, &snapshot.region, self.runtime.clock.clone());
-        let caller = self
-            .runtime
-            .aws
-            .caller_identity(&sdk)
-            .await
-            .map_err(|error| ContextError::new("IdentityVerificationFailed", error))?;
+        let caller = self.runtime.aws.caller_identity(&sdk).await.map_err(|_| {
+            ContextError::new(
+                "IdentityVerificationFailed",
+                "AWS identity verification failed; check the selected SSO session and try again",
+            )
+        })?;
         let identity = VerifiedIdentity::from_output(caller)?;
         if identity.account_id != snapshot.account_id || identity.account_id != self.account_id {
             return Err(self.invalidate(

@@ -18,6 +18,7 @@ mod request;
 mod runtime;
 mod settings;
 mod state;
+mod validation;
 mod widgets;
 
 use state::AppState;
@@ -30,9 +31,13 @@ mod test_support;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // tauri-plugin-log: defaults route to stdout AND the platform log dir
-        // (~/Library/Logs/<bundle-id>/ on macOS).
-        .plugin(tauri_plugin_log::Builder::new().build())
+        // Only deliberate application diagnostics reach stdout/platform logs.
+        // SDK/dependency transport logs are not a reviewed redacted surface.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .filter(|metadata| metadata.target().starts_with("cloud_burrito"))
+                .build(),
+        )
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::ping,

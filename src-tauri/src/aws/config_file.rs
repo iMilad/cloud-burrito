@@ -292,7 +292,6 @@ pub fn inspect(config_path: &str) -> Value {
         "config_path": config_path,
         "resolved_path": resolved.to_string_lossy(),
         "file_exists": file_exists,
-        "home": std::env::var("HOME").unwrap_or_default(),
         "error": Value::Null,
         "profiles": [],
     });
@@ -301,7 +300,7 @@ pub fn inspect(config_path: &str) -> Value {
     }
     match Ini::load_from_file(&resolved) {
         Ok(ini) => info["profiles"] = Value::Array(list_profiles(&ini)),
-        Err(e) => info["error"] = json!(format!("ParseError: {e}")),
+        Err(_) => info["error"] = json!("Selected AWS configuration could not be read or parsed"),
     }
     info
 }
@@ -355,6 +354,23 @@ pub fn sso_cache_path(sso_session_name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_inspection_does_not_echo_parser_content_or_home() {
+        let dir = crate::test_support::TestDir::new();
+        let path = dir.path().join("synthetic-config.ini");
+        std::fs::write(&path, "[synthetic-private-config-marker\n").unwrap();
+        let result = inspect(path.to_str().unwrap());
+        assert!(result["profiles"].as_array().unwrap().is_empty());
+        assert_eq!(
+            result["error"],
+            "Selected AWS configuration could not be read or parsed"
+        );
+        assert!(result.get("home").is_none());
+        assert!(!result
+            .to_string()
+            .contains("synthetic-private-config-marker"));
+    }
 
     // Construct unmistakably synthetic numeric IDs only where the production
     // parser requires AWS's numeric shape; source fixtures contain no account IDs.

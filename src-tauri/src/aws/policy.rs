@@ -65,6 +65,7 @@ pub struct PolicyError {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawStatement {
     effect: String,
     #[serde(default)]
@@ -72,6 +73,7 @@ struct RawStatement {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawPolicy {
     #[serde(default)]
     statements: Vec<RawStatement>,
@@ -87,20 +89,17 @@ impl Policy {
         } else {
             text
         };
-        let raw: RawPolicy = serde_yaml::from_str(yaml).map_err(|e| PolicyError {
-            message: e.to_string(),
+        let raw: RawPolicy = serde_yaml::from_str(yaml).map_err(|_| PolicyError {
+            message: "Policy text or storage could not be processed".into(),
         })?;
         let mut statements = Vec::new();
         for (i, st) in raw.statements.into_iter().enumerate() {
             let effect = match st.effect.to_ascii_lowercase().as_str() {
                 "allow" => Effect::Allow,
                 "deny" => Effect::Deny,
-                other => {
+                _ => {
                     return Err(PolicyError {
-                        message: format!(
-                            "statement {}: effect must be Allow or Deny, got '{other}'",
-                            i + 1
-                        ),
+                        message: format!("statement {}: effect must be Allow or Deny", i + 1),
                     })
                 }
             };
@@ -108,7 +107,7 @@ impl Policy {
                 if a != "*" && !a.contains(':') {
                     return Err(PolicyError {
                         message: format!(
-                            "statement {}: action '{a}' must be 'service:Action' or '*'",
+                            "statement {}: action must be 'service:Action' or '*'",
                             i + 1
                         ),
                     });
@@ -353,8 +352,8 @@ pub fn raw_text(paths: &AppPaths) -> Result<String, PolicyError> {
     match fs::read_to_string(&path) {
         Ok(text) => {
             if let Some(upgraded) = upgrade_legacy_default_text(&text) {
-                fs::write(&path, &upgraded).map_err(|e| PolicyError {
-                    message: format!("could not upgrade default policy: {e}"),
+                fs::write(&path, &upgraded).map_err(|_| PolicyError {
+                    message: "could not upgrade default policy".into(),
                 })?;
                 Ok(upgraded)
             } else {
@@ -363,16 +362,16 @@ pub fn raw_text(paths: &AppPaths) -> Result<String, PolicyError> {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let default = default_yaml();
-            ensure_parent(&path).map_err(|e| PolicyError {
-                message: format!("could not create policy directory: {e}"),
+            ensure_parent(&path).map_err(|_| PolicyError {
+                message: "could not create policy directory".into(),
             })?;
-            fs::write(&path, &default).map_err(|e| PolicyError {
-                message: format!("could not write default policy: {e}"),
+            fs::write(&path, &default).map_err(|_| PolicyError {
+                message: "could not write default policy".into(),
             })?;
             Ok(default)
         }
-        Err(e) => Err(PolicyError {
-            message: format!("could not read policy file {}: {e}", path.to_string_lossy()),
+        Err(_) => Err(PolicyError {
+            message: "could not read policy file".into(),
         }),
     }
 }
@@ -386,11 +385,11 @@ pub fn load(paths: &AppPaths) -> Result<Policy, PolicyError> {
 pub fn write_text(paths: &AppPaths, text: &str) -> Result<Policy, PolicyError> {
     let policy = Policy::parse(text)?;
     let path = policy_path(paths);
-    ensure_parent(&path).map_err(|e| PolicyError {
-        message: e.to_string(),
+    ensure_parent(&path).map_err(|_| PolicyError {
+        message: "Policy text or storage could not be processed".into(),
     })?;
-    fs::write(&path, text).map_err(|e| PolicyError {
-        message: e.to_string(),
+    fs::write(&path, text).map_err(|_| PolicyError {
+        message: "Policy text or storage could not be processed".into(),
     })?;
     Ok(policy)
 }
@@ -402,7 +401,7 @@ pub fn gate(policy: &Result<Policy, String>, service: &str, operation: &str) -> 
         .ok_or_else(|| "not in the compiled AWS call registry".to_string())?;
     let policy = policy
         .as_ref()
-        .map_err(|msg| format!("policy file invalid: {msg}"))?;
+        .map_err(|_| "policy file invalid".to_string())?;
     if policy.decision(spec.service, spec.operation) != Effect::Allow {
         return Err("not allowed by your read-only policy".to_string());
     }
@@ -713,11 +712,11 @@ mod tests {
             for operation in ["FilterLogEvents", "StartQuery"] {
                 assert!(gate(&policy, "logs", operation)
                     .unwrap_err()
-                    .starts_with("policy file invalid:"));
+                    .starts_with("policy file invalid"));
             }
             assert!(gate_cli(&policy, "logs", "FilterLogEvents")
                 .unwrap_err()
-                .starts_with("policy file invalid:"));
+                .starts_with("policy file invalid"));
         }
     }
 

@@ -112,16 +112,18 @@ mod tests {
             policy::Effect::Deny
         );
 
-        audit::append(&left, json!({"store": "left"}), 10.0);
+        audit::append(&left, json!({"kind": "request", "event": "started"}), 10.0).unwrap();
         assert!(audit::tail(&right, 10).is_empty());
-        audit::append(&right, json!({"store": "right"}), 20.0);
+        audit::append(&right, json!({"kind": "request", "event": "failed"}), 20.0).unwrap();
         assert_eq!(
             audit::tail(&left, 10),
-            vec![json!({"store": "left", "ts": 10.0})]
+            vec![
+                json!({"kind": "request", "event": "started", "scope": "application", "ts": 10.0})
+            ]
         );
         assert_eq!(
             audit::tail(&right, 10),
-            vec![json!({"store": "right", "ts": 20.0})]
+            vec![json!({"kind": "request", "event": "failed", "scope": "application", "ts": 20.0})]
         );
     }
 }
