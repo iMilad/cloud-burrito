@@ -24,6 +24,7 @@
   };
   const clear = (node) => {
     cancelPendingWithin(node, false);
+    disposeRenderTree(node);
     while (node.firstChild) node.removeChild(node.firstChild);
   };
 
@@ -506,6 +507,7 @@
   function invalidateRequests(node, preserveResult = false) {
     if (!node) return;
     cancelPendingWithin(node);
+    disposeRenderTree(node);
     node._requestGeneration = (node._requestGeneration || 0) + 1;
     delete node._resultContext;
     if (!preserveResult) {
@@ -626,9 +628,11 @@
       clear(host);
     }
     if (host._resultView) {
+      const retainedFocus = host.contains(document.activeElement) ? document.activeElement : null;
       clear(host);
       host.append(...host._resultView.nodes);
       host.hidden = false;
+      if (retainedFocus?.isConnected) focusSafely(retainedFocus);
       host._resultView.displayState = "loading";
       delete host._resultView.displaySpec;
       delete host._resultView.displayMessage;
@@ -3140,24 +3144,19 @@
   let comboListEl = null;
   let comboOwnerInput = null;
   let comboActiveIndex = -1;
+  let pipelineComboGlobalsWired = false;
   const COMBO_MAX = 200;
 
-  function pipelineComboMatches(input, query) {
+  async function pipelineComboMatches(input, query) {
     const names = input._pipelineNames || [];
-    const q = query.trim();
-    if (!q) return { items: names.slice(0, COMBO_MAX), regexOk: true };
-    let items;
-    let regexOk;
-    try {
-      const re = new RegExp(q, "i");
-      items = names.filter(n => re.test(n));
-      regexOk = true;
-    } catch (_e) {
-      const lq = q.toLowerCase();
-      items = names.filter(n => n.toLowerCase().includes(lq));
-      regexOk = false;
+    if (input._pipelineFilterNames !== names) {
+      input._pipelineFilter?.dispose();
+      input._pipelineFilter = createRowMatcher(input, names);
+      input._pipelineFilterNames = names;
     }
-    return { items: items.slice(0, COMBO_MAX), regexOk };
+    const result = await input._pipelineFilter.match(query.trim());
+    if (!result || result.error) return result;
+    return { items: result.matches.slice(0, COMBO_MAX).map(index => names[index]), regexOk: result.valid };
   }
 
   function positionComboList(input) {
@@ -3189,13 +3188,32 @@
     return comboListEl;
   }
 
-  function renderPipelineComboList(input) {
+  async function renderPipelineComboList(input) {
     if (!input || input.disabled) return;
     ensureComboListEl();
+    if (comboOwnerInput !== input) clear(comboListEl);
     comboOwnerInput = input;
     const q = input.value.trim();
-    const { items, regexOk } = pipelineComboMatches(input, input.value);
-    while (comboListEl.firstChild) comboListEl.removeChild(comboListEl.firstChild);
+    const generation = input._comboRenderGeneration = (input._comboRenderGeneration || 0) + 1;
+    input.setAttribute("aria-busy", "true");
+    input.setAttribute("aria-expanded", "true");
+    comboListEl.hidden = false;
+    positionComboList(input);
+    const matching = pipelineComboMatches(input, q);
+    input._comboFilterPromise = matching;
+    const result = await matching;
+    if (!result || !input.isConnected || input.disabled || comboOwnerInput !== input
+        || input._comboRenderGeneration !== generation || input.value.trim() !== q) return;
+    input.removeAttribute("aria-busy");
+    comboListEl.querySelector(".combo-filter-feedback")?.remove();
+    if (result.error) {
+      input.classList.add("combo-regex-bad");
+      input.setAttribute("aria-invalid", "true");
+      comboListEl.appendChild(el("li", { class: "combo-filter-feedback", role: "status" }, result.error));
+      return;
+    }
+    const { items, regexOk } = result;
+    clear(comboListEl);
     if (items.length === 0) {
       const li = document.createElement("li");
       li.className = "combo-empty";
@@ -3219,6 +3237,8 @@
       }
     }
     input.classList.toggle("combo-regex-bad", !regexOk && q !== "");
+    input.setAttribute("aria-invalid", String(!regexOk && q !== ""));
+    if (!regexOk) comboListEl.appendChild(el("li", { class: "combo-filter-feedback", role: "status" }, "Invalid regex; showing case-insensitive literal matches."));
     comboActiveIndex = -1;
     input.removeAttribute("aria-activedescendant");
     positionComboList(input);
@@ -3229,6 +3249,9 @@
   function closePipelineCombo() {
     if (comboListEl) comboListEl.hidden = true;
     if (comboOwnerInput) {
+      comboOwnerInput._comboRenderGeneration = (comboOwnerInput._comboRenderGeneration || 0) + 1;
+      comboOwnerInput._pipelineFilter?.dispose();
+      comboOwnerInput.removeAttribute("aria-busy");
       comboOwnerInput.setAttribute("aria-expanded", "false");
       comboOwnerInput.removeAttribute("aria-activedescendant");
     }
@@ -3254,10 +3277,11 @@
     if (isTauri && form) form.dispatchEvent(new Event("submit", { cancelable: true }));
   }
 
-  function moveComboActive(input, delta) {
+  async function moveComboActive(input, delta) {
     if (!input) return;
     if (!comboListEl || comboListEl.hidden || comboOwnerInput !== input) {
-      renderPipelineComboList(input);
+      await renderPipelineComboList(input);
+      if (!input.isConnected || document.activeElement !== input) return;
       if (comboListEl.hidden) return;
     }
     setComboActive(input, comboActiveIndex < 0 ? delta > 0 ? 0 : comboListEl.querySelectorAll(".combo-item").length - 1 : comboActiveIndex + delta);
@@ -3290,7 +3314,13 @@
 
     input.addEventListener("focus", () => renderPipelineComboList(input));
     input.addEventListener("input", () => renderPipelineComboList(input));
-    input.addEventListener("keydown", (e) => {
+    input.addEventListener("keydown", async (e) => {
+      if (["ArrowDown", "ArrowUp", "Home", "End", "Enter"].includes(e.key) && input._comboFilterPromise
+          && comboOwnerInput === input && comboListEl && !comboListEl.hidden) {
+        e.preventDefault();
+        await input._comboFilterPromise;
+        if (!input.isConnected || input.disabled || document.activeElement !== input || input.dataset.filterPending === "true") return;
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         moveComboActive(input, 1);
@@ -3321,6 +3351,8 @@
       if (comboOwnerInput === input) closePipelineCombo();
     }, 120));
 
+    if (pipelineComboGlobalsWired) return;
+    pipelineComboGlobalsWired = true;
     document.addEventListener("scroll", (e) => {
       // Scrolling inside the dropdown itself must not close it — only
       // page/widget scrolls that would leave the fixed list floating.
@@ -3526,125 +3558,312 @@
   }
   toggleRowDetail.nextId = 0;
 
+  function disposeRenderTree(node) {
+    node?._disposeRender?.();
+    node?.querySelectorAll?.("[data-render-resource]").forEach(child => child._disposeRender?.());
+  }
+
+  function createRowMatcher(owner, initialValues) {
+    const values = initialValues.slice();
+    let worker = null, ready = false, pending = null, generation = 0;
+    let debounce = null, deadline = null, startupDeadline = null;
+    const finish = result => {
+      clearTimeout(debounce); clearTimeout(deadline); clearTimeout(startupDeadline);
+      debounce = deadline = startupDeadline = null;
+      const waiting = pending;
+      pending = null;
+      owner.dataset.filterPending = "false";
+      waiting?.resolve(result);
+    };
+    const terminate = () => { worker?.terminate(); worker = null; ready = false; };
+    const dispose = () => { generation++; terminate(); finish(null); };
+    const dispatch = () => {
+      if (!pending || !ready) return;
+      clearTimeout(startupDeadline); startupDeadline = null;
+      const id = pending.id;
+      worker.postMessage({ type: "match", id, query: pending.query });
+      pending.running = true;
+      deadline = setTimeout(() => {
+        if (pending?.id !== id) return;
+        terminate();
+        finish({ error: "Filter exceeded the 150 ms work limit. Previous matches are unchanged; simplify the expression." });
+      }, 150);
+    };
+    const start = () => {
+      if (!pending || !owner.isConnected) { finish(null); return; }
+      if (worker && ready) { dispatch(); return; }
+      if (worker) {
+        startupDeadline = setTimeout(() => { terminate(); finish({ error: "The filter worker did not become ready. Previous matches are unchanged." }); }, 2000);
+        return;
+      }
+      try {
+        worker = new Worker(new URL("row-filter-worker.js", document.baseURI));
+        const instance = worker;
+        worker.onmessage = event => {
+          if (worker !== instance) return;
+          if (event.data?.type === "ready") { ready = true; dispatch(); return; }
+          if (!pending || event.data?.id !== pending.id) return;
+          finish(event.data);
+        };
+        worker.onerror = event => {
+          if (worker !== instance) return;
+          event.preventDefault(); terminate();
+          finish({ error: "The filter worker is unavailable. Previous matches are unchanged." });
+        };
+        worker.postMessage({ type: "init", values });
+        startupDeadline = setTimeout(() => {
+          terminate(); finish({ error: "The filter worker did not become ready. Previous matches are unchanged." });
+        }, 2000);
+      } catch (_) { terminate(); finish({ error: "The filter worker is unavailable. Previous matches are unchanged." }); }
+    };
+    owner.dataset.renderResource = "filter";
+    owner._disposeRender = dispose;
+    return {
+      dispose,
+      patch(entries) {
+        entries.forEach(([index, value]) => { values[index] = value; });
+        if (worker) worker.postMessage({ type: "patch", entries });
+      },
+      match(query) {
+        generation++;
+        if (pending?.running) terminate();
+        finish(null);
+        if (!query) return Promise.resolve({ valid: true, matches: values.map((_, index) => index) });
+        if (query.length > 512) return Promise.resolve({ error: "Filter is limited to 512 characters. Previous matches are unchanged." });
+        owner.dataset.filterPending = "true";
+        return new Promise(resolve => {
+          pending = { id: generation, query, resolve, running: false };
+          debounce = setTimeout(start, 30);
+        });
+      },
+    };
+  }
+
   function renderTable(host, spec, opts) {
     if (spec.render !== "table" && spec.render) return dispatchRender(host, spec);
     return renderWithResultState(host, spec, () => renderTableContent(host, spec, opts));
   }
 
-  function renderTableContent(host, spec, opts) {
+  function renderTableContent(host, spec, opts = {}) {
+    const active = host.contains(document.activeElement) ? document.activeElement : null;
+    const focusedRow = active?.closest?.("tr[data-source-row]");
+    let restoreTarget = active?.matches?.(".table-filter")
+      ? { kind: "filter", start: active.selectionStart, end: active.selectionEnd }
+      : active?.matches?.(".table-page-previous") ? { kind: "previous" }
+      : active?.matches?.(".table-page-next") ? { kind: "next" }
+      : focusedRow ? { kind: "row", key: focusedRow._logicalRowKey,
+        control: active === focusedRow ? -1 : Array.from(focusedRow.querySelectorAll("button,a,input,select,textarea,summary")).indexOf(active) } : null;
     clear(host);
-    if (spec.render !== "table") {
-      host.appendChild(el("pre", { class: "raw-json" }, JSON.stringify(spec, null, 2)));
-      return;
-    }
-    if (spec.error) {
-      host.appendChild(el("div", { class: "muted small table-error" }, "Error: " + spec.error));
-    }
-    const columns = Array.isArray(spec.columns) ? spec.columns : [];
+    if (spec.render !== "table") { host.appendChild(el("pre", { class: "raw-json" }, JSON.stringify(spec, null, 2))); return; }
+    if (spec.error) host.appendChild(el("div", { class: "muted small table-error" }, "Error: " + spec.error));
+    const allColumns = Array.isArray(spec.columns) ? spec.columns : [];
+    const columns = allColumns.slice(0, 32);
     const rows = Array.isArray(spec.rows) ? spec.rows : [];
     if (!rows.length && resultFailure(spec)) return;
-    const expandable = !!(opts && typeof opts.expand === "function");
-    const tbody = el("tbody", {},
-      ...rows.map(row => {
-        const tr = el("tr", {}, ...columns.map(c => {
-          const raw = String(row[c] ?? "");
-          const custom = opts && typeof opts.renderCell === "function"
-            ? opts.renderCell(c, row)
-            : null;
-          if (custom) return el("td", {}, custom);
-          const formatted = formatDisplayValue(c, raw);
-          if (c === "status") {
-            return el("td", {}, el("span", { class: "badge " + statusToBadge(raw) }, formatted.text));
-          }
-          const attrs = {};
-          if (raw && raw !== formatted.text) attrs.title = raw;
-          if (formatted.className) attrs.class = formatted.className;
-          return el("td", attrs, formatted.text);
-        }));
-        // Whole-row haystack (all columns, original case) for the filter below.
-        tr.dataset.search = columns.map(c => String(row[c] ?? "")).join(" ");
-        if (expandable) {
-          tr.classList.add("expandable");
-          tr.tabIndex = 0;
-          tr.setAttribute("aria-label", `Inspect ${columns.map(column => String(row[column] ?? "")).filter(Boolean).join(" · ")}`);
-          tr.setAttribute("aria-expanded", "false");
-          tr.addEventListener("click", (event) => {
-            if (event.target.closest && event.target.closest("button, a, input, select, textarea")) return;
-            toggleRowDetail(tr, row, opts, columns.length);
-          });
-          tr.addEventListener("keydown", (event) => {
-            if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
-            event.preventDefault();
-            toggleRowDetail(tr, row, opts, columns.length);
-          });
-        }
-        if (opts && typeof opts.onRowCreated === "function") opts.onRowCreated(tr, row);
-        return tr;
-      }),
-    );
+    if (allColumns.length > columns.length) host.appendChild(el("p", { class: "muted small" }, `Display limited to ${columns.length} of ${allColumns.length} columns. Narrow the source request to inspect other columns.`));
+    const expandable = typeof opts.expand === "function";
+    const paginated = rows.length > 100;
+    const key = host._activeResultRequest?.resultKey || "browser-table";
+    const presentation = host._tablePresentation?.key === key ? host._tablePresentation : { key, page: 0, query: "", expanded: new Set(), focused: null };
+    host._tablePresentation = presentation;
+    const baseKeys = rows.map((row, index) => String(opts.rowKey?.(row) ?? row[columns[0]] ?? index));
+    const keyCounts = new Map();
+    baseKeys.forEach(value => keyCounts.set(value, (keyCounts.get(value) || 0) + 1));
+    const rowKeys = baseKeys.map((value, index) => keyCounts.get(value) > 1 ? `${value}:${index}` : value);
+    const existingKeys = new Set(rowKeys);
+    presentation.expanded.forEach(value => { if (!existingKeys.has(value)) presentation.expanded.delete(value); });
+    let matching = rows.map((_, index) => index);
+    let filterGeneration = 0;
+    let matcher = null;
+    let filterControl = null;
+    let activePreview = null;
+    let reapplyMetadataFilter = () => {};
+    const mounted = new Map();
+    const details = new Map();
+    for (const detail of spec.cell_details || []) {
+      if (detail && Number.isSafeInteger(detail.row) && detail.row >= 0 && detail.row < rows.length && typeof detail.column === "string") {
+        details.set(`${detail.row}:${detail.column}`, detail);
+      }
+    }
+    const tbody = el("tbody", {});
     const table = el("table", { class: "events-table" },
-      el("thead", {}, el("tr", {}, ...columns.map(c => el("th", { title: c }, tableHeaderLabel(c))))),
-      tbody,
-    );
+      el("thead", {}, el("tr", {}, ...columns.map(column => el("th", { title: String(column).slice(0, 256) }, tableHeaderLabel(column))))), tbody);
+    const feedback = el("div", { class: "table-filter-feedback muted small", role: "status", hidden: true });
+    const empty = el("div", { class: "table-filter-empty", role: "status", "aria-live": "polite", hidden: true }, opts.filterEmptyText || "No matching rows.");
+    const count = el("span", { class: "table-filter-count muted small" }, String(rows.length));
+    const pageLabel = el("span", { class: "table-page-count small", role: "status" });
+    const previous = el("button", { type: "button", class: "btn btn-ghost small table-page-previous" }, "Previous rows");
+    const next = el("button", { type: "button", class: "btn btn-ghost small table-page-next" }, "Next rows");
+    const pager = el("nav", { class: "table-pagination", "aria-label": "Result pages", hidden: !paginated }, previous, pageLabel, next);
+    const textFor = (row, index) => allColumns.map(column => {
+      const detail = details.get(`${index}:${column}`);
+      if (detail && !detail.unavailable && Object.hasOwn(detail, "value")) {
+        try { return typeof detail.value === "string" ? detail.value : JSON.stringify(detail.value); }
+        catch (_) { /* A malformed detail does not replace its safe preview. */ }
+      }
+      return String(row[column] ?? "");
+    }).join(" ");
 
-    // Regex filter — normally only for tables big enough that searching helps,
-    // with an opt-in for lookup-oriented tables such as CloudFormation stacks.
-    // Matches every column; invalid regex falls back to a case-insensitive
-    // substring match (with a warning border), mirroring the pipeline picker.
-    if (rows.length > 10 || (opts && opts.alwaysFilter)) {
-      const filterPlaceholder = (opts && opts.filterPlaceholder) || "filter rows (regex)…";
-      const filter = el("input", {
-        class: "table-filter", type: "text", placeholder: filterPlaceholder, "aria-label": "Filter result rows",
-        "aria-label": filterPlaceholder,
-        autocomplete: "off", autocorrect: "off", spellcheck: "false",
-      });
-      const count = el("span", { class: "table-filter-count muted small" }, String(rows.length));
-      const empty = el("div", {
-        class: "table-filter-empty",
-        role: "status",
-        "aria-live": "polite",
-        hidden: true,
-      }, (opts && opts.filterEmptyText) || "No matching rows.");
-      const trs = Array.from(tbody.children);
-      const applyFilter = () => {
-        const q = filter.value.trim();
-        const { ok, test } = rowFilterMatcher(q);
-        let shown = 0;
-        for (const tr of trs) {
-          const match = test(tr.dataset.search);
-          tr.hidden = !match;
-          // Keep an expanded detail row in lockstep with its data row.
-          const d = tr.nextElementSibling;
-          if (d && d.classList.contains("row-detail")) d.hidden = !match;
-          if (match) shown++;
+    function makeCell(row, index, column) {
+      const raw = String(row[column] ?? "");
+      const custom = typeof opts.renderCell === "function" ? opts.renderCell(column, row) : null;
+      if (custom) return el("td", {}, custom);
+      const formatted = formatDisplayValue(column, raw);
+      const td = el("td", { ...(formatted.className ? { class: formatted.className } : {}),
+        ...(raw && raw !== formatted.text ? { title: raw.slice(0, 256) } : {}) });
+      const preview = formatted.text.length > 512 ? formatted.text.slice(0, 511) + "…" : formatted.text;
+      td.appendChild(column === "status" ? el("span", { class: "badge " + statusToBadge(raw) }, preview) : document.createTextNode(preview));
+      const detail = details.get(`${index}:${column}`);
+      if (raw.length <= 512 && !detail) return td;
+      const disclosure = el("details", { class: "table-cell-detail" });
+      disclosure.appendChild(el("summary", { "aria-label": `Inspect full ${String(column).slice(0, 100)} value` }, "Full value"));
+      disclosure.addEventListener("toggle", () => {
+        if (!disclosure.isConnected) return;
+        disclosure.querySelector(".table-full-value")?.remove();
+        if (!disclosure.open) return;
+        if (activePreview && activePreview !== disclosure) activePreview.open = false;
+        activePreview = disclosure;
+        let value = raw;
+        let unavailable = detail?.unavailable === true;
+        if (detail && Object.hasOwn(detail, "value")) {
+          try {
+            value = typeof detail.value === "string" ? detail.value : JSON.stringify(detail.value, null, 2);
+            if (value?.length > 65536 && typeof detail.value !== "string") value = JSON.stringify(detail.value);
+          } catch (_) { unavailable = true; }
         }
-        filter.classList.toggle("table-filter-bad", !ok);
-        count.textContent = q ? `${shown} / ${rows.length}` : String(rows.length);
-        const noMatches = q !== "" && shown === 0;
-        empty.hidden = !noMatches;
-        table.hidden = noMatches;
-        // Filtering can sharply reduce this scroll container's height. Reset
-        // its local scroll position so WebKit keeps the sticky search control
-        // painted and the first remaining match is immediately visible.
-        host.scrollTop = 0;
-      };
-      filter.addEventListener("input", applyFilter);
-      host.appendChild(el("div", { class: "table-filter-bar" }, filter, count));
-      host.appendChild(empty);
+        if (typeof value !== "string" || value.length > 65536) unavailable = true;
+        disclosure.appendChild(unavailable
+          ? el("p", { class: "table-full-value muted small" }, "This value exceeds the display limit. Use --query to return a smaller value, or narrow the source request.")
+          : el("pre", { class: "table-full-value" }, value));
+      });
+      td.appendChild(disclosure);
+      return td;
     }
-    host.appendChild(table);
-  }
 
-  function rowFilterMatcher(query) {
-    const q = String(query || "").trim();
-    if (!q) return { ok: true, test: () => true };
-    try {
-      const re = new RegExp(q, "i");
-      return { ok: true, test: (s) => re.test(String(s || "")) };
-    } catch (_e) {
-      const lq = q.toLowerCase();
-      return { ok: false, test: (s) => String(s || "").toLowerCase().includes(lq) };
+    function createRow(index) {
+      const row = rows[index];
+      const tr = el("tr", { "data-source-row": String(index) }, ...columns.map(column => makeCell(row, index, column)));
+      // Search source lives in the worker; the bounded DOM attribute remains
+      // available to the existing small progressive package renderer.
+      tr._logicalRowKey = rowKeys[index];
+      tr.dataset.search = textFor(row, index).slice(0, 1024);
+      tr._tableRowUpdated = () => {
+        matcher?.patch([[index, textFor(row, index)]]);
+        reapplyMetadataFilter();
+      };
+      tr.addEventListener("focusin", () => { presentation.focused = rowKeys[index]; });
+      if (expandable) {
+        tr.classList.add("expandable"); tr.tabIndex = 0;
+        tr.setAttribute("aria-label", (`Inspect ${columns.map(column => String(row[column] ?? "")).filter(Boolean).join(" · ")}`).slice(0, 256));
+        tr.setAttribute("aria-expanded", "false");
+        const toggle = () => {
+          const expanded = tr.classList.contains("expanded");
+          if (!expanded && presentation.expanded.size >= 10) {
+            feedback.hidden = false; feedback.textContent = "Up to 10 row details can remain open. Close one before opening another."; return;
+          }
+          toggleRowDetail(tr, row, opts, columns.length);
+          if (expanded) presentation.expanded.delete(rowKeys[index]);
+          else presentation.expanded.add(rowKeys[index]);
+        };
+        tr.addEventListener("click", event => { if (!event.target.closest("button, a, input, select, textarea, summary, details")) toggle(); });
+        tr.addEventListener("keydown", event => {
+          if (event.target === tr && ["Enter", " "].includes(event.key)) { event.preventDefault(); toggle(); }
+        });
+      }
+      opts.onRowCreated?.(tr, row);
+      mounted.set(index, tr);
+      return tr;
     }
+
+    function renderPage() {
+      const maxPage = Math.max(0, Math.ceil(matching.length / 100) - 1);
+      presentation.page = Math.min(presentation.page, maxPage);
+      if (paginated || mounted.size === 0) {
+        if (activePreview) { activePreview.open = false; activePreview = null; }
+        clear(tbody); mounted.clear();
+        const visible = paginated ? matching.slice(presentation.page * 100, (presentation.page + 1) * 100) : rows.map((_, index) => index);
+        for (const index of visible) {
+          const tr = createRow(index); tbody.appendChild(tr);
+          if (expandable && presentation.expanded.has(rowKeys[index])) toggleRowDetail(tr, rows[index], opts, columns.length);
+        }
+      }
+      if (!paginated) {
+        const shown = new Set(matching);
+        mounted.forEach((tr, index) => {
+          tr.hidden = !shown.has(index);
+          if (tr.nextElementSibling?.classList.contains("row-detail")) tr.nextElementSibling.hidden = tr.hidden;
+        });
+      }
+      const first = matching.length ? presentation.page * 100 + 1 : 0;
+      pageLabel.textContent = `Showing ${first}–${Math.min((presentation.page + 1) * 100, matching.length)} of ${matching.length} matching rows`;
+      previous.disabled = presentation.page === 0;
+      next.disabled = presentation.page >= maxPage;
+      empty.hidden = matching.length !== 0;
+      table.hidden = matching.length === 0;
+      host.scrollTop = 0;
+    }
+    function restoreControlFocus() {
+      const saved = restoreTarget;
+      restoreTarget = null;
+      if (!saved || document.activeElement !== document.body) return;
+      let target;
+      if (saved.kind === "filter") target = filterControl;
+      else if (saved.kind === "previous") target = previous;
+      else if (saved.kind === "next") target = next;
+      else {
+        const tr = mounted.get(rowKeys.indexOf(saved.key));
+        target = saved.control >= 0 ? tr?.querySelectorAll("button,a,input,select,textarea,summary")[saved.control] : tr;
+      }
+      if (!target || target.disabled || target.hidden) return;
+      focusSafely(target);
+      if (saved.kind === "filter" && Number.isInteger(saved.start) && Number.isInteger(saved.end)) target.setSelectionRange(saved.start, saved.end);
+    }
+    previous.addEventListener("click", () => { if (!previous.disabled) { presentation.page--; renderPage(); } });
+    next.addEventListener("click", () => { if (!next.disabled) { presentation.page++; renderPage(); } });
+
+    if (rows.length > 10 || opts.alwaysFilter) {
+      const placeholder = opts.filterPlaceholder || "filter rows (regex)…";
+      const filter = el("input", { class: "table-filter", type: "text", placeholder, "aria-label": placeholder,
+        autocomplete: "off", autocorrect: "off", spellcheck: "false", value: presentation.query });
+      filterControl = filter;
+      matcher = createRowMatcher(filter, rows.map(textFor));
+      let metadataFilterScheduled = false;
+      let failedQuery = null;
+      const applyFilter = async () => {
+        const generation = ++filterGeneration;
+        const query = filter.value.trim();
+        feedback.hidden = false; feedback.textContent = "Filtering…";
+        const result = await matcher.match(query);
+        if (!result || generation !== filterGeneration || !filter.isConnected) return;
+        filter.classList.toggle("table-filter-bad", !!result.error || !result.valid);
+        filter.setAttribute("aria-invalid", String(!!result.error || !result.valid));
+        if (result.error) { failedQuery = query; feedback.textContent = result.error; restoreControlFocus(); return; }
+        failedQuery = null;
+        matching = result.matches;
+        presentation.query = query;
+        presentation.page = 0;
+        feedback.textContent = result.valid ? "" : "Invalid regex; showing case-insensitive literal matches.";
+        feedback.hidden = result.valid;
+        count.textContent = query ? `${matching.length} / ${rows.length}` : String(rows.length);
+        renderPage();
+        restoreControlFocus();
+      };
+      reapplyMetadataFilter = () => {
+        if (metadataFilterScheduled || !filter.value.trim() || failedQuery === filter.value.trim()) return;
+        metadataFilterScheduled = true;
+        queueMicrotask(() => {
+          metadataFilterScheduled = false;
+          if (filter.isConnected) applyFilter();
+        });
+      };
+      filter.addEventListener("input", () => { failedQuery = null; applyFilter(); });
+      host.appendChild(el("div", { class: "table-filter-bar" }, filter, count));
+      // The initial restore must occur after mounting, just like user input.
+      if (presentation.query) requestAnimationFrame(() => { if (filter.isConnected) applyFilter(); });
+    }
+    host.append(feedback, empty, table, pager);
+    renderPage();
+    if (!presentation.query || !filterControl) restoreControlFocus();
   }
 
   function statusToBadge(status) {
@@ -3880,12 +4099,16 @@
       }
     } catch (_) { /* Try the local fallback below. */ }
     if (!copied) copied = fallbackCopy(text);
-    if (!btn || btn._copyIntent !== intent) return;
+    if (!btn || !btn.isConnected || btn._copyIntent !== intent) return;
     btn.textContent = copied ? btn.classList.contains("exec-icon-btn") ? "✓" : "Copied" : "Copy failed";
     btn.dataset.copyState = copied ? "copied" : "failed";
     const status = $("#clipboard-status");
     if (status) status.textContent = copied ? "Copied to clipboard." : "Copy failed. Try again.";
-    setTimeout(() => {
+    clearTimeout(btn._copyTimer);
+    btn.dataset.renderResource = "clipboard-timer";
+    btn._disposeRender = () => { clearTimeout(btn._copyTimer); btn._copyTimer = null; };
+    btn._copyTimer = setTimeout(() => {
+      if (!btn.isConnected) return;
       if (btn._copyIntent !== intent) return;
       btn.textContent = btn._copyLabel;
       delete btn.dataset.copyState;
@@ -4024,24 +4247,30 @@
     const count = el("span", { class: "table-filter-count muted small" }, String(rows.length));
     const empty = el("div", { class: "lookup-empty errors-filter-empty", hidden: true },
       "No matching stacks or log groups.");
-    const applyFilter = () => {
+    const matcher = createRowMatcher(filter, rowEls.map(row => row.dataset.search));
+    const filterFeedback = el("div", { class: "table-filter-feedback muted small", role: "status", hidden: true });
+    let generation = 0;
+    const applyFilter = async () => {
+      const current = ++generation;
       const q = filter.value.trim();
-      const { ok, test } = rowFilterMatcher(q);
-      let shown = 0;
-      rowEls.forEach((rowEl) => {
-        const match = test(rowEl.dataset.search);
-        rowEl.hidden = !match;
-        if (match) shown++;
-      });
-      filter.classList.toggle("table-filter-bad", !ok);
-      count.textContent = q ? `${shown} / ${rows.length}` : String(rows.length);
-      empty.hidden = shown !== 0;
-      wrap.hidden = shown === 0;
+      filterFeedback.hidden = false;
+      filterFeedback.textContent = "Filtering…";
+      const result = await matcher.match(q);
+      if (!result || current !== generation || !filter.isConnected) return;
+      filter.classList.toggle("table-filter-bad", !!result.error || !result.valid);
+      filter.setAttribute("aria-invalid", String(!!result.error || !result.valid));
+      if (result.error) { filterFeedback.textContent = result.error; return; }
+      const shown = new Set(result.matches);
+      rowEls.forEach((row, index) => { row.hidden = !shown.has(index); });
+      filterFeedback.textContent = result.valid ? "" : "Invalid regex; showing case-insensitive literal matches.";
+      filterFeedback.hidden = result.valid;
+      count.textContent = q ? `${shown.size} / ${rows.length}` : String(rows.length);
+      empty.hidden = shown.size !== 0;
+      wrap.hidden = shown.size === 0;
     };
     filter.addEventListener("input", applyFilter);
     host.appendChild(el("div", { class: "table-filter-bar errors-filter-bar" }, filter, count));
-    host.appendChild(empty);
-    host.appendChild(wrap);
+    host.append(filterFeedback, empty, wrap);
   }
 
   function renderLogStreamLive(host, spec) {
@@ -4425,6 +4654,7 @@
       clear(body);
       let idx = 0;
       function appendOne() {
+        if (!body.isConnected) { body._disposeRender?.(); return; }
         const sample = Mock.logPool[idx % Mock.logPool.length];
         idx++;
         const ts = new Date().toLocaleTimeString("en-GB", { hour12: false });
@@ -4440,6 +4670,8 @@
       for (let i = 0; i < 12; i++) appendOne();
       if (body._logTailTimer) clearInterval(body._logTailTimer);
       body._logTailTimer = setInterval(appendOne, 1800);
+      body.dataset.renderResource = "demo-log-timer";
+      body._disposeRender = () => { clearInterval(body._logTailTimer); body._logTailTimer = null; };
     });
   }
 
@@ -4755,8 +4987,8 @@
       const body = $(".cfn-stacks-body", widget);
       if (!body) return;
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
-      clear(body);
-      body.appendChild(el("div", { class: "muted small" }, "Loading..."));
+      // The owned result transition retains the current table and its focus
+      // while refreshing, then the renderer restores the replaced control.
       const request = beginOwnedRequest(body);
       try {
         const result = await fetchWidgetData("cfn-stacks", {}, body, null, request);
@@ -4840,6 +5072,8 @@
       clear(results);
       results.appendChild(el("div", { class: "lookup-empty" },
         "Search tagged resources by name, ARN or partial id; stack ownership may remain unknown."));
+      input.dataset.renderResource = "lookup-timer";
+      input._disposeRender = () => { clearTimeout(input._lookupDebounceTimer); input._lookupDebounceTimer = null; };
       input.addEventListener("input", () => {
         if (input._lookupDebounceTimer) clearTimeout(input._lookupDebounceTimer);
         const request = beginOwnedRequest(results);
@@ -5014,8 +5248,8 @@
     const button = el("button", {
       class: "exec-btn exec-icon-btn codeartifact-copy-btn",
       type: "button",
-      title: label,
-      "aria-label": label,
+      title: label.slice(0, 256),
+      "aria-label": label.slice(0, 256),
     }, "⧉");
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -5195,7 +5429,7 @@
     if (!version) return el("span", { class: "codeartifact-enrichment-state" }, state === "pending"
       ? "Details pending" : state === "failed" ? "Details unavailable" : "");
     return el("span", { class: "codeartifact-latest-version" },
-      el("span", { class: "codeartifact-latest-version-value", title: version }, version),
+      el("span", { class: "codeartifact-latest-version-value", title: version.slice(0, 256) }, version.length > 512 ? version.slice(0, 511) + "…" : version),
       codeArtifactCopyButton(version, `Copy latest version ${version}`),
       ...(state === "failed" ? [el("span", { class: "codeartifact-enrichment-state muted small" }, "Some details unavailable")] : []),
     );
@@ -5234,8 +5468,9 @@
       }
       if (hadFocus) focusSafely(td.querySelector("button") || tr);
     }
-    tr.dataset.search = columns.map(column => String(row[column] ?? "")).join(" ");
-    tr.setAttribute("aria-label", `Inspect ${columns.map(column => String(row[column] ?? "")).filter(Boolean).join(" · ")}`);
+    tr.dataset.search = columns.map(column => String(row[column] ?? "")).join(" ").slice(0, 1024);
+    tr._tableRowUpdated?.();
+    tr.setAttribute("aria-label", (`Inspect ${columns.map(column => String(row[column] ?? "")).filter(Boolean).join(" · ")}`).slice(0, 256));
   }
 
   async function loadCodeArtifactPage(form, host, inputs, cursor = null, browsing = null) {
@@ -7251,6 +7486,14 @@
 
   // ===== Boot =====
   async function boot() {
+    // DOM-owned resources need no global table registry. This also catches
+    // removals performed by GridStack or a detail's own controls.
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.removedNodes) {
+        if (!node.isConnected) disposeRenderTree(node);
+      }
+      if (comboOwnerInput && !comboOwnerInput.isConnected) closePipelineCombo();
+    }).observe(document.body, { childList: true, subtree: true });
     const topbar = $(".topbar");
     if (topbar) {
       const updateHeight = () => document.documentElement.style.setProperty("--topbar-height", `${topbar.offsetHeight}px`);

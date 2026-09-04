@@ -107,6 +107,18 @@ async function timedInput(page, selector, value) {
     input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     const handlerFinished = performance.now();
+    // The baseline is synchronous; later worker-based filters expose pending.
+    // Wait for real matching completion so asynchronous filtering is not
+    // incorrectly reported as a faster two-frame result.
+    await new Promise((done, reject) => {
+      const deadline = performance.now() + 5000;
+      const check = () => {
+        if (input.dataset.filterPending !== "true") return done();
+        if (performance.now() >= deadline) return reject(new Error("Filter did not settle"));
+        requestAnimationFrame(check);
+      };
+      check();
+    });
     await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
     return { handler_ms: handlerFinished - started, painted_ms: performance.now() - started,
       invalid: input.classList.contains("table-filter-bad"), count: input.parentElement.querySelector(".table-filter-count")?.textContent || null,

@@ -438,6 +438,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
     params: {
       widget: "codeartifact-package-version-history",
       request_id: expect.stringMatching(/^ui-[a-z0-9]+-[a-z0-9]+-\d+$/),
+      reuse_result: true,
       inputs: {
         domain: "demo-domain",
         repository: "demo_repo",

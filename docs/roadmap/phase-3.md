@@ -1,8 +1,8 @@
 # P3 — Earn the performance claim
 
-Implementation status: **P3-01–07 complete locally; P3-08 is next. Native performance metrics remain unmeasured.**
+Implementation status: **P3-01–08 complete locally; P4 is next. Native performance metrics remain unmeasured.**
 
-Planning source review: `0.2.9`, 2026-09-03. [P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline at `6c0377e`, its method, raw measurements and limitations. The remaining work packages below define implementation acceptance; their targets are not product claims.
+Planning source review: `0.2.9`, 2026-09-03. [P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline at `6c0377e`, its method, raw measurements and limitations. The ordered work packages below record the original acceptance contracts. Unit evidence and the exit report distinguish implemented limits, measured synthetic results and pending native claims.
 
 ## Decision and dependencies
 
@@ -28,27 +28,27 @@ Keep Rust + Tauri and the existing in-process SDK architecture. The source expos
 
 **Acceptance:** the same synthetic scenario can be replayed with the same build mode and recorded parameters; failures and partial results remain in the report rather than being discarded.
 
-Sources: [commands.rs, lines 408–419](../../src-tauri/src/commands.rs#L408-L419); [context.rs, lines 44–65](../../src-tauri/src/aws/context.rs#L44-L65); [app.js, lines 343–352](../../frontend/app.js#L343-L352).
+Implementation and validation: [P3-01 evidence](p3-01-evidence.md).
 
 ### P3-02 — Bound request volume and concurrency
 
 **Outcome:** refreshing many tiles remains responsive and cannot multiply work without a defined limit.
 
 - Add a shared scheduler with account/region/service budgets plus an app-wide ceiling; treat CLI children and active Logs Insights queries as separately limited resources.
-- Start experiments with four ordinary requests per context/service and eight app-wide, two CLI children, and two active Insights queries. These are provisional local limits, not AWS quota assertions.
+- Start experiments with four ordinary requests per account/region/service and eight app-wide, two CLI children, and two active Insights queries. These are provisional local limits, not AWS quota assertions.
 - Bound pending work; coalesce identical refreshes for the same verified context, operation and normalized inputs. Removing one subscriber must not cancel work still needed by another.
 - Give interactive detail requests priority over enrichment without starving older work. Respect SDK retries within the same deadline and attempt budget; avoid a second unlimited retry loop.
 - Define total request deadlines and page/result/byte ceilings per widget. Preserve continuation or an explicit partial-result explanation when a ceiling is reached.
 
 **Acceptance:** synthetic 50-pin refresh, repeated clicks, delayed pages, repeated pagination tokens and throttled responses never exceed configured ceilings, cross contexts or create an endless queue. Queue cancellation prevents dispatch.
 
-Sources: [app.js, lines 1785–1788](../../frontend/app.js#L1785-L1788), [lines 4237–4240](../../frontend/app.js#L4237-L4240); [cfn_stacks.rs, lines 30–72](../../src-tauri/src/widgets/cfn_stacks.rs#L30-L72); existing bounded scan in [resource_lookup.rs, lines 12–16](../../src-tauri/src/widgets/resource_lookup.rs#L12-L16).
+Implementation and validation: [P3-02 evidence](p3-02-evidence.md).
 
 ### P3-03 — Deliver CodeArtifact data progressively
 
 **Outcome:** package names become useful before every package has completed enrichment.
 
-Current initial enrichment awaits each package serially. A normal non-empty package adds a version-list and a detail request; this is source-derived request behavior, not a measured duration.
+The P3-01 baseline awaited each package serially: a normal non-empty package added a version-list and a detail request. P3-03 now returns a bounded identity page first; its evidence separates that reduced initial workload from full enrichment.
 
 - Return a bounded page of package identities first, then enrich visible/requested rows through P3-02. Use an explicit request/subscription ID if updates cross the IPC boundary.
 - Keep stable package keys and ordering while updates arrive; label pending, failed and completed enrichment separately. A failed row must not erase successful rows.
@@ -58,7 +58,7 @@ Current initial enrichment awaits each package serially. A normal non-empty pack
 
 **Acceptance:** fixtures of 50 and 1,000 packages show their first page before all enrichment completes; delayed and failed details preserve row identity, selection and explicit partial state. Reopening the same detail does not duplicate in-flight work.
 
-Sources: [codeartifact_packages.rs, lines 18–21](../../src-tauri/src/widgets/codeartifact_packages.rs#L18-L21), [lines 87–114](../../src-tauri/src/widgets/codeartifact_packages.rs#L87-L114), [lines 117–190](../../src-tauri/src/widgets/codeartifact_packages.rs#L117-L190), [lines 315–376](../../src-tauri/src/widgets/codeartifact_packages.rs#L315-L376).
+Implementation and validation: [P3-03 evidence](p3-03-evidence.md).
 
 ### P3-04 — Cancel queries and report cleanup outcomes
 
@@ -73,7 +73,7 @@ Sources: [codeartifact_packages.rs, lines 18–21](../../src-tauri/src/widgets/c
 
 **Acceptance:** a fake service covers slow start, lost start response without query ID, polling failure, denied/failed stop, late completion and context switch. When remote state is unknown, the UI says so and offers recovery without launching a replacement query automatically.
 
-Sources: [logs_insights.rs, lines 14–17](../../src-tauri/src/widgets/logs_insights.rs#L14-L17), [lines 68–134](../../src-tauri/src/widgets/logs_insights.rs#L68-L134); [errors_by_stack.rs, lines 25–89](../../src-tauri/src/widgets/errors_by_stack.rs#L25-L89), [lines 114–145](../../src-tauri/src/widgets/errors_by_stack.rs#L114-L145).
+Implementation and validation: [P3-04 evidence](p3-04-evidence.md).
 
 ### P3-05 — Cache only within verified identity and policy boundaries
 
@@ -83,12 +83,12 @@ Sources: [logs_insights.rs, lines 14–17](../../src-tauri/src/widgets/logs_insi
 - Key contexts by verified identity, profile, region, canonical configuration path and configuration/session generation. Do not use secrets as keys or assume a displayed account ID proves identity.
 - Key results by that context plus operation, normalized inputs and authorization generation. Bound entries, total bytes and age; keep response data in memory by default.
 - Invalidate affected entries and pending work on configuration/profile/session changes, identity mismatch, logout or policy changes. Re-evaluate policy before serving cached protected data.
-- Preserve SDK-managed credential refresh. A cached result never proves a session is currently valid; stale display, where allowed, keeps its original context, timestamp and stale label.
+- Preserve supported SSO token refresh inside the P1 owned verification path. Resource clients use frozen STS-verified credentials, and cached results never bypass current verification. A cached result never proves a session is currently valid; stale display, where allowed, keeps its original context, timestamp and stale label.
 - Deduplication must not erase actual-attempt audit evidence or silently turn refresh into an indefinite cache hit.
 
 **Acceptance:** identical resources in Demo A and Demo B never share results; changing a profile's underlying identity, configuration path, region or deny policy invalidates the right entries. Expiry, eviction and concurrent refresh preserve the configured memory ceiling.
 
-Sources: [state.rs, lines 12–22](../../src-tauri/src/state.rs#L12-L22); [commands.rs, lines 255–284](../../src-tauri/src/commands.rs#L255-L284), [lines 436–439](../../src-tauri/src/commands.rs#L436-L439); [context.rs, lines 21–23](../../src-tauri/src/aws/context.rs#L21-L23).
+Implementation and validation: [P3-05 evidence](p3-05-evidence.md).
 
 ### P3-06 — Budget CLI memory after the P1 process boundary
 
@@ -99,9 +99,9 @@ Sources: [state.rs, lines 12–22](../../src-tauri/src/state.rs#L12-L22); [comma
 - Measure aggregate memory across queued/active children, pipe buffers, decoding, JSON parsing and retained results. Bound table rows, columns and retained raw JSON in addition to per-process output.
 - Count CLI jobs against P3-02 and preserve P1 identity attribution. Release permits and result buffers after completion/cancellation; never truncate JSON and present it as a successful complete response.
 
-**Acceptance:** reuse P1-04's fake-process overflow, deadline and cancellation fixtures with concurrent jobs and repeated 50-pin refreshes. Aggregate memory respects the agreed budget, permits are recovered, parsing failures remain accurate, and existing process-safety tests still pass. No real AWS CLI is used.
+**Acceptance:** reuse P1-04's fake-process overflow, deadline and cancellation fixtures with concurrent jobs and repeated 50-pin refreshes. Encoded data, parser structure and admitted concurrency respect configured limits; native aggregate memory remains unmeasured. Permits are recovered, parsing failures remain accurate, and existing process-safety tests still pass. No real AWS CLI is used.
 
-Source: [aws_cli.rs, lines 21–24](../../src-tauri/src/widgets/aws_cli.rs#L21-L24), [lines 61–100](../../src-tauri/src/widgets/aws_cli.rs#L61-L100). The current output check occurs after collection.
+Implementation and validation: [P3-06 evidence](p3-06-evidence.md).
 
 ### P3-07 — Make audit cost independent of full history size
 
@@ -109,13 +109,13 @@ Source: [aws_cli.rs, lines 21–24](../../src-tauri/src/widgets/aws_cli.rs#L21-L
 
 - Use bounded reverse/incremental reads with a cursor, maximum record length and response-byte ceiling; handle partial final lines and file replacement explicitly.
 - Move potentially slow filesystem work off async request workers. Preserve append ordering and surface persistence failure according to P1/P2 audit contracts; never silently drop events to hit a target.
-- Proposed default: five files total, each capped at 10 MiB, including the active file (50 MiB total). Rotate before an append would exceed the cap; the bounded-record rule must fit within that cap. This is a planning proposal; no files are rotated or deleted during planning.
+- Implemented default: preserve existing history. Explicitly saving bounded retention enables five files total, each capped at 10 MiB, including the active file (50 MiB total). Rotation occurs before an append exceeds that cap. Preserved copies remain outside that rotating budget and do not expire automatically. This revises the original bounded-default proposal to avoid implicit deletion during migration.
 - P2 Settings must show the active limits, storage location and oldest-file expiry behavior before enabling retention or lowering limits, with an explicit save action and a route to preserve existing history. For migration, preview oversized legacy history and require a retention choice before pruning it; disclose expiry instead of promising indefinite history.
 - Send new entries or a bounded replacement page to the UI. Pause polling when the panel is hidden and prevent overlapping polls.
 
 **Acceptance:** synthetic 1, 10 and 100 MiB logs, malformed/oversized lines, concurrent appends, rotation and disk-write failure produce bounded reads and accurate ordering/errors. Opening/closing the panel repeatedly does not retain old tables or polling tasks.
 
-Sources: [audit.rs, lines 37–82](../../src-tauri/src/audit.rs#L37-L82); [app.js, lines 534–551](../../frontend/app.js#L534-L551), [lines 609–647](../../frontend/app.js#L609-L647).
+Implementation and validation: [P3-07 evidence](p3-07-evidence.md).
 
 ### P3-08 — Bound rendering work and preserve interaction
 
@@ -128,7 +128,7 @@ Sources: [audit.rs, lines 37–82](../../src-tauri/src/audit.rs#L37-L82); [app.j
 
 **Acceptance:** synthetic 100/1,000/10,000-row tables with long cells and nested details remain cancellable; filtering, keyboard navigation and context labels stay correct during updates. Compare memory after repeated add/remove cycles.
 
-Sources: [app.js, lines 2194–2241](../../frontend/app.js#L2194-L2241), [lines 2264–2288](../../frontend/app.js#L2264-L2288), [lines 5233–5255](../../frontend/app.js#L5233-L5255).
+Implementation and validation: [P3-08 evidence](p3-08-evidence.md).
 
 ## Synthetic benchmark protocol
 
@@ -140,22 +140,24 @@ Sources: [app.js, lines 2194–2241](../../frontend/app.js#L2194-L2241), [lines 
 6. Compare the unchanged and changed path on the same device, build mode and fixture. Retain raw measurements and methodology; do not compare a debug baseline with a release candidate.
 7. Repeat native startup, rendering, memory and subprocess checks on P4 packages during P5 device validation. Browser/fake-IPC results cannot establish native support or live AWS performance.
 
-## Provisional acceptance targets — all unmeasured
+## Acceptance targets and evidence status
 
-These starting targets are proposals. Confirm or revise them after P3-01 with a written reason before treating them as release gates; never describe them as achieved.
+Concurrency limits are implemented local contracts. The 100 ms interaction and 250 ms first-useful targets remain candidate goals, with synthetic results recorded in the exit report; they are not native release guarantees. Missing measurements remain open.
 
-| Measure | Proposed target / contract | Evidence needed |
+| Measure | Target / contract | Evidence status |
 | --- | --- | --- |
-| Immediate UI feedback | p95 within 100 ms of refresh/cancel/filter input | Timestamped synthetic production-path interaction |
-| First useful data | p95 within 250 ms after the fake first-page response becomes available | Separately measured IPC/render delay; excludes network wait |
-| Ordinary request concurrency | Initial four per context/service, eight app-wide | Fake transport counters including retry attempts |
-| CLI / active Insights concurrency | Initial two children / two active queries | Process/query lifecycle counters, cleanup included |
-| Cancellation | Local acknowledgement p95 within 100 ms; no new ordinary dispatch for the cancelled subscriber | Queue and UI traces; remote cleanup reported separately |
-| Audit tail | p95 within 100 ms for 300 bounded entries from a 100 MiB local fixture | Native filesystem timing and bounded bytes read |
+| Immediate UI feedback | p95 within 100 ms of refresh/cancel/filter input | P3-08 records handler and matching-plus-paint times separately; no complete native refresh/cancel latency gate |
+| First useful data | p95 within 250 ms after the fake first-page response becomes available | P3-08 synthetic response-to-useful timing; excludes real provider/network and native IPC |
+| Ordinary request concurrency | Four per account/region/service, eight app-wide; bounded queues | P3-02 scheduler and fake transport tests; native throttling/load pending |
+| CLI / active Insights concurrency | Two children / two locally owned query lifecycles; reserved cleanup capacity | P3-02/04/06 fake lifecycle counters; explicit unknown-state acknowledgement may allow remote overlap |
+| Cancellation | Local acknowledgement p95 within 100 ms; cancelled queued work does not dispatch | Queue/subscriber cancellation tested; complete acknowledgement timing and remote execution unmeasured |
+| Audit tail | p95 within 100 ms for 300 bounded entries from a 100 MiB local fixture | P3-07 debug filesystem reader p95 14.32 ms, 327,808 bytes; native panel latency pending |
 | Startup, idle CPU, total/peak memory | No absolute claim yet; set device-specific budgets after baseline | Release-mode process-tree measurements |
-| Retained memory | No sustained upward trend across ten identical refresh/add/remove cycles | Per-cycle settled memory and retained-object evidence |
+| Retained memory | No sustained upward trend across ten identical refresh/add/remove cycles | Three browser heap series plus worker-disposal tests; no forced GC, retained-object proof or native memory gate |
 
 ## Exit evidence and handoff
+
+[P3 exit evidence](p3-exit-evidence.md) records all eight local commits, final regressions, before/after results (including regressions) and the P4/P5 handoff.
 
 - Planning is complete when these contracts, dependencies and provisional targets are reviewed; no device is required to complete planning.
 - Implementation completion requires P1/P2 regression contracts, deterministic budget/cancellation/cache tests, comparable before/after measurements, and no hidden partial-result or audit failures.

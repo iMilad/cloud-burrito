@@ -1,8 +1,10 @@
 # Cloud Burrito execution roadmap
 
-Status: **P1 and P2 complete locally. P3-01 complete; P3-02 is next. P4 and device evidence remain open.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
+Status: **P1 and P2 complete locally. P3-01–08 complete locally; P4 is next. P4 and device evidence remain open.** Original source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03.
 
-Latest completed unit: [P3-07](p3-07-evidence.md) — Bounded audit reads, ordered writes and explicit retention. P3-01–07 complete locally; P3-08 is next. Native measurements remain pending.
+Latest completed unit: [P3-08](p3-08-evidence.md) — Bounded rendering and verified P3 handoff. P3-01–08 complete locally; P4 is next. Native measurements remain pending.
+
+[P3 exit evidence](p3-exit-evidence.md) records all eight separate local work units, final checks, before/after measurements and remaining native gates.
 
 The preceding [P2-07](p2-07-evidence.md) completes keyboard, focus and readable desktop checks. The final P2 gate passes 248 Rust, 17 Node, 94 browser and 16 Python helper cases. [P2 evidence](phase-2.md) records all seven separately committed work units: persistence, settings, first run, result state, connected investigation, honest beta controls and keyboard use. Historical [P1 evidence](phase-1.md) remains unchanged. Live AWS and native platform acceptance remain pending.
 
@@ -25,7 +27,7 @@ Use **P0–P6** for work items and acceptance evidence. The presentation's five 
 | [P0 — Establish the truth](phase-0.md) | Scope, operation inventory, five journey contracts, baseline and early platform checks | First-party execution paths mapped; baseline and gaps recorded; Windows/Ubuntu build-and-launch attempts documented; initial support matrix frozen | Scope recorded / device and native evidence pending |
 | [P1 — Build the trust boundary](phase-1.md) | Exact execution allowlist, verified active/pinned identities and stale-response protection | Forbidden actions denied before execution; mismatched identity blocks work; delayed responses cannot cross contexts | P1-01–06 complete locally / native evidence pending |
 | [P2 — Make the core dependable](phase-2.md) | Coherent investigation workflow, onboarding, durable settings and explicit errors | Journey contracts pass through production paths with synthetic dependencies; unfinished controls handled honestly | Complete locally / native acceptance pending |
-| [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Startup, result latency, memory and request counts measured; published claims reproducible | P3-01–07 complete locally / remaining implementation and native evidence pending |
+| [P3 — Earn the performance claim](phase-3.md) | Bounded work, cancellation, caching and repeatable measurements | Synthetic timings and resource limits recorded; native startup/memory and public performance claims remain pending | P3-01–08 complete locally / native evidence pending |
 | [P4 — Produce native artifacts](phase-4.md) | Unsigned packages from the same version and commit | Checksums, artifact contents and platform instructions reviewed; package installation proven in P5 | Plan complete / implementation not started |
 | P5 — Validate on real machines | Packaged release candidate tested on the available macOS, Windows and Ubuntu laptops | Required journeys and install/restart/upgrade/uninstall pass on each declared OS/architecture; no unresolved critical/high defects | Outline only / not started |
 | P6 — Build the portfolio launch package | English documentation, demo, decisions and release evidence | Privacy/history and dependency review complete; independent feedback recorded; explicit publication decision | Outline only / not started |
@@ -55,7 +57,7 @@ Deferred: Go/Wails rewrite, plugin SDK, full AI assistant, infrastructure mutati
 
 ## Start here
 
-1. Start P3 measured performance and bounded work using the [P2-07 evidence](p2-07-evidence.md) and [execution plan](execution-plan.md).
+1. Start [P4-01](phase-4.md#p4-01--freeze-the-artifact-and-compatibility-contract), using the [P3 exit evidence](p3-exit-evidence.md) to freeze the unsigned artifact and compatibility contract.
 2. Use the phase plans in order: [P1](phase-1.md) → [P2](phase-2.md) → [P3](phase-3.md) → [P4](phase-4.md).
 3. Keep evidence against the [journey contracts](phase-0.md) and [operation inventory](aws-operation-inventory.md).
 4. Resume [device checks](device-checks.md) when the laptops are available; final support and native acceptance remain conditional until then.

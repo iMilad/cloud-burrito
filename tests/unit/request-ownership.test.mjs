@@ -27,6 +27,7 @@ function fixture() {
     contextPayloadForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextOverrideFromElement: () => null,
     beginResultRequest: () => {},
+    disposeRenderTree: () => {},
     tauriInvoke: (command, args) => {
       if (command === 'request_cancel') {
         cancellations.push(args.params.request_id);

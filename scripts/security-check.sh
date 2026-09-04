@@ -34,7 +34,8 @@ python3 -m py_compile \
   scripts/check-release-privacy.py \
   scripts/check-release-version.py \
   scripts/release-status.py \
-  scripts/check-tauri-commands.py
+  scripts/check-tauri-commands.py \
+  scripts/check-detect-secrets.py
 bash -n scripts/*.sh
 
 echo "== release helper tests =="
@@ -45,6 +46,7 @@ python3 scripts/check-tauri-commands.py
 
 echo "== frontend syntax =="
 node --check frontend/app.js
+node --check frontend/row-filter-worker.js
 node --check frontend/mock-data.js
 
 echo "== whitespace =="
@@ -111,26 +113,7 @@ if command -v detect-secrets >/dev/null 2>&1; then
       --no-verify \
       --exclude-files '(^|/)(\.git|node_modules|src-tauri/(target|gen)|playwright-report|test-results)(/|$)' \
       >"$tmp_detect"
-    node - "$tmp_detect" <<'NODE'
-const fs = require("fs");
-const file = process.argv[2];
-const report = JSON.parse(fs.readFileSync(file, "utf8"));
-const results = report.results || {};
-let count = 0;
-for (const [filename, findings] of Object.entries(results)) {
-  for (const finding of findings) {
-    count += 1;
-    const type = finding.type || "unknown detector";
-    const line = finding.line_number || "?";
-    console.log(`detect-secrets: ${type} in ${filename}:${line}`);
-  }
-}
-if (count > 0) {
-  console.error(`detect-secrets found ${count} potential secret(s)`);
-  process.exit(1);
-}
-console.log("detect-secrets: no findings");
-NODE
+    python3 scripts/check-detect-secrets.py "$tmp_detect"
   )
 else
   echo "skip: detect-secrets not installed"

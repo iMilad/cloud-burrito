@@ -148,3 +148,15 @@ test("editing inputs cancels enrichment and late metadata cannot restore old pac
   await expect(rows(page)).toHaveCount(0);
   expect(await calls(page, "list")).toHaveLength(1);
 });
+
+
+test("metadata arrival re-evaluates an active filter without editing it", async ({ page }) => {
+  await boot(page, 50);
+  const filter = surface(page).locator(".table-filter").first();
+  await filter.fill("1\\.0\\.2");
+  await expect(surface(page).locator(".table-filter-count").first()).toHaveText("0 / 50");
+  await page.evaluate(() => window.__progressive.release(0));
+  await expect(surface(page).locator(".table-filter-count").first()).toHaveText("25 / 50");
+  await expect(surface(page).locator(".codeartifact-packages-rows > table > tbody > tr:not(.row-detail):visible")).toHaveCount(25);
+  await expect(filter).toHaveValue("1\\.0\\.2");
+});

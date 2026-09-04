@@ -2759,3 +2759,14 @@ tr[data-enrichment-state="failed"] .codeartifact-enrichment-state { color: var(-
 .audit-history-status { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
 .audit-history-status p { margin: 4px 0; }
 [data-audit-preserve-status] { overflow-wrap: anywhere; }
+
+/* Only the current result page creates row DOM; full values are deliberate. */
+.table-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.table-pagination[hidden] { display: none; }
+.table-page-count { color: var(--text-secondary); }
+.table-filter-feedback { margin: var(--space-2) 0; overflow-wrap: anywhere; }
+.table-cell-detail { margin-top: var(--space-1); white-space: normal; }
+.table-cell-detail > summary { width: fit-content; cursor: pointer; font-size: 11px; color: var(--accent); }
+.table-cell-detail > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.table-full-value { white-space: pre-wrap; overflow-wrap: anywhere; max-width: min(80ch, 70vw); max-height: 240px; overflow: auto; margin: var(--space-2) 0; }
+.combo-filter-feedback { padding: var(--space-2); color: var(--text-secondary); font-size: 11px; white-space: normal; }

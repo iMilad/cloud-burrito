@@ -1,6 +1,6 @@
 # Cloud Burrito — From working tool to public beta
 
-**P1 and P2 complete locally. P3-01–07 complete locally; P3-08 is next. Device tests deferred.**
+**P1 and P2 complete locally. P3-01–08 complete locally; P4 is next. Device tests deferred.**
 
 Decision reference: 2026-09-03. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
 
@@ -40,9 +40,9 @@ A dependent unit may consume a reviewed interface fixture before a whole phase f
 
 ## Current implementation progress
 
-**P1 and all seven P2 units are complete locally. P3-01–07 complete locally; P3-08 is next.**
+**P1 and all seven P2 units are complete locally. P3-01–08 complete locally; P4 is next.**
 
-[P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline, 249 Rust and 17 Node regressions, and 270 successful measured browser trials. No native or live AWS performance is claimed.
+[P3 exit evidence](p3-exit-evidence.md) records the completed phase and P4 handoff. Historical [P3-01 evidence](p3-01-evidence.md) records the unchanged synthetic baseline, 249 Rust and 17 Node regressions, and 270 successful measured browser trials. No native or live AWS performance is claimed.
 
 [P2-07 evidence](p2-07-evidence.md): keyboard/focus, both themes, compact windows and enlargement pass the final 248 Rust, 17 Node, 94 browser and 16 Python helper cases. Repository gates pass with the documented cached-advisory and scanner-cleanup limitations. All seven P2 units are separately committed locally.
 
@@ -68,7 +68,7 @@ P1-03 adds explicit legacy/named-session SSO configuration, supported named-sess
 
 The child execution deadline is the earlier of 30 seconds or credential expiry; stdout/stderr have 2 MiB/256 KiB streaming caps. Affected-context invalidation is monitored every 100 ms, and cancellation/caller drop retain direct-child termination/reap ownership. Cleanup can outlast the execution deadline while awaiting OS-confirmed exit; only an empty isolated directory is removed, so a nonempty directory can remain. Raw stderr is withheld from the UI and exact credential values are redacted from runner errors. Cleanup failure survives a superseded context as the stable `CliCleanupFailed` UI/audit error; a controlled command regression covers that ordering.
 
-At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: P3-08**. [Latest evidence](p3-07-evidence.md). Device and live-provider acceptance remain attached to their later gates.
+At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: P4**. [Latest evidence](p3-08-evidence.md). Device and live-provider acceptance remain attached to their later gates.
 
 ## Validation ledger
 
@@ -100,8 +100,8 @@ Device checks will resume sequentially with one action, expected result and reco
 | Unsigned, identity-free distribution | Repository requirement | No publisher certificates, Apple Developer IDs, notarization or personal publisher metadata |
 | Exact approved CLI operations and validated arguments | P1-02 and P1-04 validated locally | The same 18 resource-read schemas remain; desktop CLI is re-enabled with frozen verified credentials and isolated child execution |
 | Explicit legacy and named-session SSO support | Implemented and locally validated in P1-03 | Frozen STS-verified credentials serve resource calls; unsupported credential/endpoint indirection fails before provider work; live renewal and provider behavior remain unverified |
-| Retain the current frontend; hide unfinished AI/global-search controls in beta | Proposed P2 design | Focus effort on a complete investigation workflow |
-| Numeric performance/resource budgets | Provisional P3 experiments | Adjust from evidence before adopting as release gates; none achieved yet |
+| Retain the current frontend; hide unfinished AI/global-search controls in beta | Implemented in P2 | Focus effort on a complete investigation workflow |
+| Numeric performance/resource budgets | P3 local limits implemented; synthetic timings recorded | See [P3 exit evidence](p3-exit-evidence.md); native performance and memory gates remain pending |
 | Windows NSIS; Ubuntu deb plus secondary AppImage; existing macOS DMG/ZIP | Proposed P4 packaging | OS versions/architectures remain provisional until device inventory and build evidence |
 
 P0 support evidence may change package targets, prerequisite instructions or a proposed default. Record the reason and affected work IDs instead of silently expanding the scope. A new AWS service, credential mechanism or executable capability needs its own reviewed contract.
@@ -112,4 +112,4 @@ For each work ID, record: source revision/diff, intended behavior, acceptance ca
 
 Phase completion uses the exit criteria in that phase's document. A known context leak, forbidden execution, false save success or lost/hidden failure keeps its unit open. A pending native result remains attached to the candidate and blocks the corresponding platform/performance claim.
 
-P4 hands a candidate to P5. P5 establishes device evidence. P6 packages the portfolio explanation, recorded decisions, demo and release evidence. A GitHub action, push, tag, draft release or public publication remains a later explicit action governed by [AGENTS.md](../../AGENTS.md). The authorized local P1 commits do not authorize any of those remote actions.
+P4 hands a candidate to P5. P5 establishes device evidence. P6 packages the portfolio explanation, recorded decisions, demo and release evidence. A GitHub action, push, tag, draft release or public publication remains a later explicit action governed by [AGENTS.md](../../AGENTS.md). The authorized local P1–P3 commits do not authorize any of those remote actions.

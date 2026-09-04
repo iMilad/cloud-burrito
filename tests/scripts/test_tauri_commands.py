@@ -56,7 +56,7 @@ class CommandRegistryTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertEqual(CHECK.main(), 0)
-        self.assertIn("15 commands", output.getvalue())
+        self.assertIn("17 commands", output.getvalue())
 
     def test_adding_an_unreviewed_command_to_every_list_is_rejected(self):
         self.write_fixture(extra_commands=["synthetic_unreviewed_command"])
