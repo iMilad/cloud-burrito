@@ -183,6 +183,26 @@ def tool_versions(source_root, env):
     return versions
 
 
+def check_native_tools(row, source_root, env):
+    """Fail before compilation when a target or required packaging tool is absent."""
+    installed = run(['rustup', 'target', 'list', '--installed'],
+                    cwd=source_root, env=env, capture=True).splitlines()
+    if row['target'] not in installed:
+        raise BuildError(f"Rust target is not installed: {row['target']}; provision it before building")
+    required = {'macos': ['xcrun', 'ditto', 'hdiutil', 'lipo', 'codesign', 'sandbox-exec'],
+                'windows': ['cl', 'link', 'rc'],
+                'linux': ['cc', 'pkg-config']}[row['platform']]
+    missing = [name for name in required if not shutil.which(name, path=env.get('PATH'))]
+    if row['platform'] != 'macos' and not any(
+            shutil.which(name, path=env.get('PATH')) for name in ('7zz', '7z')):
+        missing.append('7zz or 7z (artifact inspection)')
+    if missing:
+        raise BuildError('Required native tools are unavailable: ' + ', '.join(missing))
+    if row['platform'] == 'linux':
+        run(['pkg-config', '--exists', 'webkit2gtk-4.1', 'gtk+-3.0'],
+            cwd=source_root, env=env, capture=True)
+
+
 def only_match(directory, pattern):
     matches = sorted(directory.glob(pattern))
     if len(matches) != 1 or matches[0].is_symlink() or not matches[0].is_file():
@@ -221,12 +241,11 @@ def stage_artifacts(row, release_dir, output, version):
             shutil.copy2(source, destination)
 
 
-def build(row, output, helper_inventory=None):
+def build(row, output, helper_inventory=None, *, check_only=False):
     check_host(row)
     identity = candidate_source()
-    if output.exists():
+    if not check_only and output.exists():
         raise BuildError('Output directory must be new; existing candidates are never overwritten')
-    output.parent.mkdir(parents=True, exist_ok=True)
     # The compiler cache is reusable, but native bundle output is always fresh.
     target_dir = ROOT / 'src-tauri/target'
     if target_dir.is_symlink() or target_dir.resolve() != target_dir:
@@ -239,6 +258,7 @@ def build(row, output, helper_inventory=None):
             raise BuildError('Format-aware inspection is required before candidate builds (P4-07)')
         env = build_environment(source_root, target_dir, row)
         versions = tool_versions(source_root, env)
+        check_native_tools(row, source_root, env)
         run([sys.executable, str(source_root / 'scripts/check-release-version.py')], cwd=source_root)
         run([sys.executable, str(ROOT / 'scripts/check-release-privacy.py')], cwd=ROOT)
         run([sys.executable, str(source_root / 'scripts/check-tauri-commands.py')], cwd=source_root)
@@ -258,7 +278,18 @@ def build(row, output, helper_inventory=None):
             if not checker.is_file() or not helper_inventory:
                 raise BuildError('Pre-provisioned, verified native helper inventory is required; automatic downloads are disabled')
             helper_report = json.loads(run([sys.executable, str(checker), '--target', row['target'],
-                '--cargo-target-dir', str(target_dir), '--inventory', str(helper_inventory), '--json'], cwd=source_root, capture=True))
+                '--cargo-target-dir', str(target_dir), '--inventory', str(helper_inventory), '--json'],
+                cwd=source_root, env=env, capture=True))
+        if check_only:
+            if candidate_source() != identity:
+                raise BuildError('Source changed during preflight; check the committed source again')
+            print(json.dumps({'target': row['id'], 'source_commit': identity['source_commit'],
+                              'status': 'preflight passed', 'built': False,
+                              'device_validated': False, 'publication': False,
+                              'limitations': 'Input/tool checks only; compilation, bundling and native inspection remain pending.'},
+                             indent=2))
+            return
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.mkdir()
         previous = release_dir / 'bundle'
         if previous.exists():
@@ -303,7 +334,9 @@ def main():
     parser.add_argument('target', help='Target ID or triple from packaging/targets.json')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--helper-inventory', type=Path)
-    parser.add_argument('--plan', action='store_true', help='Print declared build plan without building')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--plan', action='store_true', help='Print declared build plan without checking this host')
+    mode.add_argument('--check', action='store_true', help='Check local build inputs without compiling or bundling')
     args = parser.parse_args()
     try:
         row = target_for(args.target)
@@ -311,7 +344,7 @@ def main():
             print(json.dumps({'target': row, 'command': build_command(row), 'publication': False}, indent=2))
             return 0
         output = args.output or ROOT / 'dist/candidates' / git('rev-parse', '--short=12', 'HEAD') / row['id']
-        build(row, output.absolute(), args.helper_inventory)
+        build(row, output.absolute(), args.helper_inventory, check_only=args.check)
         return 0
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f'Candidate not accepted: {error}', file=sys.stderr)

@@ -1,6 +1,8 @@
 import importlib.util
+import contextlib
 import hashlib
 import io
+import json
 import subprocess
 import tarfile
 from pathlib import Path
@@ -106,6 +108,57 @@ class BuildCandidateTests(unittest.TestCase):
             with self.assertRaises(BUILD.BuildError): BUILD.check_host(target_for('windows-x86_64'))
         with patch.object(BUILD, 'git', return_value=' M synthetic-file'):
             with self.assertRaises(BUILD.BuildError): BUILD.candidate_source()
+
+    def test_missing_rust_target_fails_before_native_tools_run(self):
+        with patch.object(BUILD, 'run', return_value='aarch64-apple-darwin'), \
+             patch.object(BUILD.shutil, 'which') as which:
+            with self.assertRaisesRegex(BUILD.BuildError, 'Rust target is not installed'):
+                BUILD.check_native_tools(target_for('macos-x86_64'), SCRIPTS.parent, {'PATH': ''})
+            which.assert_not_called()
+
+    def test_missing_native_inspector_fails_before_compilation(self):
+        with patch.object(BUILD, 'run', return_value='x86_64-pc-windows-msvc'), \
+             patch.object(BUILD.shutil, 'which', side_effect=lambda name, **kw: None if name in ('7z', '7zz') else name):
+            with self.assertRaisesRegex(BUILD.BuildError, 'artifact inspection'):
+                BUILD.check_native_tools(target_for('windows-x86_64'), SCRIPTS.parent, {'PATH': ''})
+
+    def test_preflight_keeps_existing_outputs_and_never_compiles(self):
+        with TemporaryDirectory(prefix='burrito-preflight-') as directory, contextlib.ExitStack() as stack:
+            root = Path(directory).resolve()
+            output = root / 'candidate'; output.mkdir()
+            sentinel = output / 'existing'; sentinel.write_bytes(b'synthetic candidate')
+            bundle = root / 'src-tauri/target/aarch64-apple-darwin/release/bundle'
+            bundle.mkdir(parents=True)
+            (bundle / 'existing').write_bytes(b'synthetic bundle')
+            identity = {'source_commit': 'a' * 40}
+            def export(destination, revision):
+                (destination / 'scripts').mkdir()
+                (destination / 'scripts/artifact_inspection.py').touch()
+                (destination / 'package-lock.json').write_text('{}')
+            def run(command, **kwargs):
+                if command[:2] == ['cargo', 'metadata']:
+                    self.assertIn('--offline', command)
+                    self.assertIn('--locked', command)
+                    return json.dumps({'target_directory': str(root / 'src-tauri/target')})
+                self.assertNotEqual(command[:3], ['cargo', 'tauri', 'build'])
+                return ''
+            for name, replacement in [('ROOT', root), ('check_host', lambda row: None),
+                                      ('candidate_source', lambda: identity), ('export_source', export),
+                                      ('tool_versions', lambda source, env: {}),
+                                      ('check_native_tools', lambda *args: None), ('run', run)]:
+                stack.enter_context(patch.object(BUILD, name, replacement))
+            stack.enter_context(patch('dependency_inventory.from_metadata', return_value={}))
+            stage = stack.enter_context(patch.object(BUILD, 'stage_artifacts'))
+            captured = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            BUILD.build(target_for('macos-aarch64'), output, check_only=True)
+            report = json.loads(captured.getvalue())
+            self.assertEqual(report['status'], 'preflight passed')
+            self.assertFalse(report['built'])
+            self.assertFalse(report['device_validated'])
+            self.assertEqual(sentinel.read_bytes(), b'synthetic candidate')
+            self.assertEqual((bundle / 'existing').read_bytes(), b'synthetic bundle')
+            self.assertFalse((root / 'dist/build-backups').exists())
+            stage.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()
