@@ -24,7 +24,7 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
     let p = object(params)?;
     match command {
         "ping" | "settings_get" | "dashboard_get" | "aws_list_profiles" | "aws_auth_status"
-        | "policy_get" => keys(p, &[]),
+        | "policy_get" | "cli_availability" => keys(p, &[]),
         "aws_set_account" => {
             keys(
                 p,
@@ -844,6 +844,7 @@ mod tests {
             "dashboard_get",
             "aws_list_profiles",
             "aws_auth_status",
+            "cli_availability",
             "policy_get",
         ] {
             assert!(validate(command, &json!({})).is_ok());

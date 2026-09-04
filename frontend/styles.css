@@ -1387,6 +1387,26 @@ body.has-fullscreen-widget .topbar { z-index: 201; } /* keep topbar above the FS
   color: var(--text-primary);
 }
 .preference-notice[hidden] { display: none; }
+.connection-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  min-height: 94px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+.connection-status[hidden] { display: none; }
+.connection-copy { min-width: 0; overflow-wrap: anywhere; }
+.connection-copy p { margin: 3px 0 0; }
+.connection-copy ul { margin: 6px 0 0; padding-left: 18px; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+.connection-status[data-state="verified"] { border-color: var(--success); }
+.cli-availability { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; color: var(--text-secondary); }
+.cli-availability[hidden] { display: none; }
 .save-status {
   position: fixed;
   right: 18px;

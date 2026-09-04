@@ -65,6 +65,21 @@
     </div>
   </header>
 
+  <section id="connection-status" class="connection-status" data-state="discovering" aria-label="AWS connection" hidden>
+    <div class="connection-copy" role="status">
+      <strong id="connection-title">Discovering profiles</strong>
+      <p id="connection-message"></p>
+      <p id="connection-identity" class="small"></p>
+      <p id="connection-coverage" class="small" hidden></p>
+      <ul id="connection-profiles" class="small" hidden></ul>
+    </div>
+    <div class="connection-actions">
+      <button type="button" class="btn btn-ghost small" id="connection-settings">Settings</button>
+      <button type="button" class="btn btn-ghost small" id="connection-retry">Retry connection</button>
+      <button type="button" class="btn btn-ghost small" id="connection-details">Identity details</button>
+    </div>
+  </section>
+
   <div id="appearance-unsaved" class="preference-notice" role="status" hidden>
     <span>Unsaved appearance preview.</span>
     <button type="button" class="btn btn-ghost small" id="appearance-settings">Open Settings to save</button>
@@ -316,6 +331,7 @@
             <span id="settings-theme-error" class="field-error" hidden></span>
           </label>
           <p class="muted small">Blank fields use the defaults shown. Appearance changes are previews until you save.</p>
+          <p class="muted small">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. Cloud Burrito does not create credentials or start a login process.</p>
           <p class="muted small">
             The app checks requested operations against its supported list and
             your policy before execution. Logs Insights requires permission to

@@ -24,12 +24,13 @@ function fixture() {
   const panel = { classList: { add: (value) => openClasses.add(value), contains: (value) => openClasses.has(value) }, setAttribute: () => {} };
   const scrim = { classList: { add: () => {} }, hidden: true };
   const context = vm.createContext({
-    isTauri: true, settingsStorageReady: true, currentSelectionId: 1, currentAuthStatusId: 0,
-    lastSetAccountResult: null, lastAuthStatus: null,
+    isTauri: true, settingsStorageReady: true, discoveryReady: true, currentSelectionId: 1, currentAuthStatusId: 0,
+    lastSetAccountResult: null, lastAuthStatus: null, currentProfilesRequestId: 1,
     topbarState: { profile: 'demo-fixture', accountId: 'acct-current-fixture', region: 'region-fixture' },
     clearInheritedResults: () => rendered.push({ cleared: true }),
     $: (selector) => ({ '#auth-status': pill, '#identity-panel': panel, '#scrim': scrim })[selector] || null,
     formatRemaining: () => '', renderIdentityPanel: (info) => rendered.push(info),
+    setConnectionState: () => {}, connectionFailureState: () => 'failed',
     tauriInvoke: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
   });
   vm.runInContext(handler + openHandler, context);
@@ -110,4 +111,18 @@ test('auth status rejects a different verified identity or missing verification 
     assert.equal(f.context.lastAuthStatus, null);
     assert.equal(f.pill.dataset.state, 'checking');
   }
+});
+
+test('fresh discovery must precede auth polling and an obsolete discovery cannot revive identity', async () => {
+  const f = fixture();
+  f.context.discoveryReady = false;
+  await f.poll();
+  assert.equal(f.pending.length, 0);
+  f.context.discoveryReady = true;
+  const work = f.poll();
+  f.context.currentProfilesRequestId++;
+  f.pending[0].resolve(verified('acct-current-fixture'));
+  await work;
+  assert.equal(f.context.lastAuthStatus, null);
+  assert.equal(f.pill.dataset.state, 'checking');
 });

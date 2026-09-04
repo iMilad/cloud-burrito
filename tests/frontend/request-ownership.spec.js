@@ -50,6 +50,7 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
       const { command, params, context } = call;
       switch (command) {
         case "ping": return { ok: true, version: "synthetic-test" };
+        case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };
         case "settings_get": return settingsResponse("loaded");
         case "dashboard_get": return { tiles };
         case "dashboard_set": return { ok: true };
@@ -57,10 +58,11 @@ async function boot(page, tiles = [tile("cfn-stacks")], { holdSelection = false 
           settings = Object.fromEntries(Object.entries(settingsDefaults).map(([name, fallback]) => [name, params[name]?.trim() || fallback]));
           return settingsResponse("saved");
         case "aws_list_profiles": return {
-          config_path: "/synthetic/aws/config", file_exists: true,
+          config_path: "/synthetic/aws/config", file_exists: true, error: null, discovery_state: "ready",
           profiles: [A, B].map((identity) => ({
             name: identity.profile, account_id: identity.account_id, region: identity.region,
             role_name: "SyntheticReadOnly", sso_session: "synthetic-session",
+            eligibility: "supported_sso", eligibility_reason: "Synthetic supported SSO profile",
           })),
         };
         case "aws_set_account": return { ok: true, ...context };

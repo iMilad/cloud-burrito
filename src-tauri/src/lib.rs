@@ -46,6 +46,7 @@ pub fn run() {
             commands::aws_list_profiles,
             commands::aws_list_pipelines,
             commands::aws_auth_status,
+            commands::cli_availability,
             commands::widget_fetch,
             commands::widget_get_source,
             commands::settings_get,

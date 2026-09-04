@@ -38,6 +38,7 @@ async function boot(page, response = table, options = {}) {
       let value;
       switch (name) {
         case "ping": value = { version: "synthetic" }; break;
+        case "cli_availability": value = { ok: true, status: "available", available: true, version_verified: false }; break;
         case "settings_get": value = settingsResponse("loaded"); break;
         case "dashboard_get": value = { tiles: [{ id: "aws-cli", widget: "aws-cli", x: 0, y: 0, w: 12, h: 9,
           config: { context: { mode: "pinned", ...identity }, inputs: options.pin
@@ -51,8 +52,10 @@ async function boot(page, response = table, options = {}) {
           }
           value = settingsResponse("saved");
           break;
-        case "aws_list_profiles": value = { profiles: [{ name: identity.profile, account_id: identity.account_id,
-          region: identity.region, role_name: "SyntheticReadOnly", sso_session: "synthetic-session" }] }; break;
+        case "aws_list_profiles": value = { discovery_state: "ready", file_exists: true, error: null,
+          profiles: [{ name: identity.profile, account_id: identity.account_id,
+            region: identity.region, role_name: "SyntheticReadOnly", sso_session: "synthetic-session",
+            eligibility: "supported_sso", eligibility_reason: "Synthetic supported SSO profile" }] }; break;
         case "aws_set_account": fixture.selectionCalls++; active = true; value = { ok: true, ...identity }; break;
         case "aws_auth_status": value = { has_context: active, logged_in: active,
           connection_state: active ? "verified" : "disconnected", ...(active ? identity : {}) }; break;

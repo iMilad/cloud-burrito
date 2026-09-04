@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cli-availability"
+description = "Enables the cli_availability command without any pre-configured scope."
+commands.allow = ["cli_availability"]
+
+[[permission]]
+identifier = "deny-cli-availability"
+description = "Denies the cli_availability command without any pre-configured scope."
+commands.deny = ["cli_availability"]

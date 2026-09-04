@@ -6,6 +6,7 @@ fn main() {
             "aws_list_profiles",
             "aws_list_pipelines",
             "aws_auth_status",
+            "cli_availability",
             "widget_fetch",
             "widget_get_source",
             "settings_get",

@@ -16,7 +16,7 @@ function fixture() {
   const rendered = [];
   const errors = [];
   const context = vm.createContext({
-    currentSelectionId: 1, isTauri: true, settingsStorageReady: true, lastSetAccountResult: { ok: true },
+    currentSelectionId: 1, isTauri: true, settingsStorageReady: true, discoveryReady: true, lastSetAccountResult: { ok: true },
     topbarState: { profile: 'demo-fixture', accountId: 'acct-a-fixture', region: 'region-fixture' },
     contextForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextPayloadForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
@@ -34,6 +34,15 @@ function fixture() {
   return { context, pending, rendered, errors, node, reply,
     run: owner => context.fetchWidgetInto(owner, 'cfn-stacks', {}) };
 }
+
+test('a cached verified selection cannot start inherited work before fresh discovery', async () => {
+  const f = fixture();
+  f.context.discoveryReady = false;
+  await f.run(f.node());
+  assert.equal(f.pending.length, 0);
+  assert.equal(f.rendered.length, 0);
+  assert.equal(f.errors.length, 1);
+});
 
 test('A to B to A discards an old result even when labels match again', async () => {
   const f = fixture();

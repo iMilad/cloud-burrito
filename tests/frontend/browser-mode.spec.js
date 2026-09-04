@@ -279,6 +279,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
             return withContext({ render: "raw_json", data: {} }, payload);
           }
           if (command === "ping") return { version: "test" };
+          if (command === "cli_availability") return { ok: true, status: "available", available: true, version_verified: false };
           if (command === "settings_get") {
             return settingsResponse("loaded");
           }
@@ -289,8 +290,9 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
           }
           if (command === "dashboard_get") return { tiles: [], _storage: { status: "missing" } };
           if (command === "aws_list_profiles") return {
-            profiles: [{ name: identity.profile, account_id: identity.account_id, region: identity.region }],
-            config_path: "/synthetic/aws/config",
+            profiles: [{ name: identity.profile, account_id: identity.account_id, region: identity.region,
+              eligibility: "supported_sso", eligibility_reason: "Synthetic supported SSO profile" }],
+            config_path: "/synthetic/aws/config", file_exists: true, error: null, discovery_state: "ready",
           };
           if (command === "aws_set_account") {
             active = { profile: payload.params.profile, account_id: payload.params.account_id, region: payload.params.region };

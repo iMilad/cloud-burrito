@@ -93,12 +93,55 @@ impl std::fmt::Debug for ProcessOutput {
 }
 
 pub trait ProcessRunner: Send + Sync {
+    /// Discovery only. Injected runners must opt into a definite availability
+    /// result; this default never reads environment/files or runs a process.
+    fn availability(&self) -> CliAvailability {
+        CliAvailability::Unknown
+    }
     fn run(&self, request: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliAvailability {
+    Available,
+    Missing,
+    Unknown,
+}
+
+impl CliAvailability {
+    pub(crate) fn response(self) -> serde_json::Value {
+        let (status, available, message) = match self {
+            Self::Available => ("available", Some(true), "A compatible AWS CLI launch candidate was found. Its version has not been checked."),
+            Self::Missing => ("missing", Some(false), "A compatible AWS CLI launch candidate was not found. Other AWS widgets remain available."),
+            Self::Unknown => ("unknown", None, "AWS CLI availability could not be established. Other AWS widgets remain available."),
+        };
+        serde_json::json!({"ok":true, "status":status, "available":available,
+            "version_verified":false, "message":message})
+    }
+
+    fn from_discovery(result: Option<LaunchSpec>) -> Self {
+        if result.is_some() {
+            Self::Available
+        } else {
+            Self::Missing
+        }
+    }
 }
 
 pub struct NativeProcessRunner;
 
 impl ProcessRunner for NativeProcessRunner {
+    fn availability(&self) -> CliAvailability {
+        #[cfg(test)]
+        panic!("native process discovery is forbidden in tests");
+        #[cfg(not(test))]
+        {
+            let platform = Platform::host();
+            let ambient = discovery_environment(platform, |name| std::env::var_os(name));
+            CliAvailability::from_discovery(discover_binary(&ambient, platform))
+        }
+    }
+
     fn run(&self, request: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>> {
         #[cfg(test)]
         {
@@ -428,28 +471,38 @@ fn launch_spec(candidate: &Path, platform: Platform) -> Option<LaunchSpec> {
     })
 }
 
-fn discover_binary(ambient: &[(OsString, OsString)], platform: Platform) -> Option<LaunchSpec> {
+/// Availability needs only discovery keys, never ambient credential or runtime
+/// settings. Execution keeps its separately reviewed child-environment flow.
+fn discovery_environment(
+    platform: Platform,
+    mut get: impl FnMut(&str) -> Option<OsString>,
+) -> Vec<(OsString, OsString)> {
+    let names: &[&str] = if platform == Platform::Windows {
+        &["PATH", "ProgramFiles", "ProgramFiles(x86)"]
+    } else {
+        &["PATH"]
+    };
+    names
+        .iter()
+        .filter_map(|name| get(name).map(|value| ((*name).into(), value)))
+        .collect()
+}
+
+fn discovery_candidates(ambient: &[(OsString, OsString)], platform: Platform) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
     if let Some(path) = env_value(ambient, "PATH", platform) {
         for directory in std::env::split_paths(path).filter(|directory| directory.is_absolute()) {
-            let candidate = directory.join(if platform == Platform::Windows {
+            candidates.push(directory.join(if platform == Platform::Windows {
                 "aws.exe"
             } else {
                 "aws"
-            });
-            if let Some(binary) = launch_spec(&candidate, platform) {
-                return Some(binary);
-            }
+            }));
         }
     }
     if platform == Platform::Windows {
         for name in ["ProgramFiles", "ProgramFiles(x86)"] {
             if let Some(directory) = env_value(ambient, name, platform) {
-                if let Some(binary) = launch_spec(
-                    &Path::new(directory).join("Amazon/AWSCLIV2/aws.exe"),
-                    platform,
-                ) {
-                    return Some(binary);
-                }
+                candidates.push(Path::new(directory).join("Amazon/AWSCLIV2/aws.exe"));
             }
         }
     } else {
@@ -458,12 +511,23 @@ fn discover_binary(ambient: &[(OsString, OsString)], platform: Platform) -> Opti
             "/usr/local/bin/aws",
             "/usr/bin/aws",
         ] {
-            if let Some(binary) = launch_spec(Path::new(candidate), platform) {
-                return Some(binary);
-            }
+            candidates.push(PathBuf::from(candidate));
         }
     }
-    None
+    candidates
+}
+
+fn discover_from_candidates(
+    candidates: impl IntoIterator<Item = PathBuf>,
+    platform: Platform,
+) -> Option<LaunchSpec> {
+    candidates
+        .into_iter()
+        .find_map(|candidate| launch_spec(&candidate, platform))
+}
+
+fn discover_binary(ambient: &[(OsString, OsString)], platform: Platform) -> Option<LaunchSpec> {
+    discover_from_candidates(discovery_candidates(ambient, platform), platform)
 }
 
 struct IsolatedHome(PathBuf);
@@ -760,6 +824,46 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "native process discovery is forbidden in tests")]
+    fn native_availability_rejects_before_environment_or_filesystem_discovery() {
+        NativeProcessRunner.availability();
+    }
+
+    #[test]
+    fn availability_reads_only_explicit_discovery_environment_keys() {
+        for (platform, expected) in [
+            (Platform::Unix, vec!["PATH"]),
+            (
+                Platform::Windows,
+                vec!["PATH", "ProgramFiles", "ProgramFiles(x86)"],
+            ),
+        ] {
+            let mut requested = Vec::new();
+            let ambient = discovery_environment(platform, |name| {
+                assert!(expected.contains(&name), "unexpected environment lookup");
+                requested.push(name.to_string());
+                Some(OsString::from("synthetic-discovery-value"))
+            });
+            assert_eq!(requested, expected);
+            assert_eq!(ambient.len(), expected.len());
+        }
+    }
+
+    #[test]
+    fn unimplemented_fixture_availability_stays_unknown_without_execution() {
+        struct UncheckedFixture;
+        impl ProcessRunner for UncheckedFixture {
+            fn run(&self, _request: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>> {
+                panic!("availability must never execute a process")
+            }
+        }
+        let response = UncheckedFixture.availability().response();
+        assert_eq!(response["status"], "unknown");
+        assert!(response["available"].is_null());
+        assert_eq!(response["version_verified"], false);
+    }
+
+    #[test]
     fn request_budget_rejects_incomplete_expired_or_cancelled_credentials() {
         let now = UNIX_EPOCH + Duration::from_secs(4985);
         let valid = request();
@@ -996,6 +1100,66 @@ mod tests {
         }
         #[cfg(not(unix))]
         let _ = executable;
+    }
+
+    #[test]
+    fn availability_uses_only_injected_candidates_and_does_not_probe_a_version() {
+        let dir = crate::test_support::TestDir::new();
+        let missing = dir.path().join("absent-synthetic-aws");
+        let shell = dir.path().join("unsupported-synthetic-aws");
+        let binary = dir.path().join("aws");
+        fake_image(&shell, b"#!/bin/sh\nSYNTHETIC_NOT_EXECUTABLE_CODE", true);
+        fake_image(&binary, b"\x7fELFsynthetic-not-executed", true);
+        let absent = CliAvailability::from_discovery(discover_from_candidates(
+            [missing.clone(), shell.clone()],
+            Platform::Unix,
+        ));
+        assert_eq!(absent, CliAvailability::Missing);
+        let available = CliAvailability::from_discovery(discover_from_candidates(
+            [missing, shell, binary],
+            Platform::Unix,
+        ));
+        assert_eq!(available, CliAvailability::Available);
+        let response = available.response();
+        assert_eq!(response["available"], true);
+        assert_eq!(response["version_verified"], false);
+        assert!(response.get("path").is_none());
+        assert!(!response.to_string().contains(dir.path().to_str().unwrap()));
+
+        let windows = dir.path().join("aws.exe");
+        fake_image(&windows, b"MZsynthetic-not-executed", false);
+        assert_eq!(
+            CliAvailability::from_discovery(
+                discover_from_candidates([windows], Platform::Windows,)
+            ),
+            CliAvailability::Available
+        );
+    }
+
+    #[test]
+    fn availability_retains_the_supported_absolute_python_wrapper_path() {
+        let dir = crate::test_support::TestDir::new();
+        let interpreter = dir.path().join("python3");
+        fake_image(&interpreter, b"\x7fELFsynthetic-python-not-executed", true);
+        let wrapper = dir.path().join("aws");
+        fake_image(
+            &wrapper,
+            format!("#!{}\nSYNTHETIC_NOT_EXECUTABLE_CODE", interpreter.display()).as_bytes(),
+            true,
+        );
+        let result = discover_from_candidates([wrapper.clone()], Platform::Unix).unwrap();
+        assert_eq!(result.program, interpreter);
+        assert_eq!(
+            result.prefix,
+            vec![
+                OsString::from("-I"),
+                wrapper.canonicalize().unwrap().into_os_string()
+            ]
+        );
+        assert_eq!(
+            CliAvailability::from_discovery(Some(result)),
+            CliAvailability::Available
+        );
     }
 
     #[test]

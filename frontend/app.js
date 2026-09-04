@@ -407,7 +407,7 @@
       profile: topbarState.profile, account_id: topbarState.accountId, region: topbarState.region,
     };
     const request = {
-      id, context, allowed: (!isTauri || settingsStorageReady) && (independent || lastSetAccountResult?.ok === true),
+      id, context, allowed: (!isTauri || settingsStorageReady) && (independent || (discoveryReady && lastSetAccountResult?.ok === true)),
       current() {
         return owner.isConnected && owner._ownedRequest === request
           && configuration === configurationGeneration
@@ -435,11 +435,16 @@
     return request;
   }
 
-  function fetchWidgetData(widgetName, inputs, owner, contextOverride, request) {
+  async function fetchWidgetData(widgetName, inputs, owner, contextOverride, request) {
     if (!isTauri) return Promise.resolve(null);
     if (!request) throw new Error("An owned widget request is required.");
     if (!request.current()) return Promise.reject(new Error("Request owner is no longer current."));
     if (!request.allowed) return Promise.reject(new Error("Select and verify an AWS account first."));
+    if (widgetName === "aws-cli") {
+      const available = await checkCliAvailability();
+      if (!request.current()) throw new Error("Request owner is no longer current.");
+      if (!available) throw new Error("AWS CLI is unavailable. Use Retry CLI check in this widget.");
+    }
     return tauriInvoke("widget_fetch", {
       params: { widget: widgetName, inputs: inputs || {}, context: request.context, request_id: request.id },
     });
@@ -570,7 +575,11 @@
   }
 
   function startDesktopPickers() {
-    if (!isTauri || !bootComplete || !settingsStorageReady || desktopPickersStarted) return;
+    if (!isTauri || !bootComplete || !settingsStorageReady) return;
+    if (desktopPickersStarted) {
+      if (connectionState === "settings_failed") initTopbarPickers();
+      return;
+    }
     desktopPickersStarted = true;
     initTopbarPickers();
     startAuthStatusPolling();
@@ -638,6 +647,7 @@
       $("#settings-save").disabled = true;
       $("#theme-toggle").disabled = true;
       $("#settings-status").textContent = "Settings could not be loaded. Retry loading or explicitly replace them with defaults.";
+      clearDiscoveredConnection("settings_failed");
       showStorageLoadWarning("settings", retrySettingsLoad, () => saveSettings({ preventDefault() {} }, { recover: true }));
       console.warn("Settings could not be loaded.");
       return null;
@@ -749,7 +759,6 @@
       // Re-apply to the Pipeline Runs config inputs so the user doesn't see
       // stale placeholders the next time they look at it.
       prefillPipelineConfig(cachedSettings);
-      applyTopbarSelection({ fromProfile: false });
       refreshProfilesInBackground();
     } catch (err) {
       if (configuration !== configurationGeneration) return;
@@ -1043,7 +1052,7 @@
     return Array.from(select.options)
       .map((option, index) => ({ option, index }))
       .filter(({ option }) => {
-        if (!option.value) return false;
+        if (!option.value || option.disabled) return false;
         const haystack = [option.textContent, option.value, ...Object.values(option.dataset)]
           .join(" ").toLowerCase();
         return tokens.every(token => haystack.includes(token));
@@ -1283,15 +1292,17 @@
       syncTopbarPicker(sel);
       return;
     }
-    sel.disabled = false;
+    sel.disabled = !profiles.some(profile => profile.eligibility === "supported_sso");
     profiles.forEach(p => {
       const acct = p.account_id ? ` · ${p.account_id}` : "";
-      addOption(sel, p.name, `${p.name}${acct}`, {
+      const opt = addOption(sel, p.name, `${p.name}${acct}${p.eligibility === "supported_sso" ? "" : " · unsupported"}`, {
         accountId: p.account_id || "",
         role: p.role_name || "",
         region: p.region || "",
         ssoSession: p.sso_session || "",
+        eligibility: p.eligibility,
       });
+      opt.disabled = p.eligibility !== "supported_sso";
     });
     syncTopbarPicker(sel);
   }
@@ -1304,6 +1315,83 @@
   // Captured aws_set_account result so the auth pill can render the
   // needs_sso_login signal accurately even before the next authStatus poll.
   let lastSetAccountResult = null;
+  let discoveryReady = false;
+  let freshProfiles = [];
+  let freshProfilesConfiguration = -1;
+  let connectionState = "discovering";
+  const CONNECTION_STATES = {
+    discovering: ["Discovering profiles", "Reading the configured AWS profile file. No account is verified yet."],
+    missing_config: ["AWS config file not found", "Choose your existing AWS config file in Settings, then retry discovery."],
+    unreadable_config: ["AWS config file cannot be read", "Check that the configured file is accessible, or choose another file in Settings, then retry."],
+    malformed_config: ["AWS config needs correction", "Correct the existing AWS config file or choose another file in Settings, then retry."],
+    no_profiles: ["No profiles found", "Use an existing SSO profile in the configured AWS file, then retry discovery."],
+    unsupported: ["Profile cannot be used", "This beta supports explicit SSO profiles. Review the profile details below or choose a supported SSO profile."],
+    unsupported_region: ["Region is not supported", "Choose a supported region in the topbar or correct the saved default in Settings."],
+    verifying: ["Verifying AWS identity", "Checking the selected profile, account and region before loading resources."],
+    verified: ["Connected to AWS", "The account and region below are verified for the selected profile."],
+    expired: ["SSO login needs renewal", "Complete your existing SSO login outside this app (aws sso login for the selected profile), then retry connection."],
+    mismatch: ["AWS identity did not match", "The returned account did not match the selection. Check the SSO profile/account configuration, then retry."],
+    failed: ["Connection could not be verified", "Review the selected SSO profile and Identity details. Correct the dependency, then retry connection."],
+    settings_failed: ["Settings could not be loaded", "Open Settings to retry loading or explicitly recover the saved settings before connecting."],
+  };
+
+  function setConnectionState(state, verified) {
+    if (!isTauri) return;
+    connectionState = CONNECTION_STATES[state] ? state : "failed";
+    const [title, message] = CONNECTION_STATES[connectionState];
+    const strip = $("#connection-status");
+    strip.hidden = false;
+    strip.dataset.state = connectionState;
+    $("#connection-title").textContent = title;
+    $("#connection-message").textContent = message;
+    const profile = $("#account-select").value || topbarState.profile || "(none)";
+    const region = $("#region-select").value || topbarState.region || "(none)";
+    $("#connection-identity").textContent = verified
+      ? `Profile: ${verified.profile} · Verified account: ${verified.account_id} · Region: ${verified.region}`
+      : `Selected profile: ${profile} · Region: ${region} · Account is not verified`;
+    $("#connection-retry").disabled = ["discovering", "verifying"].includes(connectionState);
+    $("#connection-details").disabled = !lastAuthStatus && !lastSetAccountResult;
+  }
+
+  function connectionFailureState(info) {
+    if (info?.needs_sso_login || ["CredentialsExpired", "SsoTokenExpired", "SsoLoginRequired"].includes(info?.error_type)) return "expired";
+    if (["IdentityMismatch", "AccountMismatch"].includes(info?.error_type)) return "mismatch";
+    if (["UnsupportedProfile", "SsoSessionConflict"].includes(info?.error_type)) return "unsupported";
+    if (info?.error_type === "UnsupportedRegion") return "unsupported_region";
+    return "failed";
+  }
+
+  function clearDiscoveredConnection(state) {
+    discoveryReady = false;
+    freshProfiles = [];
+    freshProfilesConfiguration = -1;
+    ++currentSelectionId;
+    ++currentAuthStatusId;
+    lastSetAccountResult = null;
+    lastAuthStatus = { has_context: false, logged_in: false, connection_state: "unselected" };
+    topbarState.accountId = null;
+    clearInheritedResults();
+    populateAccountSelect([]);
+    updateAllWidgetContextChips();
+    const pill = $("#auth-status");
+    pill.hidden = false;
+    pill.dataset.state = "offline";
+    $(".core-label", pill).textContent = "auth: no verified account";
+    setConnectionState(state);
+    if ($("#identity-panel").classList.contains("open")) renderIdentityPanel(lastAuthStatus);
+  }
+
+  async function retryConnection() {
+    if (!settingsStorageReady) {
+      const loaded = await loadSettings();
+      if (!loaded) return;
+      if (connectionState === "discovering") return;
+    }
+    return refreshProfilesInBackground();
+  }
+  $("#connection-settings").addEventListener("click", openSettingsPanel);
+  $("#connection-retry").addEventListener("click", retryConnection);
+  $("#connection-details").addEventListener("click", openIdentityPanel);
 
   function setPillInFlight(label) {
     const pill = $("#auth-status");
@@ -1315,10 +1403,10 @@
   }
 
   async function applyTopbarSelection(opts) {
-    if (!isTauri || !settingsStorageReady) return;
+    if (!isTauri || !settingsStorageReady || !discoveryReady) return;
     const accSel = $("#account-select");
     const opt = accSel.options[accSel.selectedIndex];
-    if (!opt || !opt.value) return;
+    if (!opt || !opt.value || opt.disabled || opt.dataset.eligibility !== "supported_sso") return;
     const myId = ++currentSelectionId;
     lastSetAccountResult = null;
     clearInheritedResults();
@@ -1334,7 +1422,7 @@
     const accountId = opt.dataset.accountId;
     const ssoSession = opt.dataset.ssoSession || "";
     if (!accountId) {
-      console.warn("Selected profile has no SSO account configured.");
+      setConnectionState("unsupported");
       return;
     }
     topbarState.profile = profile;
@@ -1347,6 +1435,7 @@
       pill.hidden = false;
       pill.dataset.state = "offline";
       $(".core-label", pill).textContent = "auth: unsupported region — choose a supported region";
+      setConnectionState("unsupported_region");
       return;
     }
 
@@ -1362,6 +1451,7 @@
     // moment the user picks. Without this the SSO call (1-3s) feels like a
     // dead click.
     setPillInFlight(`auth: verifying ${profile} · ${region} …`);
+    setConnectionState("verifying");
 
     let res;
     try {
@@ -1377,7 +1467,8 @@
     } catch (e) {
       if (myId !== currentSelectionId) return; // newer selection won — discard
       console.warn("Account verification request failed.");
-      lastSetAccountResult = { ok: false, error: String(e) };
+      lastSetAccountResult = { ok: false, error: "Account verification could not be completed. Retry connection." };
+      setConnectionState("failed");
       writeLastSelection(profile, region);
       refreshAuthStatus();
       return;
@@ -1387,10 +1478,12 @@
         || (res.ok && ["context_id", "provider_revision", "settings_revision"].some(key => typeof res._request[key] !== "string" || !res._request[key]))
         || (res._request.context_id !== null && (res._request.profile !== profile
           || res._request.account_id !== accountId || res._request.region !== region))) {
-      res = { ok: false, error: "Response AWS context did not match." };
+      res = { ok: false, error_type: "IdentityMismatch", error: "Response AWS context did not match." };
     }
 
     lastSetAccountResult = res;
+    if (res.ok) setConnectionState("verified", res._request);
+    else setConnectionState(connectionFailureState(res));
     if (!res.ok) {
       console.warn("Account verification failed.");
     }
@@ -1419,29 +1512,17 @@
     return `(0 profiles in ${path})`;
   }
 
-  // ===== Profile cache (we cache the last good profile listing in localStorage
-  // so re-launches show the dropdown instantly while a background refresh runs.) =====
-  const PROFILES_CACHE_KEY = "acc.profiles.v1";
+  // Profile choices belong to the current successful discovery. Persisted
+  // old listings never authorize a new selection or populate pinned choices.
   const LAST_SELECTION_KEY = "acc.last.v1";
 
   function readProfilesCache() {
-    try {
-      const raw = localStorage.getItem(PROFILES_CACHE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.profiles)) return null;
-      return parsed;
-    } catch (_) { return null; }
+    return discoveryReady && freshProfilesConfiguration === configurationGeneration
+      ? { profiles: freshProfiles } : null;
   }
   function writeProfilesCache(info) {
-    if (!info || !Array.isArray(info.profiles)) return;
-    try {
-      localStorage.setItem(PROFILES_CACHE_KEY, JSON.stringify({
-        profiles: info.profiles,
-        config_path: info.config_path || info.resolved_path || "",
-        ts: Date.now(),
-      }));
-    } catch (_) {}
+    freshProfiles = info.profiles;
+    freshProfilesConfiguration = configurationGeneration;
   }
   function readLastSelection() {
     try {
@@ -1463,7 +1544,7 @@
   function selectAccountByName(name, opts) {
     const accSel = $("#account-select");
     if (!accSel) return false;
-    const match = Array.from(accSel.options).find(o => o.value === name);
+    const match = Array.from(accSel.options).find(o => o.value === name && !o.disabled);
     if (!match) return false;
     accSel.selectedIndex = match.index;
     syncTopbarPicker(accSel);
@@ -1475,59 +1556,74 @@
   async function refreshProfilesInBackground() {
     if (!isTauri || !settingsStorageReady) return;
     const accSel = $("#account-select");
+    const previousValue = accSel.value || topbarState.profile;
     const requestId = ++currentProfilesRequestId;
     const configuration = configurationGeneration;
     const selection = currentSelectionId;
+    discoveryReady = false;
+    accSel.disabled = true;
+    syncTopbarPicker(accSel);
+    setPillInFlight("auth: discovering profiles …");
+    setConnectionState("discovering");
+    $("#connection-profiles").hidden = true;
+    $("#connection-coverage").hidden = true;
     let info;
     try {
       info = await tauriInvoke("aws_list_profiles");
       if (requestId !== currentProfilesRequestId || configuration !== configurationGeneration
           || selection !== currentSelectionId) return;
+      if (!["ready", "missing_config", "unreadable_config", "malformed_config", "no_profiles"].includes(info?.discovery_state)
+          || !Array.isArray(info.profiles) || info.profiles.length > 500) throw new Error("Discovery response unavailable");
+      if (info.discovery_state !== "ready") {
+        clearDiscoveredConnection(info.discovery_state);
+        return;
+      }
+      if (!info.profiles.length || info.profiles.some(profile => typeof profile.name !== "string" || !profile.name
+          || !["supported_sso", "unsupported_credentials", "invalid_sso"].includes(profile.eligibility))) {
+        throw new Error("Discovery response unavailable");
+      }
     } catch (e) {
+      if (requestId !== currentProfilesRequestId || configuration !== configurationGeneration || selection !== currentSelectionId) return;
       console.warn("Profile list could not be refreshed.");
-      // Don't clobber cached UI on transient failure.
+      clearDiscoveredConnection("failed");
       return;
     }
-    const profiles = (info && info.profiles) || [];
-    if (profiles.length === 0) {
-      // Only show the "empty" placeholder if the dropdown is also empty;
-      // otherwise leave the cached entries in place and let the user see them.
-      const cached = readProfilesCache();
-      if (!cached || cached.profiles.length === 0) {
-        resetSelect(accSel);
-        addOption(accSel, "", describeProfilesEmpty(info));
-        accSel.disabled = true;
-        syncTopbarPicker(accSel);
-      }
-      console.warn("No supported profiles were returned.");
-      return;
-    }
+    const profiles = info.profiles;
+    discoveryReady = true;
     writeProfilesCache(info);
-    // If the live list is identical to what's on screen, do nothing.
-    const cached = readProfilesCache();
-    const onScreen = Array.from(accSel.options)
-      .filter(o => o.value)
-      .map(o => ({
-        name: o.value,
-        account_id: o.dataset.accountId || "",
-        role_name: o.dataset.role || "",
-        region: o.dataset.region || "",
-        sso_session: o.dataset.ssoSession || "",
-      }));
-    if (profilesEqual(onScreen, profiles)) return;
-    const previousValue = accSel.value;
-    populateAccountSelect(profiles);
-    const restored = previousValue && selectAccountByName(previousValue, { fromProfile: false });
-    if (!restored) {
-      const last = readLastSelection();
-      const want = (last && last.profile)
-        || (cachedSettings && cachedSettings.default_profile)
-        || "";
-      if (!selectAccountByName(want, { fromProfile: false })) {
-        accSel.selectedIndex = 0;
-        applyTopbarSelection({ fromProfile: false });
-      }
+    const unsupported = profiles.filter(profile => profile.eligibility !== "supported_sso");
+    const list = $("#connection-profiles");
+    clear(list);
+    unsupported.slice(0, 8).forEach(profile => list.appendChild(el("li", {}, `${profile.name}: ${profile.eligibility === "unsupported_credentials"
+      ? "Unsupported credential provider. Use an existing SSO profile."
+      : "SSO profile configuration is incomplete or conflicts with Settings."}`)));
+    if (unsupported.length > 8) list.appendChild(el("li", {}, `${unsupported.length - 8} more unsupported profiles.`));
+    list.hidden = unsupported.length === 0;
+    if (info.partial === true) {
+      $("#connection-coverage").textContent = `Profile discovery is limited: ${profiles.length} profiles shown. Other profiles were omitted.`;
+      $("#connection-coverage").hidden = false;
     }
+    populateAccountSelect(profiles);
+    const last = readLastSelection();
+    const want = previousValue || last?.profile || cachedSettings.default_profile || "";
+    const wanted = profiles.find(profile => profile.name === want);
+    if (wanted?.eligibility !== "supported_sso" && (wanted || !profiles.some(profile => profile.eligibility === "supported_sso"))) {
+      ++currentSelectionId;
+      lastSetAccountResult = { ok: false, error_type: "UnsupportedProfile", error: "Choose a supported SSO profile." };
+      lastAuthStatus = { has_context: false, logged_in: false, connection_state: "unselected" };
+      clearInheritedResults();
+      topbarState.accountId = null;
+      accSel.value = wanted?.name || profiles[0].name;
+      topbarState.profile = accSel.value;
+      topbarState.region = $("#region-select").value;
+      updateAllWidgetContextChips();
+      syncTopbarPicker(accSel);
+      $("#auth-status").dataset.state = "offline";
+      $(".core-label", $("#auth-status")).textContent = "auth: unsupported profile";
+      setConnectionState("unsupported");
+      return;
+    }
+    selectAccountByName(wanted?.name || profiles.find(profile => profile.eligibility === "supported_sso").name, { fromProfile: false });
   }
 
   function applyBrowserRegionSelection() {
@@ -1576,31 +1672,12 @@
         applyTopbarSelection({ fromProfile: false });
       });
     }
-    // Hydration starts only after settings and its region catalogue loaded.
-    const cached = readProfilesCache();
+    // Only fresh discovery may populate profile choices or verify a context.
     const last = readLastSelection();
     const initialRegion = allowedRegions.includes(cachedSettings.default_region)
       ? (last && last.region) || cachedSettings.default_region : cachedSettings.default_region;
     populateRegionSelect(initialRegion);
-    if (cached && cached.profiles.length > 0) {
-      populateAccountSelect(cached.profiles);
-      const want = (last && last.profile)
-        || (cachedSettings && cachedSettings.default_profile)
-        || "";
-      if (!selectAccountByName(want, { fromProfile: false })) {
-        accSel.selectedIndex = 0;
-        applyTopbarSelection({ fromProfile: false });
-      }
-    } else {
-      resetSelect(accSel);
-      addOption(accSel, "", "(loading profiles — first launch may take ~30s)");
-      accSel.disabled = true;
-      syncTopbarPicker(accSel);
-    }
-    // 2) Background refresh: re-read ~/.aws/config from the backend and
-    //    reconcile. Identical lists are a no-op; differences repopulate
-    //    without clobbering the user's current selection if it still exists.
-    refreshProfilesInBackground();
+    return refreshProfilesInBackground();
   }
 
   // ===== Auth status pill (Tauri only) =====
@@ -1625,24 +1702,26 @@
   let currentAuthStatusId = 0;
 
   async function refreshAuthStatus() {
-    if (!isTauri || !settingsStorageReady) return;
+    if (!isTauri || !settingsStorageReady || !discoveryReady) return;
     const pill = $("#auth-status");
     if (!pill) return;
     pill.hidden = false;
     const label = pill.querySelector(".core-label");
     const selectionId = currentSelectionId;
     const requestId = ++currentAuthStatusId;
+    const discovery = currentProfilesRequestId;
     let info;
     try {
       info = await tauriInvoke("aws_auth_status");
     } catch (e) {
-      if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId) return;
+      if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId || discovery !== currentProfilesRequestId) return;
       pill.dataset.state = "offline";
       label.textContent = "auth: rpc error";
-      pill.title = String(e);
+      pill.title = "Identity status could not be refreshed. Retry connection.";
+      setConnectionState("failed");
       return;
     }
-    if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId
+    if (selectionId !== currentSelectionId || requestId !== currentAuthStatusId || discovery !== currentProfilesRequestId || !discoveryReady
         || info.error_type === "Superseded") return;
     const meta = info._request;
     if (info.has_context && (!meta || ["context_id", "provider_revision", "settings_revision"].some(key => typeof meta[key] !== "string" || !meta[key]))) return;
@@ -1650,7 +1729,7 @@
         || meta.account_id !== topbarState.accountId || meta.region !== topbarState.region)) return;
     if (!info.has_context && lastSetAccountResult?.ok) {
       lastSetAccountResult = { ok: false, needs_sso_login: !!info.needs_sso_login,
-        error: info.error || "AWS context is no longer verified." };
+        error_type: info.error_type, error: info.error || "AWS context is no longer verified." };
       clearInheritedResults();
     }
     // If aws_set_account just failed, prefer that immediate result while there
@@ -1659,10 +1738,14 @@
       info = {
         ...info,
         needs_sso_login: !!lastSetAccountResult.needs_sso_login,
+        error_type: lastSetAccountResult.error_type || info.error_type,
         error: lastSetAccountResult.error || info.error,
       };
     }
     lastAuthStatus = info;
+    if (info.logged_in && info.has_context) setConnectionState("verified", meta);
+    else if (info.connection_state === "verifying") setConnectionState("verifying");
+    else if (lastSetAccountResult || info.needs_sso_login) setConnectionState(connectionFailureState(info));
     const remaining = formatRemaining(info.expires_at);
     if (info.connection_state === "verifying") {
       pill.dataset.state = "checking";
@@ -4767,6 +4850,48 @@
     }
   }
 
+  let cliAvailability = "unchecked";
+  let cliAvailabilityPending = null;
+
+  function updateCliAvailabilityUi(widget) {
+    let notice = $(".cli-availability", widget);
+    if (!notice) {
+      notice = el("div", { class: "cli-availability small", role: "status" },
+        el("span", { class: "cli-availability-message" }),
+        el("button", { type: "button", class: "btn btn-ghost small cli-availability-retry",
+          onclick: () => checkCliAvailability() }, "Retry CLI check"));
+      $(".widget-body", widget).prepend(notice);
+    }
+    const messages = {
+      unchecked: "Checking for an optional local AWS CLI…",
+      checking: "Checking for an optional local AWS CLI…",
+      available: "AWS CLI found locally. Its version has not been checked.",
+      missing: "AWS CLI was not found. Install it separately for CLI widgets. SDK widgets remain available.",
+      unknown: "AWS CLI availability could not be checked. SDK widgets remain available.",
+    };
+    notice.dataset.state = cliAvailability;
+    $(".cli-availability-message", notice).textContent = messages[cliAvailability];
+    $(".cli-availability-retry", notice).disabled = cliAvailability === "checking";
+    widget.querySelectorAll(".cli-run-btn, .cli-pin-refresh").forEach(button => { button.disabled = cliAvailability !== "available"; });
+  }
+
+  async function checkCliAvailability() {
+    if (cliAvailabilityPending) return cliAvailabilityPending;
+    cliAvailability = "checking";
+    widgetsOfType("aws-cli").forEach(updateCliAvailabilityUi);
+    cliAvailabilityPending = (async () => {
+      try {
+        const result = await tauriInvoke("cli_availability");
+        cliAvailability = result?.ok === true && result.status === "available" && result.available === true
+          ? "available" : result?.ok === true && result.status === "missing" && result.available === false ? "missing" : "unknown";
+      } catch (_) { cliAvailability = "unknown"; }
+      widgetsOfType("aws-cli").forEach(updateCliAvailabilityUi);
+      return cliAvailability === "available";
+    })();
+    try { return await cliAvailabilityPending; }
+    finally { cliAvailabilityPending = null; }
+  }
+
   async function renderAwsCli(target) {
     return withWidgets("aws-cli", target, (widget) => {
       const form = $(".aws-cli-config", widget);
@@ -4794,6 +4919,8 @@
       };
       updateChip();
       renderCliPinList(widget);
+      updateCliAvailabilityUi(widget);
+      if (cliAvailability === "unchecked") checkCliAvailability();
 
       if (form.dataset.wired === "1") {
         setCliTab(widget, activeCliTab(widget));
@@ -5953,7 +6080,7 @@ def fetch(ctx):
     if (!sel) return;
     resetSelect(sel);
     const cached = readProfilesCache();
-    const profiles = cached ? cached.profiles : [];
+    const profiles = cached ? cached.profiles.filter(profile => profile.eligibility === "supported_sso") : [];
     if (profiles.length === 0) {
       addOption(sel, "", "(no profiles — open Settings)");
       sel.disabled = true;

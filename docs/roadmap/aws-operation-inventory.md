@@ -25,6 +25,15 @@ Remaining provider limits: the named-session token provider rereads its cache af
 
 The baseline registers **14 Tauri commands**, dispatches **13 widget names**, and declares **21 `APP_OPS` entries**. Twenty are explicit first-party SDK operations; `sso:GetRoleCredentials` represents delegated credential acquisition. At that baseline, the generic CLI and SDK credential provider were outside the proof offered by the finite registry.
 
+P2-03 adds `cli_availability`, bringing the current local command registry to
+**15**. It inspects executable candidates using the runner's existing discovery
+and launch rules without starting a process, reading credentials, or contacting
+AWS. It returns availability only, not an executable path, verified version or
+publisher guarantee. Registration remains restricted to the local main window.
+The 21 AWS capability records and 18 CLI resource-read schemas are unchanged.
+The tables below retain the historical P0/P1 observations; current P1/P2 evidence
+is linked from the [roadmap overview](README.md).
+
 ## Effect classes
 
 | Class | Meaning |

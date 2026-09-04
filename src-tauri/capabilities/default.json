@@ -11,6 +11,7 @@
     "allow-aws-list-profiles",
     "allow-aws-list-pipelines",
     "allow-aws-auth-status",
+    "allow-cli-availability",
     "allow-widget-fetch",
     "allow-widget-get-source",
     "allow-settings-get",

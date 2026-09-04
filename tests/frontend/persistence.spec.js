@@ -49,6 +49,7 @@ async function boot(page, files = {}) {
       persist();
       switch (command) {
         case "ping": return { version: "synthetic" };
+        case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };
         case "settings_get": return load("settings");
         case "dashboard_get": return load("dashboard");
         case "settings_set": case "dashboard_set": {
@@ -63,7 +64,7 @@ async function boot(page, files = {}) {
           persist();
           return loadedResponse(store, value, "saved");
         }
-        case "aws_list_profiles": return { profiles: [], file_exists: false };
+        case "aws_list_profiles": return { profiles: [], file_exists: false, error: null, discovery_state: "missing_config" };
         case "aws_auth_status": return { has_context: false, logged_in: false, connection_state: "disconnected" };
         case "policy_get": return { raw: "Statement: []", valid: true, actions: [], path: "/synthetic/policy.yaml" };
         case "audit_tail": return { entries: [] };

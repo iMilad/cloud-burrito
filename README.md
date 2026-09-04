@@ -254,8 +254,10 @@ rule render readable labels and values.
 - **Node.js** 22 with **npm** 10.9.8, plus **Python 3** for local test servers
 - **Rust** 1.91.1 and Cargo (automatically selected by `rust-toolchain.toml`)
 - **Tauri CLI** 2.11.4 — `cargo install tauri-cli --version 2.11.4 --locked`
-- **AWS CLI v2** with at least one **SSO** profile configured in `~/.aws/config`
-  (`aws configure sso`), and a valid session (`aws sso login`)
+- At least one supported **SSO** profile and an existing valid SSO session.
+  AWS CLI v2 can configure and sign in to that session outside the app
+  (`aws configure sso`, `aws sso login`). The CLI executable is optional for
+  SDK-backed widgets and required only for the optional CLI widget.
 - A system webview (preinstalled on macOS)
 
 ### Run
@@ -296,7 +298,7 @@ State lives in your home directory:
 | Path | Purpose |
 | --- | --- |
 | `~/.aws/config` | Your AWS SSO profiles (standard AWS CLI config) |
-| `~/.cloud_burrito/settings.json` | App settings (config path, SSO session, default profile/region) |
+| `~/.cloud_burrito/settings.json` | App settings (config path, SSO session constraint, default profile/region, light/dark theme) |
 | `~/.cloud_burrito/policy.yaml` | Read-only allowlist (see [Security model](#security-model)) |
 | `~/.cloud_burrito/dashboard.json` | Saved dashboard layout and per-tile config |
 | `~/.cloud_burrito/audit.log` | Structured application outcomes and capability preflights; write failures are visible |
@@ -311,6 +313,19 @@ token renewal; expired legacy tokens or failed renewal require another
 or selected profile configuration requires reconnecting. The default region is
 `eu-west-1` (allowed regions are
 `eu-west-1` and `us-east-1`, adjustable in `src-tauri/src/settings.rs`).
+
+The connection notice distinguishes configuration discovery, missing or invalid
+configuration, unsupported profiles, verification, and session failures. Open
+Settings to correct the config path or retry discovery after correcting the
+existing configuration or signing in externally. A saved SSO session name is an
+optional consistency constraint: it must agree with the selected profile and
+does not override that profile's credentials. The app never starts a login
+process. Profile discovery is bounded and marks omitted results explicitly.
+
+CLI availability is checked locally without executing a process. A discovered
+candidate does not verify its version, publisher, or successful execution.
+When it is absent, the CLI widget explains the prerequisite and offers Retry;
+SDK-backed widgets remain available after identity verification.
 
 ## Architecture
 

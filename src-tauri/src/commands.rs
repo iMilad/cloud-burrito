@@ -830,9 +830,25 @@ fn aws_list_profiles_impl(state: &AppState) -> Value {
         Err(error) => return state.runtime.with_diagnostics(error),
     };
     let cfg_path = config_path_from_settings(&user_settings);
-    let mut info = state.runtime.aws.inspect_config(&cfg_path);
+    let constraint = settings::get_str(&user_settings, "sso_session_name");
+    let mut info = state.runtime.aws.inspect_config(
+        &cfg_path,
+        (!constraint.is_empty()).then_some(constraint.as_str()),
+    );
     info["allowed_regions"] = json!(settings::ALLOWED_REGIONS);
     state.runtime.with_diagnostics(info)
+}
+
+/// Local launch discovery only: no configuration, credential or process work.
+#[tauri::command]
+pub async fn cli_availability(state: State<'_, AppState>) -> Result<Value, String> {
+    Ok(cli_availability_impl(&state))
+}
+
+fn cli_availability_impl(state: &AppState) -> Value {
+    state
+        .runtime
+        .with_diagnostics(state.runtime.process.availability().response())
 }
 
 #[tauri::command]
@@ -1089,3 +1105,58 @@ fn policy_set_impl(state: &AppState, params: Value) -> Value {
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+    use crate::process::{CliAvailability, CliRequest, ProcessOutput, ProcessRunner};
+    use crate::runtime::Runtime;
+    use crate::test_support::TestDir;
+    use futures::future::BoxFuture;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct AvailabilityFixture {
+        result: CliAvailability,
+        calls: AtomicUsize,
+    }
+
+    impl ProcessRunner for AvailabilityFixture {
+        fn availability(&self) -> CliAvailability {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.result
+        }
+
+        fn run(&self, _request: CliRequest) -> BoxFuture<'_, Result<ProcessOutput, String>> {
+            panic!("the availability command must not execute a process")
+        }
+    }
+
+    #[test]
+    fn cli_availability_command_is_injected_and_independent_of_settings_and_aws() {
+        for (availability, status, available) in [
+            (CliAvailability::Available, "available", json!(true)),
+            (CliAvailability::Missing, "missing", json!(false)),
+            (CliAvailability::Unknown, "unknown", Value::Null),
+        ] {
+            let directory = TestDir::new();
+            let mut runtime = Runtime::for_test(directory.paths());
+            let process = Arc::new(AvailabilityFixture {
+                result: availability,
+                calls: AtomicUsize::new(0),
+            });
+            runtime.process = process.clone();
+            // The remaining native AWS boundary panics if it is accidentally
+            // reached. No settings, credentials or audit file is needed.
+            let state = AppState::with_runtime(runtime);
+            let response = cli_availability_impl(&state);
+            assert_eq!(response["ok"], true);
+            assert_eq!(response["status"], status);
+            assert_eq!(response["available"], available);
+            assert_eq!(response["version_verified"], false);
+            assert!(response.get("path").is_none());
+            assert_eq!(process.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        }
+    }
+}

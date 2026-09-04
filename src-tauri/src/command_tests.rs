@@ -27,6 +27,8 @@ type Responses<T> = Mutex<HashMap<String, VecDeque<oneshot::Receiver<Result<T, S
 
 #[derive(Default)]
 struct ScriptedAws {
+    inspection: Mutex<Option<Value>>,
+    inspection_calls: Mutex<Vec<(String, Option<String>)>>,
     snapshots: Mutex<HashMap<String, Result<SsoProfileSnapshot, String>>>,
     credentials: Responses<Credentials>,
     identities: Responses<CallerIdentity>,
@@ -97,8 +99,14 @@ impl ScriptedAws {
 }
 
 impl AwsBackend for ScriptedAws {
-    fn inspect_config(&self, _: &str) -> Value {
-        panic!("unexpected native-style profile inspection");
+    fn inspect_config(&self, path: &str, constraint: Option<&str>) -> Value {
+        self.inspection_calls
+            .lock()
+            .push((path.into(), constraint.map(str::to_string)));
+        self.inspection
+            .lock()
+            .clone()
+            .expect("unexpected native-style profile inspection")
     }
 
     fn snapshot_sso(&self, ctx: &AwsContext) -> Result<SsoProfileSnapshot, String> {
@@ -2024,5 +2032,39 @@ async fn changing_only_saved_session_fences_an_older_pending_selection() {
         .unwrap();
     assert_eq!(pending.await.unwrap()["error_type"], "Superseded");
     assert!(fixture.state.current_ctx().is_none());
+    fixture.no_process();
+}
+
+#[test]
+fn profile_discovery_uses_saved_path_and_session_constraint_without_credentials() {
+    let fixture = Fixture::new();
+    let saved = settings_set_impl(
+        &fixture.state,
+        full_settings(json!({
+            "aws_config_path":"synthetic-discovery.ini", "sso_session_name":" synthetic-session "
+        })),
+    );
+    assert_eq!(saved["_storage"]["status"], "saved");
+    *fixture.aws.inspection.lock() = Some(
+        json!({"ok":true, "discovery_state":"ready", "profiles":[
+            {"name":"demo-a", "account_id":ACCOUNT_A, "role_name":"SyntheticReadOnly", "region":"us-east-1", "sso_session":"synthetic-session", "eligibility":"supported_sso", "eligibility_reason":null}
+        ]}),
+    );
+    let discovered = aws_list_profiles_impl(&fixture.state);
+    assert_eq!(discovered["discovery_state"], "ready");
+    assert_eq!(discovered["profiles"][0]["eligibility"], "supported_sso");
+    assert_eq!(
+        discovered["allowed_regions"],
+        json!(settings::ALLOWED_REGIONS)
+    );
+    assert_eq!(
+        *fixture.aws.inspection_calls.lock(),
+        vec![(
+            "synthetic-discovery.ini".into(),
+            Some("synthetic-session".into())
+        )]
+    );
+    assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+    fixture.aws.assert_no_resolution();
     fixture.no_process();
 }

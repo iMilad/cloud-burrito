@@ -8,6 +8,12 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_COMMANDS = {
+    "ping", "aws_set_account", "aws_list_profiles", "aws_list_pipelines",
+    "aws_auth_status", "cli_availability", "widget_fetch", "widget_get_source",
+    "settings_get", "settings_set", "dashboard_get", "dashboard_set",
+    "audit_tail", "policy_get", "policy_set",
+}
 
 
 def extract(pattern: str, text: str, source: Path) -> str:
@@ -21,6 +27,7 @@ def main() -> int:
     build_path = ROOT / "src-tauri" / "build.rs"
     lib_path = ROOT / "src-tauri" / "src" / "lib.rs"
     capability_path = ROOT / "src-tauri" / "capabilities" / "default.json"
+    config_path = ROOT / "src-tauri" / "tauri.conf.json"
 
     build_block = extract(
         r"\.commands\s*\(\s*&\[(.*?)\]\s*\)",
@@ -37,6 +44,13 @@ def main() -> int:
     handler_commands = re.findall(r"commands::([a-z][a-z0-9_]*)", handler_block)
 
     capability = json.loads(capability_path.read_text(encoding="utf-8"))
+    if capability.get("windows") != ["main"] or capability.get("webviews"):
+        raise SystemExit("command capability must be restricted to the main window")
+    if capability.get("local", True) is not True or capability.get("remote") is not None:
+        raise SystemExit("command capability must remain local-only without remote URL scope")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if config.get("app", {}).get("security", {}).get("capabilities") != ["default"]:
+        raise SystemExit("application must enable only the reviewed default capability")
     permissions = capability.get("permissions")
     if not isinstance(permissions, list):
         raise SystemExit("capability permissions must be a list")
@@ -67,7 +81,7 @@ def main() -> int:
         if len(commands) != len(set(commands)):
             raise SystemExit(f"duplicate command in {name}: {commands}")
 
-    expected = set(manifest_commands)
+    expected = EXPECTED_COMMANDS
     mismatches = {
         name: sorted(set(commands) ^ expected)
         for name, commands in command_sets.items()

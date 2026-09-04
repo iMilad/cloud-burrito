@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 
 const defaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1", theme: "dark" };
 const profiles = ["a", "b"].map((suffix, index) => ({ name: `demo-${suffix}`, account_id: String(index + 1).repeat(12),
-  region: "eu-west-1", role_name: "SyntheticReadOnly", sso_session: "synthetic-session" }));
+  region: "eu-west-1", role_name: "SyntheticReadOnly", sso_session: "synthetic-session",
+  eligibility: "supported_sso", eligibility_reason: "Synthetic supported SSO profile" }));
 const tile = { id: "cfn-stacks", widget: "cfn-stacks", x: 0, y: 0, w: 6, h: 4 };
 
 // Runs production HTML/JS with a synthetic persistence + context bridge. Every
@@ -50,6 +51,7 @@ async function bootSettings(page, options = {}) {
       fixture.calls.push({ command, params: structuredClone(params) });
       switch (command) {
         case "ping": return { version: "synthetic" };
+        case "cli_availability": return { ok: true, status: "available", available: true, version_verified: false };
         case "settings_get":
           if (fixture.holdReads) await new Promise(resolve => { fixture.releaseRead = resolve; });
           return response(persisted.settings, "loaded");
@@ -71,7 +73,7 @@ async function bootSettings(page, options = {}) {
           if (fixture.failLayout) return { ok: false, error_type: "StorageWriteFailed", error: "Synthetic rejection" };
           persisted.tiles = params.tiles; persist();
           return { version: 1, tiles: params.tiles, _storage: { status: "saved", store: "dashboard" } };
-        case "aws_list_profiles": return { profiles, file_exists: true, config_path: "/synthetic/config" };
+        case "aws_list_profiles": return { profiles, file_exists: true, config_path: "/synthetic/config", error: null, discovery_state: "ready" };
         case "aws_set_account":
           if (fixture.holdVerification) await new Promise(resolve => { fixture.releaseVerification = resolve; });
           active = { profile: params.profile, account_id: params.account_id, region: params.region };

@@ -38,7 +38,7 @@ impl Clock for SystemClock {
 pub type CallerIdentity = aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityOutput;
 
 pub trait AwsBackend: Send + Sync {
-    fn inspect_config(&self, path: &str) -> Value;
+    fn inspect_config(&self, path: &str, sso_constraint: Option<&str>) -> Value;
     fn snapshot_sso(&self, ctx: &AwsContext) -> Result<SsoProfileSnapshot, String>;
     fn resolve_sso<'a>(
         &'a self,
@@ -146,9 +146,9 @@ fn legacy_sso_token(snapshot: &SsoProfileSnapshot) -> Result<String, String> {
 }
 
 impl AwsBackend for NativeAwsBackend {
-    fn inspect_config(&self, path: &str) -> Value {
+    fn inspect_config(&self, path: &str, sso_constraint: Option<&str>) -> Value {
         require_live_aws();
-        config_file::inspect(path)
+        config_file::inspect(path, sso_constraint)
     }
 
     fn snapshot_sso(&self, ctx: &AwsContext) -> Result<SsoProfileSnapshot, String> {
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "unexpected live AWS/provider or personal configuration access")]
     fn native_config_boundary_rejects_personal_configuration_access_in_tests() {
-        NativeAwsBackend.inspect_config("synthetic-config.ini");
+        NativeAwsBackend.inspect_config("synthetic-config.ini", None);
     }
 
     #[tokio::test]

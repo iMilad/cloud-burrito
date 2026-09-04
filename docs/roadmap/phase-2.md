@@ -1,6 +1,6 @@
 # P2 — Make the core dependable
 
-Status: **P2-01–02 complete locally; P2-03 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
+Status: **P2-01–03 complete locally; P2-04 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
 Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
 
@@ -36,7 +36,7 @@ P1 now supplies these interfaces; see [P1-06 evidence](p1-06-evidence.md) for th
 
 ## Ordered work units
 
-All units below are **not started**. Review and complete one unit before combining unrelated changes. Each completion record should identify the diff, journey IDs, relevant automated evidence, remaining native checks, and known limitations.
+Completed units are linked to their evidence below; subsequent units remain planned. Review and complete one unit before combining unrelated changes. Each completion record should identify the diff, journey IDs, relevant automated evidence, remaining native checks, and known limitations.
 
 ### P2-01 — Make persistence truthful
 
@@ -70,6 +70,8 @@ All units below are **not started**. Review and complete one unit before combini
 **Review units:** settings/defaults and save feedback first, then theme/layout feedback as a separate small change.
 
 ### P2-03 — Provide a clear first-run and recovery path
+
+**Complete locally:** [implementation and validation evidence](p2-03-evidence.md).
 
 **Scope:** existing Settings, account picker, auth status, and Identity panel; CB-J01. Depends on P1 identity/errors and P2-02.
 
