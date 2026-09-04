@@ -1,23 +1,27 @@
 //! Errors by Stack — count ERROR log lines per log group over a window using
 //! CloudWatch Logs Insights. The top 20 most-recently-created matching groups
-//! are queried concurrently. A polling timeout does not stop the remote query;
-//! failures must not be presented as confirmed zero error counts.
+//! are queried through the shared two-slot lifecycle and bounded cleanup.
+//! Failed queries never become confirmed zero error counts.
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use aws_sdk_cloudwatchlogs::types::QueryStatus;
 use aws_sdk_cloudwatchlogs::Client;
 use futures::future::join_all;
 use serde_json::{json, Value};
 
-use super::{coverage::Coverage, err_msg, WidgetCtx};
+use super::{
+    coverage::Coverage,
+    err_msg,
+    query::{self, Cleanup, QuerySpec, QueryTiming},
+    WidgetCtx,
+};
 
 const MAX_GROUPS: usize = 20;
 const QUERY_ROW_LIMIT: usize = 100;
 const INSIGHTS_QUERY: &str = "fields @timestamp, @message\n| filter @message like /ERROR/\n| stats count() as errors by @logStream";
 
 pub async fn fetch(ctx: &WidgetCtx) -> Value {
-    let hours = ctx.input_i64("hours", 24).max(1);
+    let hours = ctx.input_i64("hours", 24).clamp(1, 168);
     let pattern = ctx.input_str("log_group_pattern", "/aws/lambda/");
 
     // Authorize the complete workflow before discovery or SDK construction.
@@ -67,11 +71,48 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
         .unwrap_or(0);
     let start = now - hours * 3600;
 
-    let futs = group_names.iter().map(|g| {
-        let client = client.clone();
+    let fallback;
+    let scope = if let Some(scope) = &ctx.runtime.work {
+        scope
+    } else {
+        fallback = ctx.fallback_scope();
+        &fallback
+    };
+    let mut query_ctx = ctx.clone();
+    if let Some(token) = ctx.inputs.get("acknowledge_query").and_then(Value::as_str) {
+        if ctx
+            .inputs
+            .get("acknowledge_unknown")
+            .and_then(Value::as_bool)
+            != Some(true)
+            || ctx
+                .runtime
+                .queries
+                .acknowledge_selected(scope, token)
+                .is_err()
+        {
+            let mut outcome =
+                query::QueryOutcome::failed("recovery_mismatch", Cleanup::NotNeeded, 0);
+            outcome.recovery_pending = ctx.runtime.queries.pending_for(scope);
+            return outcome.error_result();
+        }
+        query_ctx
+            .inputs
+            .as_object_mut()
+            .expect("validated object")
+            .remove("acknowledge_query");
+        query_ctx.inputs["acknowledge_unknown"] = json!(false);
+    }
+    let futs = group_names.iter().enumerate().map(|(index, g)| {
         let g = g.clone();
+        let mut scoped = query_ctx.clone();
+        // Without a selected token, acknowledge at most one same-query retry.
+        // The reviewed selector supplies a token for any other pending group.
+        if index > 0 {
+            scoped.inputs["acknowledge_unknown"] = json!(false);
+        }
         async move {
-            let total = cw_insights_count(ctx, &client, &g, start, now).await;
+            let total = cw_insights_count(&scoped, &g, start, now).await;
             (g, total)
         }
     });
@@ -88,7 +129,21 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
             "Only the first discovery page and up to 20 matching groups were queried.",
         );
     }
-    let out = errors_chart(hours, results, Some(discovery));
+    let mut out = errors_chart(hours, results, Some(discovery));
+    let fallback;
+    let scope = if let Some(scope) = &ctx.runtime.work {
+        scope
+    } else {
+        fallback = ctx.fallback_scope();
+        &fallback
+    };
+    let pending = ctx.runtime.queries.pending_for(scope);
+    out["can_acknowledge_unknown"] = json!(!pending.is_empty());
+    if !pending.is_empty() {
+        out["recovery_required"] = json!(true);
+        out["recovery_action"] = json!("select_unknown_query");
+    }
+    out["recovery_pending"] = json!(pending);
     if out["status"] != "complete" {
         ctx.log("query results incomplete", out["counts"].clone());
     }
@@ -96,14 +151,9 @@ pub async fn fetch(ctx: &WidgetCtx) -> Value {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QueryFailure {
-    StartFailed,
-    MissingQueryId,
-    PollFailed,
-    Failed,
-    Cancelled,
-    RemoteTimeout,
-    PollTimeout,
+struct QueryFailure {
+    state: &'static str,
+    cleanup: Cleanup,
 }
 
 struct QueryCount {
@@ -133,6 +183,9 @@ fn errors_chart(
     let mut failed = 0usize;
     let mut timed_out = 0usize;
     let mut remote_status_unknown = 0usize;
+    let mut recovery_required = false;
+    let mut can_acknowledge_unknown = false;
+    let mut cleanup_counts = std::collections::BTreeMap::<&str, usize>::new();
     let mut rows: Vec<(String, i64, bool)> = Vec::new();
     let mut query_rows = 0;
     let mut bounded_counts = 0;
@@ -151,20 +204,18 @@ fn errors_chart(
             }
             Err(error) => {
                 failed += 1;
-                if matches!(
-                    error,
-                    QueryFailure::RemoteTimeout | QueryFailure::PollTimeout
-                ) {
+                if error.state == "timed_out" {
                     timed_out += 1;
                 }
-                if matches!(
-                    error,
-                    QueryFailure::MissingQueryId
-                        | QueryFailure::PollFailed
-                        | QueryFailure::PollTimeout
-                ) {
+                if error.cleanup.remote_unknown() {
                     remote_status_unknown += 1;
+                    recovery_required = true;
+                    can_acknowledge_unknown = true;
                 }
+                if matches!(error.state, "query_capacity_unknown" | "recovery_capacity") {
+                    recovery_required = true;
+                }
+                *cleanup_counts.entry(error.cleanup.status()).or_default() += 1;
             }
         }
     }
@@ -186,7 +237,11 @@ fn errors_chart(
         "status": if failed == 0 { "complete" } else if succeeded > 0 { "partial" } else { "failed" },
         "partial": failed > 0 && succeeded > 0,
         "counts": { "queried": queried, "succeeded": succeeded, "failed": failed, "timed_out": timed_out, "remote_status_unknown": remote_status_unknown },
-        "cleanup": { "status": "not_attempted", "remote_queries_may_still_run": remote_status_unknown > 0 },
+        "cleanup": { "status": if remote_status_unknown > 0 { "unknown" } else if cleanup_counts.contains_key("stopped") { "stopped" } else { "not_needed" },
+            "outcomes":cleanup_counts, "remote_queries_may_still_run":remote_status_unknown > 0, "recovery_required":remote_status_unknown > 0 },
+        "recovery_required":recovery_required,
+        "can_acknowledge_unknown":can_acknowledge_unknown,
+        "recovery_action":if can_acknowledge_unknown {"acknowledge_this_query"} else {"review_outstanding_queries"},
     });
     if failed > 0 {
         result["error_type"] = json!(if succeeded > 0 {
@@ -201,7 +256,10 @@ fn errors_chart(
         }
         .to_string();
         if remote_status_unknown > 0 {
-            message.push_str(" Some remote queries may still be running; no stop was attempted.");
+            message.push_str(" Some remote queries may still be running. Review the cleanup outcomes before explicitly authorizing replacement queries.");
+        }
+        if recovery_required && remote_status_unknown == 0 {
+            message.push_str(" Outstanding unknown queries occupy the query budget; review those original queries before authorizing more work.");
         }
         result["error"] = json!(message);
     }
@@ -241,80 +299,39 @@ fn errors_chart(
 /// Start an Insights query and poll until Complete, summing the `errors` column.
 async fn cw_insights_count(
     ctx: &WidgetCtx,
-    client: &Client,
     group: &str,
     start: i64,
     end: i64,
 ) -> Result<QueryCount, QueryFailure> {
-    let _query_permit = ctx
-        .query_permit()
-        .await
-        .map_err(|_| QueryFailure::StartFailed)?;
-    let started = ctx
-        .send(
-            "logs",
-            "StartQuery",
-            client
-                .start_query()
-                .log_group_name(group)
-                .start_time(start)
-                .end_time(end)
-                .query_string(INSIGHTS_QUERY)
-                .limit(QUERY_ROW_LIMIT as i32)
-                .customize()
-                .config_override(
-                    aws_sdk_cloudwatchlogs::config::Builder::new().retry_config(
-                        aws_config::retry::RetryConfig::standard().with_max_attempts(1),
-                    ),
-                )
-                .send(),
-        )
-        .await
-        .map_err(|_| QueryFailure::StartFailed)?;
-    let query_id = started
-        .query_id()
-        .ok_or(QueryFailure::MissingQueryId)?
-        .to_string();
-
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let resp = ctx
-            .send(
-                "logs",
-                "GetQueryResults",
-                client.get_query_results().query_id(&query_id).send(),
-            )
-            .await
-            .map_err(|_| QueryFailure::PollFailed)?;
-        match resp.status() {
-            Some(QueryStatus::Complete) => {
-                let mut total = 0i64;
-                for record in resp.results() {
-                    for field in record {
-                        if field.field() == Some("errors") {
-                            if let Some(v) = field.value() {
-                                total += v.trim().parse::<i64>().unwrap_or(0);
-                            }
-                        }
-                    }
+    let spec = QuerySpec {
+        group,
+        query: INSIGHTS_QUERY,
+        start,
+        end,
+        limit: QUERY_ROW_LIMIT as i32,
+    };
+    let outcome = query::run(ctx, &spec, QueryTiming::default()).await;
+    let Some(response) = outcome.result else {
+        return Err(QueryFailure {
+            state: outcome.state,
+            cleanup: outcome.cleanup,
+        });
+    };
+    let mut total = 0i64;
+    for record in response.results() {
+        for field in record {
+            if field.field() == Some("errors") {
+                if let Some(value) = field.value() {
+                    total = total.saturating_add(value.trim().parse::<i64>().unwrap_or(0));
                 }
-                return Ok(QueryCount {
-                    total,
-                    rows: resp.results().len(),
-                    has_more: resp.next_token().is_some_and(|token| !token.is_empty()),
-                });
-            }
-            Some(QueryStatus::Failed) => return Err(QueryFailure::Failed),
-            Some(QueryStatus::Cancelled) => return Err(QueryFailure::Cancelled),
-            Some(QueryStatus::Timeout) => return Err(QueryFailure::RemoteTimeout),
-            _ => {
-                if Instant::now() >= deadline {
-                    return Err(QueryFailure::PollTimeout);
-                }
-                tokio::time::sleep(Duration::from_millis(400)).await;
             }
         }
     }
+    Ok(QueryCount {
+        total,
+        rows: response.results().len(),
+        has_more: response.next_token().is_some_and(|token| !token.is_empty()),
+    })
 }
 
 #[cfg(test)]
@@ -335,11 +352,17 @@ mod tests {
                 ("synthetic-resource-zero".into(), Ok(0.into())),
                 (
                     "SYNTHETIC_PRIVATE_GROUP_MARKER".into(),
-                    Err(QueryFailure::StartFailed),
+                    Err(QueryFailure {
+                        state: "start_failed",
+                        cleanup: Cleanup::NotNeeded,
+                    }),
                 ),
                 (
                     "SYNTHETIC_PRIVATE_TIMEOUT_MARKER".into(),
-                    Err(QueryFailure::PollTimeout),
+                    Err(QueryFailure {
+                        state: "timed_out",
+                        cleanup: Cleanup::Unknown,
+                    }),
                 ),
             ],
             None,
@@ -359,7 +382,7 @@ mod tests {
                 {"stack": "synthetic-resource-low", "errors": 2},
             ])
         );
-        assert_eq!(result["cleanup"]["status"], "not_attempted");
+        assert_eq!(result["cleanup"]["status"], "unknown");
         assert_eq!(result["cleanup"]["remote_queries_may_still_run"], true);
         assert!(result["error"]
             .as_str()
@@ -380,7 +403,10 @@ mod tests {
             24,
             vec![(
                 "SYNTHETIC_PRIVATE_GROUP_MARKER".into(),
-                Err(QueryFailure::Failed),
+                Err(QueryFailure {
+                    state: "failed",
+                    cleanup: Cleanup::NotNeeded,
+                }),
             )],
             None,
         );
@@ -399,9 +425,27 @@ mod tests {
         let result = errors_chart(
             24,
             vec![
-                ("synthetic-one".into(), Err(QueryFailure::RemoteTimeout)),
-                ("synthetic-two".into(), Err(QueryFailure::PollFailed)),
-                ("synthetic-three".into(), Err(QueryFailure::MissingQueryId)),
+                (
+                    "synthetic-one".into(),
+                    Err(QueryFailure {
+                        state: "timed_out",
+                        cleanup: Cleanup::NotNeeded,
+                    }),
+                ),
+                (
+                    "synthetic-two".into(),
+                    Err(QueryFailure {
+                        state: "poll_failed",
+                        cleanup: Cleanup::Unknown,
+                    }),
+                ),
+                (
+                    "synthetic-three".into(),
+                    Err(QueryFailure {
+                        state: "start_unknown",
+                        cleanup: Cleanup::Unknown,
+                    }),
+                ),
             ],
             None,
         );
@@ -482,7 +526,7 @@ mod tests {
                 result["coverage"]["completeness"],
                 if more { "limited" } else { "unknown" }
             );
-            assert_eq!(result["cleanup"]["status"], "not_attempted");
+            assert_eq!(result["cleanup"]["status"], "not_needed");
         }
     }
 

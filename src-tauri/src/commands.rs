@@ -850,9 +850,7 @@ async fn run_widget_job(
         return result;
     }
     if let Err(mut error) = validate_request_context(&state, &resolved, &session) {
-        if let Some(cleanup) = result.get("cleanup") {
-            error["cleanup"] = cleanup.clone();
-        }
+        retain_query_outcome(&mut error, &result);
         return error;
     }
     if scope.cancellation.is_cancelled() && result.get("cleanup").is_none() {
@@ -860,12 +858,29 @@ async fn run_widget_job(
     }
     let current_policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
     if state.observe_policy(&current_policy) != policy_revision {
-        return request_error(
+        let mut error = request_error(
             "PolicyChanged",
             "Policy changed while the request was running",
         );
+        retain_query_outcome(&mut error, &result);
+        return error;
     }
     result
+}
+
+fn retain_query_outcome(error: &mut Value, result: &Value) {
+    for key in [
+        "cleanup",
+        "query_state",
+        "recovery_required",
+        "can_acknowledge_unknown",
+        "recovery_action",
+        "recovery_pending",
+    ] {
+        if let Some(value) = result.get(key) {
+            error[key] = value.clone();
+        }
+    }
 }
 
 #[tauri::command]
@@ -1144,6 +1159,7 @@ async fn aws_list_pipelines_request(
 #[cfg(test)]
 async fn list_pipelines_with_coverage(sdk: &aws_config::SdkConfig) -> Value {
     let dir = crate::test_support::TestDir::new();
+    aws::policy::load(&dir.paths()).expect("initialize disposable selector policy");
     let runtime = crate::runtime::Runtime::for_test(dir.paths());
     let scope = crate::scheduler::WorkScope::new(
         "synthetic-selector".into(),

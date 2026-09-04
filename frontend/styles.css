@@ -2746,3 +2746,11 @@ body :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible 
 .codeartifact-enrichment-state { color: var(--text-secondary); font-size: 11px; }
 tr[data-enrichment-state="failed"] .codeartifact-enrichment-state { color: var(--error); }
 .codeartifact-batch-owners { display: grid; gap: var(--space-2); min-width: 0; }
+
+/* Recovery is a deliberate local choice and does not imply remote cleanup. */
+.query-recovery { display: grid; gap: var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-3); margin-bottom: var(--space-3); background: var(--bg-subtle); overflow-wrap: anywhere; }
+.query-recovery p { margin: 0; }
+.query-recovery label { display: flex; align-items: start; gap: var(--space-2); }
+.query-recovery input[type="checkbox"] { flex: 0 0 auto; margin-top: 2px; }
+.query-recovery select { max-width: 100%; min-width: 0; color: var(--text-primary); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-2); }
+.query-recovery-run { justify-self: start; white-space: normal; }

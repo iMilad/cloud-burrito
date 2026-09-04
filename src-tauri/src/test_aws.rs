@@ -378,6 +378,7 @@ impl ScriptedHttp {
         widget: &str,
         inputs: Value,
     ) -> crate::widgets::WidgetCtx {
+        crate::aws::policy::load(&dir.paths()).expect("initialize disposable fixture policy");
         crate::widgets::WidgetCtx {
             runtime: crate::runtime::Runtime::for_test(dir.paths()),
             sdk: self.sdk_config(),

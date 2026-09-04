@@ -362,6 +362,7 @@ pub struct Runtime {
     pub clock: Arc<dyn Clock>,
     pub(crate) scheduler: Arc<Scheduler>,
     pub(crate) work: Option<WorkScope>,
+    pub(crate) queries: Arc<crate::widgets::query::QueryRegistry>,
     audit_write_failed: Arc<AtomicBool>,
     audit_request_id: Option<String>,
 }
@@ -379,6 +380,7 @@ impl Default for Runtime {
             audit_request_id: None,
             scheduler: Arc::new(Scheduler::default()),
             work: None,
+            queries: Arc::default(),
         }
     }
 }
@@ -425,6 +427,7 @@ impl Runtime {
             audit_request_id: None,
             scheduler: Arc::new(Scheduler::default()),
             work: None,
+            queries: Arc::default(),
         }
     }
 }

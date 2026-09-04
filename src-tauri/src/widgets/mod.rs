@@ -9,6 +9,7 @@
 
 mod aws_cli;
 pub(crate) mod budget;
+pub(crate) mod query;
 pub(crate) use aws_cli::parse_cli_command;
 mod cfn_stack_detail;
 mod cfn_stacks;
@@ -110,7 +111,7 @@ impl WidgetCtx {
         let paths = self.runtime.paths.clone();
         let current = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            tokio::task::spawn_blocking(move || crate::runtime::read_current_policy(&paths, true)),
+            tokio::task::spawn_blocking(move || crate::runtime::read_current_policy(&paths, false)),
         )
         .await
         .ok()
@@ -131,22 +132,6 @@ impl WidgetCtx {
             return Err(WorkFailure::new("WorkPolicyDenied"));
         }
         Ok(())
-    }
-
-    pub(crate) async fn query_permit(
-        &self,
-    ) -> Result<crate::scheduler::Permit, crate::scheduler::WorkFailure> {
-        let fallback;
-        let scope = if let Some(scope) = &self.runtime.work {
-            scope
-        } else {
-            fallback = self.fallback_scope();
-            &fallback
-        };
-        self.runtime
-            .scheduler
-            .acquire(scope, "logs", crate::scheduler::ResourceKind::Query)
-            .await
     }
 
     fn fallback_scope(&self) -> crate::scheduler::WorkScope {

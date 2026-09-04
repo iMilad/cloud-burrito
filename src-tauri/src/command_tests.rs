@@ -2217,3 +2217,59 @@ fn profile_discovery_uses_saved_path_and_session_constraint_without_credentials(
     fixture.aws.assert_no_resolution();
     fixture.no_process();
 }
+
+#[tokio::test]
+async fn policy_change_keeps_unknown_query_cleanup_and_recovery_in_final_envelope() {
+    use crate::test_aws::{ExpectedRequest, ScriptedHttp};
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_QUERY_CLEANUP", 3000).await;
+    let resolved = resolve_widget_ctx(&fixture.state, &json!({})).unwrap();
+    let policy = fixture.policy();
+    let revision = fixture.state.observe_policy(&policy);
+    let session = verify_request_context(&fixture.state, &resolved, &policy)
+        .await
+        .unwrap();
+    let http = ScriptedHttp::new(vec![ExpectedRequest::json(
+        "Logs_20140328.StartQuery",
+        json!({"logGroupName":"/synthetic/policy-change"}),
+        json!({"queryId":"synthetic-late-query"}),
+    )
+    .delay(Duration::from_millis(150))]);
+    let mut ctx = http.context(
+        &fixture._dir,
+        "logs-insights",
+        json!({"log_group":"/synthetic/policy-change","query":"fields @message"}),
+    );
+    let scope = crate::scheduler::WorkScope::new(
+        "synthetic-verified-query".into(),
+        ACCOUNT_A.into(),
+        "us-east-1".into(),
+        crate::process::ProcessCancellation::new(),
+        crate::scheduler::WorkBudget::for_widget("logs-insights"),
+    );
+    ctx.runtime = fixture.state.runtime.with_work(scope);
+    ctx.account_id = ACCOUNT_A.into();
+    ctx.policy = policy;
+    let job = Box::pin(run_widget_job(fixture.state.clone(), resolved, session, ctx, revision));
+    let revoke = async {
+        while http.calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+        aws::policy::write_text(
+            &fixture.state.runtime.paths,
+            "statements:\n  - effect: Deny\n    action: ['*']\n",
+        )
+        .unwrap();
+    };
+    let (result, ()) =
+        tokio::time::timeout(Duration::from_secs(3), async { tokio::join!(job, revoke) })
+            .await
+            .unwrap();
+    assert_eq!(result["error_type"], "PolicyChanged");
+    assert_eq!(result["cleanup"]["status"], "denied");
+    assert_eq!(result["cleanup"]["remote_queries_may_still_run"], true);
+    assert_eq!(result["recovery_required"], true);
+    assert_eq!(result["recovery_pending"].as_array().unwrap().len(), 1);
+    http.assert_finished();
+    fixture.no_process();
+}

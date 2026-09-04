@@ -5,8 +5,8 @@
 //! frontend's `invoke(...)` calls land directly on the `#[tauri::command]`
 //! handlers in `commands`, which talk to AWS and the local persistence files.
 //!
-//! Read-only by construction: only registered read-style operations are ever
-//! compiled in, so no mutating call can be issued regardless of credential scope.
+//! A closed operation registry permits reviewed resource reads and separately
+//! controlled Logs Insights start/stop capabilities. Query execution can incur scan costs.
 
 mod audit;
 mod aws;

@@ -585,9 +585,17 @@
       if (!request.current()) throw new Error("Request owner is no longer current.");
       if (!available) throw new Error("AWS CLI is unavailable. Use Retry CLI check in this widget.");
     }
-    return invokeOwnedRequest(request, "widget_fetch", {
+    const queryWidget = widgetName === "errors-by-stack" || widgetName === "logs-insights" && inputs?.mode === "query";
+    const widget = queryWidget ? owner.closest?.(".widget") : null;
+    if (widget?._queryRecovery && inputs.acknowledge_unknown !== true) {
+      showQueryRecovery(widget);
+      throw new Error("Review the earlier query before starting another attempt.");
+    }
+    const result = await invokeOwnedRequest(request, "widget_fetch", {
       widget: widgetName, inputs: inputs || {}, context: request.context,
     });
+    if (queryWidget && request.current() && request.accept(result)) rememberQueryRecovery(widget, request, inputs, result);
+    return result;
   }
 
   function resultHostForRequest(request) {
@@ -659,7 +667,8 @@
 
   function resultState(spec) {
     if (spec?.partial === true || spec?.status === "partial" || (resultFailure(spec) && resultHasEvidence(spec))) return "partial";
-    if (spec?._request?.outcome === "cancelled" || ["Superseded", "Cancelled", "QueryCancelled"].includes(spec?.error_type || spec?.data?.error_type)) return "cancelled";
+    if (spec?._request?.outcome === "cancelled" || spec?.query_state === "cancelled"
+        || ["Superseded", "Cancelled", "QueryCancelled"].includes(spec?.error_type || spec?.data?.error_type)) return "cancelled";
     if (spec?.render === "permission_denied" || spec?._request?.outcome === "denied" || spec?.error_type === "PolicyDenied") return "denied";
     if (spec?.error_type === "CredentialsExpired" || spec?.needs_sso_login) return "expired";
     if (resultFailure(spec)) return "failed";
@@ -726,6 +735,114 @@
     host.prepend(status);
     announceResult(host, state);
     updateEvidenceLinks(host);
+    showQueryRecovery(host.closest?.(".widget"));
+  }
+
+  function queryRecoveryContextKey(widget) {
+    const context = contextPayloadForTile(widget);
+    const selected = context.mode === "pinned" ? context : {
+      profile: topbarState.profile, account_id: topbarState.accountId, region: topbarState.region,
+    };
+    // This only determines which recovery controls to show. The backend must
+    // reverify the principal/configuration before accepting any opaque token.
+    return JSON.stringify([configurationGeneration, selected.profile, selected.account_id, selected.region]);
+  }
+
+  function queryRecoveryKey(widget, inputs) {
+    return JSON.stringify([queryRecoveryContextKey(widget), inputs.log_group || "", inputs.query || "", inputs.range_seconds || 0, inputs.limit || 0]);
+  }
+
+  function rememberQueryRecovery(widget, request, inputs, result) {
+    if (!widget || !request.current()) return;
+    const cleanup = result?.cleanup || result?.data?.cleanup;
+    if (result?.recovery_required === true || cleanup?.recovery_required === true
+        || cleanup?.remote_queries_may_still_run === true || result?.query_state === "recovery_mismatch") {
+      const pending = Array.isArray(result.recovery_pending) && result.recovery_pending.length <= 2
+        ? result.recovery_pending.filter(entry => entry && typeof entry.token === "string" && /^q-\d{1,24}$/.test(entry.token)
+          && typeof entry.group === "string" && entry.group.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(entry.group)
+          && Number.isSafeInteger(entry.window_seconds) && entry.window_seconds > 0 && entry.window_seconds <= 604800
+          && typeof entry.query_digest === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(entry.query_digest)) : [];
+      widget._queryRecovery = { key: queryRecoveryKey(widget, inputs), contextKey: queryRecoveryContextKey(widget), pending,
+        canAcknowledge: result.can_acknowledge_unknown !== false,
+        state: result.query_state || "recovery_required", context: result._request,
+        capacity: ["query_capacity_unknown", "recovery_capacity"].includes(result.query_state),
+      };
+    } else if (inputs.acknowledge_unknown === true
+        && (cleanup?.remote_stop_confirmed === true || result && result.ok !== false && !result.error && result.render !== "permission_denied")) {
+      widget._queryRecovery = null;
+      widget._queryAcknowledgedUnknown = true;
+    }
+  }
+
+  function showQueryRecovery(widget) {
+    if (!widget || !["logs-insights", "errors-by-stack"].includes(widget.dataset?.widget)) return;
+    const body = $(".widget-body", widget);
+    if (!body) return;
+    const recovery = widget._queryRecovery;
+    if (!recovery) {
+      widget.querySelector(".query-recovery")?.remove();
+      if (widget._queryAcknowledgedUnknown && !widget.querySelector(".query-acknowledged-unknown")) {
+        body.prepend(el("p", { class: "muted small query-acknowledged-unknown" },
+          "You authorized another attempt while an earlier query was unresolved. A new result does not confirm that the earlier query stopped."));
+      }
+      return;
+    }
+    widget.querySelector(".query-acknowledged-unknown")?.remove();
+    const form = $(".logs-insights-config", widget);
+    const inputs = form ? readLogsInsightsForm(form) : {};
+    const currentKey = queryRecoveryKey(widget, inputs);
+    const sameQuery = recovery.key === currentKey;
+    const sameContext = recovery.contextKey === queryRecoveryContextKey(widget);
+    const selectable = sameContext && recovery.pending.length > 0;
+    const busy = widget._queryRecoveryBusy === true;
+    const old = widget.querySelector(".query-recovery");
+    if (old?._recovery === recovery && old._queryKey === currentKey && old.dataset.busy === String(busy)) return;
+    old?.remove();
+    const box = el("section", { class: "query-recovery small", "aria-label": "Unresolved query recovery",
+      "data-same-query": String(sameQuery), "data-busy": String(busy) });
+    box._recovery = recovery;
+    box._queryKey = currentKey;
+    box.appendChild(el("p", {}, "The earlier query may still be running. Automatic query reloads are paused; local cancellation does not prove remote completion."));
+    if (recovery.context?.profile && recovery.context?.region) box.appendChild(el("p", { class: "muted small" },
+      `${recovery.capacity ? "Blocked request context" : "Earlier request"}: ${recovery.context.profile} · ${recovery.context.account_id || "account unverified"} · ${recovery.context.region}.`));
+    if (recovery.capacity) box.appendChild(el("p", {}, recovery.state === "query_capacity_unknown"
+      ? "Two unresolved remote queries occupy the query budget. Review those original queries before authorizing more work."
+      : "The recovery record budget is full. Review outstanding original queries before starting more work."));
+    if (!(sameQuery || selectable) || !recovery.canAcknowledge) {
+      box.appendChild(el("p", { class: "muted small" },
+        "Review the original query in its original account and region. This form cannot acknowledge a different query or verification context."));
+    } else {
+      box.appendChild(el("p", { class: "muted small" }, "Authorizing one new attempt can overlap the earlier query and incur additional scan costs. It does not stop the earlier query."));
+      const select = selectable ? el("select", { class: "query-recovery-select", "aria-label": "Unresolved query to review", disabled: busy },
+        el("option", { value: "" }, "Choose an unresolved query…"),
+        ...recovery.pending.map(entry => el("option", { value: entry.token }, `${entry.group} · ${entry.window_seconds} seconds · query ${entry.query_digest.slice(0, 12)}`)),
+      ) : null;
+      const checkbox = el("input", { type: "checkbox", class: "query-recovery-confirm", disabled: busy });
+      const label = el("label", {}, checkbox, el("span", {}, "I understand the earlier query may still be running"));
+      const run = el("button", { type: "button", class: "btn btn-ghost small query-recovery-run", disabled: true }, busy ? "Waiting for the new attempt…" : "Review and run again");
+      const updateRun = () => { run.disabled = !checkbox.checked || select && !select.value || widget._queryRecoveryBusy === true; };
+      checkbox.addEventListener("change", updateRun);
+      select?.addEventListener("change", () => { checkbox.checked = false; updateRun(); });
+      run.addEventListener("click", async () => {
+        if (!checkbox.checked || widget._queryRecovery !== recovery || widget._queryRecoveryBusy || !widget.isConnected) return;
+        const currentInputs = form ? readLogsInsightsForm(form) : {};
+        if (currentKey !== queryRecoveryKey(widget, currentInputs) || select && !recovery.pending.some(entry => entry.token === select.value)) { showQueryRecovery(widget); return; }
+        const acknowledgement = select ? select.value : null;
+        checkbox.checked = false;
+        widget._queryRecoveryBusy = true;
+        showQueryRecovery(widget);
+        try {
+          if (form) await runLogsInsightsQuery(form, $(".logs-insights-rows", widget), $(".logs-insights-error", widget), { acknowledgeUnknown: true, acknowledgeQuery: acknowledgement });
+          else await renderErrorsFromSidecar(widget, { acknowledgeUnknown: true, acknowledgeQuery: acknowledgement });
+        } finally {
+          widget._queryRecoveryBusy = false;
+          if (widget.isConnected) showQueryRecovery(widget);
+        }
+      });
+      if (select) box.appendChild(select);
+      box.append(label, run);
+    }
+    body.prepend(box);
   }
 
   // Handoffs are reviewed backend facts, not names from which the UI guesses
@@ -1022,6 +1139,7 @@
     });
     const subtitle = $(".widget-sub", widget);
     if (subtitle) subtitle.textContent = "";
+    showQueryRecovery(widget);
   }
 
   function clearInheritedResults() {
@@ -4686,16 +4804,18 @@
     return renderErrorsMock(target);
   }
 
-  async function renderErrorsFromSidecar(target) {
+  async function renderErrorsFromSidecar(target, options = {}) {
     return withWidgets("errors-by-stack", target, async (widget) => {
       const body = $(".errors-body", widget);
       if (!body) return;
+      if (widget._queryRecovery && !options.acknowledgeUnknown) { showQueryRecovery(widget); return; }
       updateWidgetContextChip(widget.closest(".grid-stack-item"));
       clear(body);
       body.appendChild(el("div", { class: "muted small" }, "Loading..."));
       const request = beginOwnedRequest(body);
       try {
-        const result = await fetchWidgetData("errors-by-stack", {}, body, null, request);
+        const result = await fetchWidgetData("errors-by-stack", options.acknowledgeUnknown ? { acknowledge_unknown: true,
+          ...(options.acknowledgeQuery ? { acknowledge_query: options.acknowledgeQuery } : {}) } : {}, body, null, request);
         if (!request.accept(result)) return;
         dispatchRender(body, result);
       } catch (e) {
@@ -5233,8 +5353,10 @@
     return `${n(stats.records_matched)} matched · ${n(stats.records_scanned)} scanned`;
   }
 
-  async function runLogsInsightsQuery(form, rows, errorEl) {
+  async function runLogsInsightsQuery(form, rows, errorEl, options = {}) {
     const inputs = readLogsInsightsForm(form);
+    const widget = form.closest(".widget");
+    if (widget?._queryRecovery && !options.acknowledgeUnknown) { showQueryRecovery(widget); return; }
     if (!inputs.log_group || !inputs.query) {
       errorEl.textContent = "Log group and query are required.";
       return;
@@ -5244,7 +5366,9 @@
     const request = beginOwnedRequest(rows);
     try {
       const fetchContext = contextPayloadForTile(form);
-      const result = await fetchWidgetData("logs-insights", { mode: "query", ...inputs }, rows, fetchContext, request);
+      const result = await fetchWidgetData("logs-insights", { mode: "query", ...inputs,
+        ...(options.acknowledgeUnknown ? { acknowledge_unknown: true } : {}),
+        ...(options.acknowledgeQuery ? { acknowledge_query: options.acknowledgeQuery } : {}) }, rows, fetchContext, request);
       if (!request.accept(result)) return;
       if (!result) return;
       if (result.render) {
@@ -5287,6 +5411,7 @@
       if (form.dataset.wired !== "1") {
         form.dataset.wired = "1";
         // The input owns its autocomplete cache and its pending completion.
+        form.addEventListener("input", () => showQueryRecovery(widget));
         const groupInput = $(".li-group", form);
         groupInput.addEventListener("focus", async () => {
           if (groupInput.dataset.loaded === "1") return;

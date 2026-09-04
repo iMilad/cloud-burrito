@@ -247,6 +247,26 @@ fn optional_text(
         Some(value) => text(value, max, empty, multiline).map(|_| ()),
     }
 }
+fn query_acknowledgement(p: &Map<String, Value>) -> Check {
+    optional_boolean(p, "acknowledge_unknown")?;
+    if let Some(value) = p.get("acknowledge_query") {
+        let token = text(value, 64, false, false)?;
+        if p.get("acknowledge_unknown") != Some(&Value::Bool(true))
+            || !token
+                .strip_prefix("q-")
+                .is_some_and(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err("Recovery selection requires explicit acknowledgement");
+        }
+    }
+    Ok(())
+}
+fn optional_boolean(p: &Map<String, Value>, key: &str) -> Check {
+    match p.get(key) {
+        None | Some(Value::Bool(_)) => Ok(()),
+        _ => Err("Expected a boolean"),
+    }
+}
 fn integer(p: &Map<String, Value>, key: &str, min: i64, max: i64) -> Check {
     if let Some(value) = p.get(key) {
         let value = value.as_i64().ok_or("Expected an integer")?;
@@ -356,7 +376,16 @@ fn widget_inputs(name: &str, p: &Map<String, Value>) -> Check {
             integer(p, "max_results", 1, 1000)?;
         }
         "errors-by-stack" => {
-            keys(p, &["hours", "log_group_pattern"])?;
+            keys(
+                p,
+                &[
+                    "hours",
+                    "log_group_pattern",
+                    "acknowledge_unknown",
+                    "acknowledge_query",
+                ],
+            )?;
+            query_acknowledgement(p)?;
             integer(p, "hours", 1, 168)?;
             optional_text(p, "log_group_pattern", MAX_NAME, true, false, false)?;
         }
@@ -492,7 +521,18 @@ fn log_inputs(name: &str, p: &Map<String, Value>) -> Check {
             optional_text(p, "filter", MAX_QUERY, true, true, false)
         }
         "query" if name == "logs-insights" => {
-            keys(p, &["mode", "log_group", "query", "range_seconds"])?;
+            keys(
+                p,
+                &[
+                    "mode",
+                    "log_group",
+                    "query",
+                    "range_seconds",
+                    "acknowledge_unknown",
+                    "acknowledge_query",
+                ],
+            )?;
+            query_acknowledgement(p)?;
             required_text(p, "log_group", MAX_NAME, false)?;
             required_text(p, "query", MAX_QUERY, true)?;
             integer(p, "range_seconds", 60, 604_800)
@@ -975,5 +1015,62 @@ mod progressive_package_tests {
             crate::widgets::entry_operations("codeartifact-packages", &json!({"mode":"enrich"})),
             &[("codeartifact", "ListPackageVersions")]
         );
+    }
+}
+
+#[cfg(test)]
+mod query_recovery_tests {
+    use super::*;
+    use serde_json::json;
+    fn widget(name: &str, inputs: Value) -> Value {
+        json!({"widget":name,"inputs":inputs})
+    }
+    #[test]
+    fn query_recovery_acknowledgement_is_boolean_and_closed_to_query_inputs() {
+        for name in ["logs-insights", "errors-by-stack"] {
+            let mut inputs = if name == "logs-insights" {
+                json!({"log_group":"/synthetic/query", "query":"fields @message"})
+            } else {
+                json!({"hours":1})
+            };
+            for flag in [json!(true), json!(false)] {
+                inputs["acknowledge_unknown"] = flag;
+                assert!(validate("widget_fetch", &widget(name, inputs.clone())).is_ok());
+            }
+            for flag in [json!("true"), json!(1), json!(null), json!({})] {
+                inputs["acknowledge_unknown"] = flag;
+                assert!(validate("widget_fetch", &widget(name, inputs.clone())).is_err());
+            }
+        }
+        for (name, inputs) in [
+            (
+                "logs-insights",
+                json!({"mode":"groups", "acknowledge_unknown":true}),
+            ),
+            (
+                "cloudwatch-logs",
+                json!({"mode":"groups", "acknowledge_unknown":true}),
+            ),
+            (
+                "pipeline-runs",
+                json!({"pipeline_name":"synthetic", "acknowledge_unknown":true}),
+            ),
+        ] {
+            assert!(validate("widget_fetch", &widget(name, inputs)).is_err());
+        }
+    }
+    #[test]
+    fn selected_query_recovery_token_requires_explicit_boolean_acknowledgement() {
+        let mut input = json!({"hours":1,"acknowledge_unknown":true,"acknowledge_query":"q-17"});
+        assert!(validate("widget_fetch", &widget("errors-by-stack", input.clone())).is_ok());
+        for flag in [json!(false), json!(null), json!("true")] {
+            input["acknowledge_unknown"] = flag;
+            assert!(validate("widget_fetch", &widget("errors-by-stack", input.clone())).is_err());
+        }
+        input["acknowledge_unknown"] = json!(true);
+        for token in ["q-", "q-example", "different-token"] {
+            input["acknowledge_query"] = json!(token);
+            assert!(validate("widget_fetch", &widget("errors-by-stack", input.clone())).is_err());
+        }
     }
 }

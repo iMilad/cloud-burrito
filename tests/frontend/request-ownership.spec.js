@@ -208,6 +208,119 @@ const widgetCalls = (page, name) => page.evaluate((name) => window.__requestHarn
 const cancellationIds = page => page.evaluate(() => window.__requestHarness.calls
   .filter(call => call.command === "request_cancel").map(call => call.params.request_id));
 
+const queryCalls = page => page.evaluate(() => window.__requestHarness.calls.filter(call => call.command === "widget_fetch"
+  && call.params.widget === "logs-insights" && call.params.inputs.mode === "query"));
+const unknownQuery = (extra = {}) => ({ render: "table", columns: ["message"], rows: [], ok: false,
+  error_type: "QueryIncomplete", error: "Synthetic query remote state is unknown", query_state: "recovery_required",
+  recovery_required: true, can_acknowledge_unknown: true,
+  cleanup: { status: "not_confirmed", recovery_required: true, remote_stop_confirmed: false, remote_queries_may_still_run: true }, ...extra });
+
+async function pendingInsights(page) {
+  await boot(page, [tile("logs-insights")]);
+  const queries = widget(page, "logs-insights");
+  await queries.locator(".li-group").fill("/synthetic/query-group");
+  await queries.locator(".li-query").fill("fields @timestamp | limit 10");
+  await hold(page, requestFor("logs-insights", { inputs: { mode: "query" } }));
+  await queries.getByRole("button", { name: "Run query", exact: true }).click();
+  return { queries, pending: await next(page, requestFor("logs-insights", { inputs: { mode: "query" } })) };
+}
+
+test("unknown query pauses refresh and needs visible review for exactly one new attempt", async ({ page }) => {
+  const { queries, pending } = await pendingInsights(page);
+  await reply(page, pending, unknownQuery());
+  await expect(queries.locator(".query-recovery")).toContainText("Automatic query reloads are paused");
+  const before = (await queryCalls(page)).length;
+  await refresh(queries);
+  expect(await queryCalls(page)).toHaveLength(before);
+  const review = queries.getByRole("button", { name: "Review and run again", exact: true });
+  await expect(review).toBeDisabled();
+  await queries.getByLabel("I understand the earlier query may still be running").check();
+  await review.click();
+  const acknowledged = await next(page, requestFor("logs-insights", { inputs: { mode: "query", acknowledge_unknown: true } }));
+  expect(acknowledged.params.inputs.acknowledge_unknown).toBe(true);
+  await reply(page, acknowledged, { render: "table", columns: ["message"], rows: [{ message: "synthetic finished query" }] });
+  await expect(queries).toContainText("synthetic finished query");
+  await expect(queries.locator(".query-acknowledged-unknown")).toContainText("does not confirm that the earlier query stopped");
+  await refresh(queries);
+  const ordinary = await next(page, requestFor("logs-insights", { inputs: { mode: "query" } }));
+  expect(ordinary.params.inputs).not.toHaveProperty("acknowledge_unknown");
+  expect(await page.evaluate(() => window.__requestHarness.calls.filter(call => call.command === "dashboard_set")
+    .flatMap(call => call.params.tiles || []).some(tile => Object.hasOwn(tile.config?.inputs || {}, "acknowledge_unknown")))).toBe(false);
+});
+
+test("a new account cannot automatically restart or acknowledge the earlier query context", async ({ page }) => {
+  const { queries, pending } = await pendingInsights(page);
+  await reply(page, pending, unknownQuery());
+  const before = (await queryCalls(page)).length;
+  await chooseAccount(page, B.profile);
+  await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
+  expect(await queryCalls(page)).toHaveLength(before);
+  await expect(queries.locator(".query-recovery")).toContainText("cannot acknowledge a different query or verification context");
+  await expect(queries.locator(".query-recovery-confirm")).toHaveCount(0);
+});
+
+test("unknown capacity names the held budget without authorizing unrelated query acknowledgement", async ({ page }) => {
+  const { queries, pending } = await pendingInsights(page);
+  await reply(page, pending, unknownQuery({ query_state: "query_capacity_unknown", can_acknowledge_unknown: false,
+    recovery_action: "review_outstanding_queries" }));
+  await expect(queries.locator(".query-recovery")).toContainText("Two unresolved remote queries occupy the query budget");
+  await expect(queries.locator(".query-recovery-confirm")).toHaveCount(0);
+  await expect(queries.locator(".query-recovery-run")).toHaveCount(0);
+  const before = (await queryCalls(page)).length;
+  await refresh(queries);
+  expect(await queryCalls(page)).toHaveLength(before);
+});
+
+test("review selects exactly one same-context unresolved query before changed-input retry", async ({ page }) => {
+  const { queries, pending } = await pendingInsights(page);
+  await reply(page, pending, unknownQuery({ query_state: "query_capacity_unknown", can_acknowledge_unknown: true,
+    recovery_pending: [
+      { token: "q-11", group: "/synthetic/first-group", window_seconds: 3600, query_digest: "a".repeat(40) },
+      { token: "q-12", group: "/synthetic/second-group", window_seconds: 7200, query_digest: "b".repeat(40) },
+    ] }));
+  await queries.locator(".li-query").fill("fields @message | limit 5");
+  const select = queries.getByRole("combobox", { name: "Unresolved query to review" });
+  await expect(select.locator("option")).toHaveCount(3);
+  const run = queries.getByRole("button", { name: "Review and run again", exact: true });
+  await queries.getByLabel("I understand the earlier query may still be running").check();
+  await expect(run).toBeDisabled();
+  await select.selectOption("q-12");
+  await expect(queries.getByLabel("I understand the earlier query may still be running")).not.toBeChecked();
+  await queries.getByLabel("I understand the earlier query may still be running").check();
+  await run.click();
+  const acknowledged = await next(page, requestFor("logs-insights", { inputs: { acknowledge_unknown: true, acknowledge_query: "q-12" } }));
+  expect(acknowledged.params.inputs.query).toBe("fields @message | limit 5");
+  expect(acknowledged.params.inputs.acknowledge_query).toBe("q-12");
+});
+
+test("explicit Cancel stays unconfirmed until the owned result confirms StopQuery", async ({ page }) => {
+  const { queries, pending } = await pendingInsights(page);
+  await queries.getByRole("button", { name: "Cancel current request" }).click();
+  await expect(queries.locator(".request-cancel-status")).toContainText("Remote cleanup is not yet confirmed");
+  await expect(queries).not.toContainText("Remote query stop confirmed.");
+  await reply(page, pending, { ok: false, error_type: "QueryCancelled", error: "Synthetic cancelled query", query_state: "cancelled",
+    recovery_required: false, cleanup: { status: "stopped", remote_stop_confirmed: true, remote_queries_may_still_run: false } }, { outcome: "cancelled" });
+  await expect(queries.locator(".result-cleanup")).toHaveText("Remote query stop confirmed.");
+  await expect(queries.locator(".query-recovery")).toHaveCount(0);
+  expect(await queryCalls(page)).toHaveLength(1);
+});
+
+test("error counts also require a reviewed one-shot attempt after unknown cleanup", async ({ page }) => {
+  await boot(page, [tile("errors-by-stack")]);
+  const chart = widget(page, "errors-by-stack");
+  await hold(page, requestFor("errors-by-stack"));
+  await refresh(chart);
+  const pending = await next(page, requestFor("errors-by-stack"));
+  await reply(page, pending, unknownQuery({ render: "errors_chart", rows: [], hours: 1 }));
+  const before = (await widgetCalls(page, "errors-by-stack")).length;
+  await refresh(chart);
+  expect(await widgetCalls(page, "errors-by-stack")).toHaveLength(before);
+  await chart.getByLabel("I understand the earlier query may still be running").check();
+  await chart.getByRole("button", { name: "Review and run again", exact: true }).click();
+  const nextAttempt = await next(page, requestFor("errors-by-stack", { inputs: { acknowledge_unknown: true } }));
+  expect(nextAttempt.params.inputs).toEqual({ acknowledge_unknown: true });
+});
+
 test("explicit Cancel acknowledges locally and waits for the owned remote cleanup outcome", async ({ page }) => {
   await boot(page, [tile("cfn-stacks")]);
   const surface = widget(page, "cfn-stacks");
