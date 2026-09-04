@@ -43,22 +43,22 @@
         <span class="core-dot"></span>
         <span class="core-label">checking…</span>
       </span>
-      <span class="core-status" id="auth-status" data-state="unknown" title="AWS SSO login status — click to refresh" hidden>
+      <button type="button" class="core-status" id="auth-status" aria-label="Open AWS identity details" data-state="unknown" title="AWS SSO status — open identity details" hidden>
         <span class="core-dot"></span>
         <span class="core-label">auth: —</span>
-      </span>
+      </button>
     </div>
     <div class="topbar-right">
-      <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout">↺</button>
+      <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout" aria-label="Reset layout">↺</button>
       <button class="btn btn-ghost" id="theme-toggle" title="Preview another theme" aria-label="Preview another theme" disabled>◐</button>
-      <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden>⏱</button>
-      <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden>⚙</button>
+      <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden aria-label="Audit log">⏱</button>
+      <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden aria-label="Settings">⚙</button>
       <button class="btn btn-primary" id="add-widget-btn">+ Widget</button>
     </div>
   </header>
 
   <section id="connection-status" class="connection-status" data-state="discovering" aria-label="AWS connection" hidden>
-    <div class="connection-copy" role="status">
+    <div class="connection-copy">
       <strong id="connection-title">Discovering profiles</strong>
       <p id="connection-message"></p>
       <p id="connection-identity" class="small"></p>
@@ -78,6 +78,8 @@
   </div>
   <p id="layout-save-status" class="save-status" role="status" hidden></p>
   <p id="clipboard-status" class="sr-only" role="status"></p>
+  <p id="result-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <p id="connection-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
 
   <main class="dashboard">
     <div class="grid-stack" id="grid-stack">
@@ -90,10 +92,10 @@
               <h2 class="widget-title">Pipeline Runs</h2>
               <span class="widget-sub">Recent CodePipeline executions</span>
               <div class="widget-actions">
-                <button class="icon-btn" title="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
               </div>
             </header>
             <div class="widget-body pipeline-runs-body" data-tab="live">
@@ -144,10 +146,10 @@
               <h2 class="widget-title">Lambda Logs</h2>
               <span class="widget-sub">Lambda functions and CloudWatch logs</span>
               <div class="widget-actions">
-                <button class="icon-btn" title="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
               </div>
             </header>
             <div class="widget-body lambda-log-browser log-tail-body"></div>
@@ -163,10 +165,10 @@
               <h2 class="widget-title">CloudFormation Stacks</h2>
               <span class="widget-sub">Stacks in this widget's region</span>
               <div class="widget-actions">
-                <button class="icon-btn" title="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
               </div>
             </header>
             <div class="widget-body cfn-stacks-body"></div>
@@ -182,13 +184,13 @@
               <h2 class="widget-title">Resource Reverse Lookup</h2>
               <span class="widget-sub">Search tagged resources and inspect confirmed stack associations</span>
               <div class="widget-actions">
-                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
               </div>
             </header>
             <div class="widget-body">
-              <input class="lookup-input" type="text" placeholder="Resource name, ARN, or partial id…" />
+              <input class="lookup-input" type="text" aria-label="Resource lookup query" placeholder="Resource name, ARN, or partial id…" />
               <div class="lookup-results"></div>
             </div>
           </article>
@@ -203,10 +205,10 @@
               <h2 class="widget-title">Log Error Counts</h2>
               <span class="widget-sub">CloudWatch errors in the last 24 hours</span>
               <div class="widget-actions">
-                <button class="icon-btn" title="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
+                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
               </div>
             </header>
             <div class="widget-body errors-body"></div>
@@ -223,9 +225,9 @@
               <span class="widget-sub">Latest package versions by prefix</span>
               <div class="widget-actions">
                 <button class="icon-btn" title="Refresh" aria-label="Load or refresh packages">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget">✕</button>
+                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
+                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
               </div>
             </header>
             <div class="widget-body codeartifact-packages-body">
@@ -258,10 +260,10 @@
   </main>
 
   <!-- Add-widget side panel -->
-  <aside class="side-panel" id="side-panel" aria-hidden="true">
+  <aside class="side-panel" id="side-panel" role="dialog" aria-modal="true" aria-labelledby="side-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
-      <h2>Add a widget</h2>
-      <button class="icon-btn" id="side-panel-close" title="Close">✕</button>
+      <h2 id="side-panel-title">Add a widget</h2>
+      <button class="icon-btn" id="side-panel-close" title="Close" aria-label="Close add a widget" type="button">✕</button>
     </header>
 
     <div class="side-panel-body">
@@ -275,10 +277,10 @@
   </aside>
 
   <!-- Settings side panel -->
-  <aside class="side-panel" id="settings-panel" aria-hidden="true">
+  <aside class="side-panel" id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
-      <h2>Settings</h2>
-      <button class="icon-btn" id="settings-panel-close" title="Close">✕</button>
+      <h2 id="settings-panel-title">Settings</h2>
+      <button class="icon-btn" id="settings-panel-close" title="Close" aria-label="Close settings" type="button">✕</button>
     </header>
     <div class="side-panel-body">
       <section class="panel-section">
@@ -335,10 +337,10 @@
           calls — it cannot enable unsupported operations.
         </p>
         <p class="muted small" id="policy-path"></p>
-        <p class="small" id="policy-status"></p>
+        <p class="small" id="policy-status" role="status"></p>
         <div class="policy-editor-wrap">
           <pre id="policy-highlight" class="policy-highlight" aria-hidden="true"></pre>
-          <textarea id="policy-editor" spellcheck="false" autocomplete="off"
+          <textarea id="policy-editor" aria-label="Operation policy YAML" spellcheck="false" autocomplete="off"
             autocorrect="off" autocapitalize="off" wrap="off"></textarea>
         </div>
         <div class="ai-actions">
@@ -350,10 +352,10 @@
   </aside>
 
   <!-- Audit log side panel -->
-  <aside class="side-panel audit-panel" id="audit-panel" aria-hidden="true">
+  <aside class="side-panel audit-panel" id="audit-panel" role="dialog" aria-modal="true" aria-labelledby="audit-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
-      <h2>Audit log</h2>
-      <button class="icon-btn" id="audit-panel-close" title="Close">✕</button>
+      <h2 id="audit-panel-title">Audit log</h2>
+      <button class="icon-btn" id="audit-panel-close" title="Close" aria-label="Close audit log" type="button">✕</button>
     </header>
     <div class="side-panel-body">
       <p class="muted small">
@@ -368,10 +370,10 @@
   </aside>
 
   <!-- Identity panel -->
-  <aside class="side-panel" id="identity-panel" aria-hidden="true">
+  <aside class="side-panel" id="identity-panel" role="dialog" aria-modal="true" aria-labelledby="identity-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
-      <h2>Identity</h2>
-      <button class="icon-btn" id="identity-panel-close" title="Close">✕</button>
+      <h2 id="identity-panel-title">Identity</h2>
+      <button class="icon-btn" id="identity-panel-close" title="Close" aria-label="Close identity" type="button">✕</button>
     </header>
     <div class="side-panel-body">
       <p class="muted small">
@@ -384,10 +386,10 @@
   </aside>
 
   <!-- Per-widget config side panel -->
-  <aside class="side-panel" id="widget-config-panel" aria-hidden="true">
+  <aside class="side-panel" id="widget-config-panel" role="dialog" aria-modal="true" aria-labelledby="cfg-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
       <h2 id="cfg-title">Configure widget</h2>
-      <button class="icon-btn" id="widget-config-panel-close" title="Close">✕</button>
+      <button class="icon-btn" id="widget-config-panel-close" title="Close" aria-label="Close configure widget" type="button">✕</button>
     </header>
     <div class="side-panel-body">
       <p class="muted small" id="cfg-subline"></p>

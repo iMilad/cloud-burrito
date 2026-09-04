@@ -1,8 +1,8 @@
 # P2 — Make the core dependable
 
-Status: **P2-01–06 complete locally; P2-07 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
+Status: **P2-01–07 complete locally; P3 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
-Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
+Original planning baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. The linked unit evidence records implementation and validation after that baseline. Native acceptance remains P5.
 
 ## Outcome and boundaries
 
@@ -36,7 +36,7 @@ P1 now supplies these interfaces; see [P1-06 evidence](p1-06-evidence.md) for th
 
 ## Ordered work units
 
-Completed units are linked to their evidence below; subsequent units remain planned. Review and complete one unit before combining unrelated changes. Each completion record should identify the diff, journey IDs, relevant automated evidence, remaining native checks, and known limitations.
+All seven completed units are linked to their evidence below. Review and complete one unit before combining unrelated changes. Each completion record should identify the diff, journey IDs, relevant automated evidence, remaining native checks, and known limitations.
 
 ### P2-01 — Make persistence truthful
 
@@ -140,6 +140,8 @@ P2 must preserve and propagate partial/truncated/error metadata for existing cap
 
 ### P2-07 — Cover keyboard and readable desktop use
 
+**Complete locally:** [implementation and validation evidence](p2-07-evidence.md).
+
 **Scope:** account/region selectors, settings/panels, pipeline/stack tabs, row expansion, refresh and retry controls in CB-J01–CB-J05.
 
 - Ensure keyboard reachability, visible focus, meaningful labels, Enter/Space activation, and correct tab/expanded state. Preserve existing keyboard-capable tables and pickers.
@@ -153,7 +155,7 @@ P2 must preserve and propagate partial/truncated/error metadata for existing cap
 
 ## Future validation and completion evidence
 
-The existing frontend suite has six tests: five browser/demo tests and one CodeArtifact production path with a fake Tauri bridge. These do not prove native onboarding, flagship navigation, CLI safety, context ordering, or durable-error recovery. Existing Rust persistence tests cover successful normalization/filtering, not injected I/O failures.
+The original planning baseline had six frontend tests: five browser/demo tests and one CodeArtifact production path with a fake Tauri bridge. That baseline did not prove native onboarding, flagship navigation, CLI safety, context ordering, or durable-error recovery. Its Rust persistence tests covered successful normalization/filtering, not injected I/O failures. The unit evidence linked above records the expanded checks.
 
 | Evidence layer | Planned evidence | When |
 | --- | --- | --- |
@@ -167,4 +169,4 @@ Record assertions and observed outcomes against journey/work IDs; do not replace
 
 P2 implementation is complete only when the scoped behavior and automated evidence above pass, retained beta controls are truthful, and remaining native checks are explicitly handed to P5. Any context leak, false save success, hidden partial failure, or inaccessible critical recovery action keeps the affected unit open.
 
-No implementation, test execution, build, dependency installation, native-device result, or publication is recorded by this planning document.
+Implementation and automated results are recorded in the linked unit evidence. They do not establish native-device, live-provider, installation or publication acceptance.

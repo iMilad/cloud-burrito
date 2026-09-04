@@ -11,7 +11,7 @@ const end = source.indexOf('  function startAuthStatusPolling()', start);
 assert(start >= 0 && end > start);
 const handler = source.slice(start, end);
 const openStart = source.indexOf('  function openIdentityPanel() {');
-const openEnd = source.indexOf('  function closeIdentityPanel()', openStart);
+const openEnd = source.indexOf('  function closeIdentityPanel(', openStart);
 assert(openStart >= 0 && openEnd > openStart);
 const openHandler = source.slice(openStart, openEnd);
 
@@ -30,6 +30,9 @@ function fixture() {
     clearInheritedResults: () => rendered.push({ cleared: true }),
     $: (selector) => ({ '#auth-status': pill, '#identity-panel': panel, '#scrim': scrim })[selector] || null,
     formatRemaining: () => '', renderIdentityPanel: (info) => rendered.push(info),
+    // Browser acceptance covers modal focus; this fixture keeps the real
+    // auth poll and panel-open state without implementing a second DOM.
+    showPanel: (target) => { target.classList.add('open'); target.setAttribute('aria-hidden', 'false'); },
     setConnectionState: () => {}, connectionFailureState: () => 'failed',
     tauriInvoke: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
   });

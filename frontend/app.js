@@ -17,9 +17,97 @@
       if (c == null || c === false) continue;
       node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
     }
+    if (tag === "button" && attrs.title && !attrs["aria-label"] && !/[A-Za-z0-9]/.test(node.textContent)) {
+      node.setAttribute("aria-label", attrs.title);
+    }
     return node;
   };
   const clear = (node) => { while (node.firstChild) node.removeChild(node.firstChild); };
+
+  // One modal surface owns keyboard focus. Closed panels stay inert throughout
+  // their visual transition; the scrim has no delayed hide that can race reopen.
+  let activePanel = null;
+  let panelReturnFocus = null;
+  const panelBackground = new Map();
+  const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+  function focusableWithin(root) {
+    return Array.from(root.querySelectorAll(FOCUSABLE)).filter(node => node.tabIndex >= 0
+      && !node.closest("[hidden], [inert]") && node.getClientRects().length);
+  }
+
+  function focusSafely(node) {
+    if (!node?.isConnected || node.disabled || node.closest("[hidden], [inert]") || !node.getClientRects().length) return false;
+    node.focus({ preventScroll: true });
+    return document.activeElement === node;
+  }
+
+  function closeActivePanel(options = {}) {
+    const close = { "side-panel": closeSidePanel, "settings-panel": closeSettingsPanel,
+      "audit-panel": closeAuditPanel, "identity-panel": closeIdentityPanel, "widget-config-panel": closeWidgetConfigPanel };
+    if (activePanel) close[activePanel.id]?.(options);
+  }
+
+  function showPanel(panel) {
+    if (!panel) return;
+    if (activePanel === panel) return;
+    const trigger = activePanel?.contains(document.activeElement) ? panelReturnFocus : document.activeElement;
+    closeActivePanel({ restoreFocus: false });
+    closeTopbarPicker(true);
+    closePipelineCombo();
+    activePanel = panel;
+    panelReturnFocus = trigger;
+    panel.inert = false;
+    panel.classList.add("open");
+    panel.setAttribute("aria-hidden", "false");
+    for (const sibling of document.body.children) {
+      if (sibling === panel || sibling.id === "scrim" || sibling.classList.contains("sr-only") || sibling.tagName === "SCRIPT") continue;
+      panelBackground.set(sibling, sibling.inert);
+      sibling.inert = true;
+    }
+    $("#scrim").hidden = false;
+    $("#scrim").classList.add("open");
+    focusSafely(focusableWithin(panel)[0] || panel);
+  }
+
+  function hidePanel(panel, options = {}) {
+    if (!panel || activePanel !== panel) return;
+    const trigger = panelReturnFocus;
+    activePanel = null;
+    panelReturnFocus = null;
+    panel.classList.remove("open");
+    panel.setAttribute("aria-hidden", "true");
+    panel.inert = true;
+    for (const [node, inert] of panelBackground) node.inert = inert;
+    panelBackground.clear();
+    $("#scrim").classList.remove("open");
+    $("#scrim").hidden = true;
+    if (options.restoreFocus !== false && !focusSafely(trigger)) focusSafely($("#add-widget-btn"));
+  }
+
+  function focusedKey(root) {
+    return root.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
+  }
+
+  function restoreKeyedFocus(root, key) {
+    if (!key) return;
+    const match = Array.from(root.querySelectorAll("[data-focus-key]")).find(node => node.dataset.focusKey === key);
+    if (!focusSafely(match)) focusSafely(focusableWithin(root)[0]);
+  }
+
+  function announceResult(host, state) {
+    if (host._announcedResultState === state) return;
+    host._announcedResultState = state;
+    if (activePanel && !activePanel.contains(host)) return;
+    const announcement = $("#result-announcement");
+    if (!announcement) return;
+    const title = host.closest(".widget")?.querySelector(".widget-title")?.textContent || "Result";
+    const messages = { loading: "loading", success: "updated", empty: "empty response", limited: "limited result",
+      partial: "partial result", stale: "refresh failed; previous evidence retained", denied: "request denied",
+      expired: "credentials expired", failed: "request failed", cancelled: "request cancelled" };
+    const message = `${title}: ${messages[state] || "updated"}.`;
+    if (announcement.textContent !== message) announcement.textContent = message;
+  }
 
   // ===== Display naming rule =====
   // Backend/widget payloads may use stable machine keys such as
@@ -552,7 +640,7 @@
   function paintResultStatus(host, state, spec, view, message) {
     host.querySelectorAll(":scope > .result-status").forEach(node => node.remove());
     const labels = { loading: "Loading", success: "Updated", empty: "Empty response", limited: "Limited result", partial: "Partial result", stale: "Stale evidence", denied: "Denied", expired: "Credentials expired", failed: "Failed", cancelled: "Cancelled" };
-    const status = el("div", { class: "result-status small", role: "status", "data-state": state },
+    const status = el("div", { class: "result-status small", "data-state": state },
       el("strong", {}, labels[state] || "Result"));
     if (view?.receivedAt) status.appendChild(el("time", { datetime: view.receivedAt, class: "result-received" }, `Received ${new Date(view.receivedAt).toLocaleString()}`));
     const context = view?.context || (spec?._request?.context_id ? spec._request : null);
@@ -576,6 +664,7 @@
       if (!confirmed && cleanup.remote_queries_may_still_run === true) status.appendChild(el("div", {}, "Remote queries may still be running."));
     } else if (state === "cancelled" || resultState(spec) === "cancelled") status.appendChild(el("div", { class: "result-cleanup" }, "The request is no longer awaited. This does not confirm that remote work stopped."));
     host.prepend(status);
+    announceResult(host, state);
     updateEvidenceLinks(host);
   }
 
@@ -1051,10 +1140,7 @@
 
   function openSettingsPanel() {
     const panel = $("#settings-panel");
-    panel.classList.add("open");
-    panel.setAttribute("aria-hidden", "false");
-    $("#scrim").classList.add("open");
-    $("#scrim").hidden = false;
+    showPanel(panel);
     // Re-fetch external edits, while preserving the user's unsaved draft.
     const draft = settingsDraftRevision;
     loadSettings().then((s) => {
@@ -1066,12 +1152,8 @@
       loadPolicy();
     });
   }
-  function closeSettingsPanel() {
-    const panel = $("#settings-panel");
-    panel.classList.remove("open");
-    panel.setAttribute("aria-hidden", "true");
-    $("#scrim").classList.remove("open");
-    setTimeout(() => { $("#scrim").hidden = true; }, 220);
+  function closeSettingsPanel(options = {}) {
+    hidePanel($("#settings-panel"), options);
   }
 
   let settingsSavePending = false;
@@ -1263,21 +1345,14 @@
 
   function openAuditPanel() {
     const panel = $("#audit-panel");
-    panel.classList.add("open");
-    panel.setAttribute("aria-hidden", "false");
-    $("#scrim").classList.add("open");
-    $("#scrim").hidden = false;
+    showPanel(panel);
     refreshAudit();
     if (auditTimer) clearInterval(auditTimer);
     // 2s gives a usable "live feed" feel without thrashing the core.
     auditTimer = setInterval(refreshAudit, 2000);
   }
-  function closeAuditPanel() {
-    const panel = $("#audit-panel");
-    panel.classList.remove("open");
-    panel.setAttribute("aria-hidden", "true");
-    $("#scrim").classList.remove("open");
-    setTimeout(() => { $("#scrim").hidden = true; }, 220);
+  function closeAuditPanel(options = {}) {
+    hidePanel($("#audit-panel"), options);
     if (auditTimer) { clearInterval(auditTimer); auditTimer = null; }
   }
 
@@ -1618,8 +1693,11 @@
           chooseTopbarPickerOption(Number(active.dataset.optionIndex));
         }
       } else if (event.key === "Escape") {
-        event.stopPropagation();
-        closeTopbarPicker(true);
+        if (topbarPickerList && !topbarPickerList.hidden && topbarPickerInput === input) {
+          event.preventDefault();
+          event.stopPropagation();
+          closeTopbarPicker(true);
+        }
       } else if (event.key === "Tab") {
         closeTopbarPicker(true);
       }
@@ -1731,6 +1809,11 @@
     const strip = $("#connection-status");
     strip.hidden = false;
     strip.dataset.state = connectionState;
+    const announcement = $("#connection-announcement");
+    if (announcement && announcement.dataset.state !== connectionState) {
+      announcement.dataset.state = connectionState;
+      announcement.textContent = title + ".";
+    }
     $("#connection-title").textContent = title;
     $("#connection-message").textContent = message;
     const profile = $("#account-select").value || topbarState.profile || "(none)";
@@ -2174,27 +2257,20 @@
   function openIdentityPanel() {
     const panel = $("#identity-panel");
     if (!panel) return;
-    panel.classList.add("open");
-    panel.setAttribute("aria-hidden", "false");
-    $("#scrim").classList.add("open");
-    $("#scrim").hidden = false;
+    showPanel(panel);
     // Refresh from the backend so the panel always reflects current state.
     // Only an accepted, current poll may render identity data. A discarded
     // response must not revive a previously cached account through a callback.
     return refreshAuthStatus();
   }
-  function closeIdentityPanel() {
-    const panel = $("#identity-panel");
-    if (!panel) return;
-    panel.classList.remove("open");
-    panel.setAttribute("aria-hidden", "true");
-    $("#scrim").classList.remove("open");
-    setTimeout(() => { $("#scrim").hidden = true; }, 220);
+  function closeIdentityPanel(options = {}) {
+    hidePanel($("#identity-panel"), options);
   }
 
   function renderIdentityPanel(info) {
     const wrap = $("#identity-body");
     if (!wrap) return;
+    const focusKey = focusedKey(wrap);
     clear(wrap);
     const stateBadge = info.logged_in
       ? el("span", { class: "pill pill-green" }, "active")
@@ -2240,15 +2316,18 @@
     const actions = el("div", { class: "identity-actions" });
     actions.appendChild(el("button", {
       class: "btn btn-ghost",
+      type: "button", "data-focus-key": "identity-refresh",
       onclick: () => refreshAuthStatus(),
     }, "Refresh"));
     if (!info.logged_in && info.profile) {
       actions.appendChild(el("button", {
         class: "btn btn-primary",
+        type: "button", "data-focus-key": "identity-retry",
         onclick: () => applyTopbarSelection({ fromProfile: false }),
       }, "Retry set-account"));
     }
     wrap.appendChild(actions);
+    restoreKeyedFocus(wrap, focusKey);
   }
 
   // Manual refresh: clicking the Account label re-runs the profile lookup.
@@ -2271,15 +2350,31 @@
   });
   $("#appearance-settings").addEventListener("click", openSettingsPanel);
 
-  // Escape closes the active side panel.
+  // Escape dismisses the innermost surface; Tab stays inside an open dialog.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      closeSidePanel();
-      closeSettingsPanel();
-      closeAuditPanel();
-      closeIdentityPanel();
-      closeWidgetConfigPanel();
+    if (e.defaultPrevented) return;
+    if (e.key === "Tab" && activePanel) {
+      const controls = focusableWithin(activePanel);
+      const first = controls[0] || activePanel;
+      const last = controls[controls.length - 1] || activePanel;
+      if (!activePanel.contains(document.activeElement) || (e.shiftKey && document.activeElement === first)
+          || (!e.shiftKey && document.activeElement === last)) {
+        e.preventDefault();
+        focusSafely(e.shiftKey ? last : first);
+      }
     }
+    if (e.key === "Escape") {
+      if (topbarPickerList && !topbarPickerList.hidden) closeTopbarPicker(true);
+      else if (comboListEl && !comboListEl.hidden) closePipelineCombo();
+      else if (activePanel) closeActivePanel();
+      else if (fullscreenWidget) exitFullscreen();
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+  document.addEventListener("focusin", (e) => {
+    if (activePanel && !activePanel.contains(e.target)) focusSafely(focusableWithin(activePanel)[0] || activePanel);
   });
 
   function widgetsOfType(type) {
@@ -2406,6 +2501,45 @@
   }
 
   // ----- Live / Pinned tabs -----
+  let nextWidgetTabId = 0;
+  function syncWidgetTabs(body, kind, tab, activate) {
+    if (!body._accessibleTabsId) body._accessibleTabsId = `widget-tabs-${++nextWidgetTabId}`;
+    const buttons = Array.from(body.querySelectorAll(`.${kind}-tab`));
+    const list = buttons[0]?.closest('[role="tablist"]');
+    if (list) list.setAttribute("aria-label", kind === "cli" ? "CLI result view" : "Pipeline result view");
+    for (const button of buttons) {
+      const name = button.dataset.tab;
+      const active = name === tab;
+      const panel = body.querySelector(`.${kind}-pane-${name}`);
+      button.id = `${body._accessibleTabsId}-${name}-tab`;
+      button.setAttribute("aria-controls", `${body._accessibleTabsId}-${name}-panel`);
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+      button.classList.toggle("active", active);
+      if (panel) {
+        panel.id = `${body._accessibleTabsId}-${name}-panel`;
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", button.id);
+        const hidFocus = !active && panel.contains(document.activeElement);
+        panel.hidden = !active;
+        if (hidFocus) focusSafely(buttons.find(candidate => candidate.dataset.tab === tab));
+      }
+    }
+    if (list && !list._keyboardTabsWired) {
+      list._keyboardTabsWired = true;
+      list.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const current = buttons.indexOf(event.target);
+        if (current < 0) return;
+        event.preventDefault();
+        const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+        activate(buttons[index].dataset.tab);
+        focusSafely(buttons[index]);
+      });
+    }
+  }
+
   function activePipelineTab(widget) {
     const body = $(".pipeline-runs-body", widget);
     return (body && body.dataset.tab) || "live";
@@ -2415,15 +2549,7 @@
     const body = $(".pipeline-runs-body", widget);
     if (!body) return;
     body.dataset.tab = tab;
-    body.querySelectorAll(".pipeline-tab").forEach((btn) => {
-      const active = btn.dataset.tab === tab;
-      btn.classList.toggle("active", active);
-      btn.setAttribute("aria-selected", String(active));
-    });
-    const live = $(".pipeline-pane-live", body);
-    const pinned = $(".pipeline-pane-pinned", body);
-    if (live) live.hidden = tab !== "live";
-    if (pinned) pinned.hidden = tab !== "pinned";
+    syncWidgetTabs(body, "pipeline", tab, next => setPipelineTab(widget, next));
   }
 
   async function loadSelectedPipelineRuns(widget, form) {
@@ -2550,6 +2676,7 @@
         resultHost.hidden = !want;
         toggle.textContent = want ? "▾" : "▸";
         toggle.title = want ? "Collapse pinned pipeline" : "Expand pinned pipeline";
+        toggle.setAttribute("aria-label", toggle.title);
         toggle.setAttribute("aria-expanded", String(want));
       };
       const setExpanded = (want) => {
@@ -2767,6 +2894,7 @@
   function ensureComboListEl() {
     if (comboListEl) return comboListEl;
     comboListEl = document.createElement("ul");
+    comboListEl.id = "pipeline-combo-list";
     comboListEl.className = "combo-list";
     comboListEl.setAttribute("role", "listbox");
     comboListEl.hidden = true;
@@ -2787,10 +2915,12 @@
       li.textContent = "no matches";
       comboListEl.appendChild(li);
     } else {
-      for (const name of items) {
+      for (const [index, name] of items.entries()) {
         const li = document.createElement("li");
+        li.id = `pipeline-combo-option-${index}`;
         li.className = "combo-item";
         li.setAttribute("role", "option");
+        li.setAttribute("aria-selected", "false");
         li.dataset.name = name;
         envLightNodes(name).forEach((n) => li.appendChild(n));
         li.addEventListener("mousedown", (e) => {
@@ -2803,6 +2933,7 @@
     }
     input.classList.toggle("combo-regex-bad", !regexOk && q !== "");
     comboActiveIndex = -1;
+    input.removeAttribute("aria-activedescendant");
     positionComboList(input);
     comboListEl.hidden = false;
     input.setAttribute("aria-expanded", "true");
@@ -2810,7 +2941,10 @@
 
   function closePipelineCombo() {
     if (comboListEl) comboListEl.hidden = true;
-    if (comboOwnerInput) comboOwnerInput.setAttribute("aria-expanded", "false");
+    if (comboOwnerInput) {
+      comboOwnerInput.setAttribute("aria-expanded", "false");
+      comboOwnerInput.removeAttribute("aria-activedescendant");
+    }
     comboOwnerInput = null;
     comboActiveIndex = -1;
   }
@@ -2837,16 +2971,21 @@
     if (!input) return;
     if (!comboListEl || comboListEl.hidden || comboOwnerInput !== input) {
       renderPipelineComboList(input);
-      return;
+      if (comboListEl.hidden) return;
     }
+    setComboActive(input, comboActiveIndex < 0 ? delta > 0 ? 0 : comboListEl.querySelectorAll(".combo-item").length - 1 : comboActiveIndex + delta);
+  }
+
+  function setComboActive(input, index) {
     const items = Array.from(comboListEl.querySelectorAll(".combo-item"));
     if (items.length === 0) return;
-    if (comboActiveIndex >= 0 && items[comboActiveIndex]) {
-      items[comboActiveIndex].classList.remove("active");
-    }
-    comboActiveIndex = (comboActiveIndex + delta + items.length) % items.length;
+    comboActiveIndex = (index + items.length) % items.length;
+    items.forEach((item, itemIndex) => {
+      item.classList.toggle("active", itemIndex === comboActiveIndex);
+      item.setAttribute("aria-selected", String(itemIndex === comboActiveIndex));
+    });
     const active = items[comboActiveIndex];
-    active.classList.add("active");
+    input.setAttribute("aria-activedescendant", active.id);
     active.scrollIntoView({ block: "nearest" });
   }
 
@@ -2854,6 +2993,11 @@
     const input = $(".pipeline-name-search", form);
     if (!input || input.dataset.wired === "1") return;
     input.dataset.wired = "1";
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-controls", "pipeline-combo-list");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-expanded", "false");
+    input.setAttribute("aria-label", "Pipeline name");
     input._pipelineNames = input._pipelineNames || [];
     ensureComboListEl();
 
@@ -2866,6 +3010,9 @@
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         moveComboActive(input, -1);
+      } else if ((e.key === "Home" || e.key === "End") && comboListEl && !comboListEl.hidden && comboOwnerInput === input) {
+        e.preventDefault();
+        setComboActive(input, e.key === "Home" ? 0 : comboListEl.querySelectorAll(".combo-item").length - 1);
       } else if (e.key === "Enter") {
         if (comboListEl && !comboListEl.hidden && comboOwnerInput === input) {
           e.preventDefault();
@@ -2874,6 +3021,12 @@
           if (pick) choosePipeline(input, pick.dataset.name);
         }
       } else if (e.key === "Escape") {
+        if (comboListEl && !comboListEl.hidden && comboOwnerInput === input) {
+          e.preventDefault();
+          e.stopPropagation();
+          closePipelineCombo();
+        }
+      } else if (e.key === "Tab") {
         closePipelineCombo();
       }
     });
@@ -3127,6 +3280,7 @@
         if (expandable) {
           tr.classList.add("expandable");
           tr.tabIndex = 0;
+          tr.setAttribute("aria-label", `Inspect ${columns.map(column => String(row[column] ?? "")).filter(Boolean).join(" · ")}`);
           tr.setAttribute("aria-expanded", "false");
           tr.addEventListener("click", (event) => {
             if (event.target.closest && event.target.closest("button, a, input, select, textarea")) return;
@@ -3153,7 +3307,7 @@
     if (rows.length > 10 || (opts && opts.alwaysFilter)) {
       const filterPlaceholder = (opts && opts.filterPlaceholder) || "filter rows (regex)…";
       const filter = el("input", {
-        class: "table-filter", type: "text", placeholder: filterPlaceholder,
+        class: "table-filter", type: "text", placeholder: filterPlaceholder, "aria-label": "Filter result rows",
         "aria-label": filterPlaceholder,
         autocomplete: "off", autocorrect: "off", spellcheck: "false",
       });
@@ -3345,9 +3499,10 @@
     resourceTab.addEventListener("click", () => activateTab(resourceTab));
     eventTab.addEventListener("click", () => activateTab(eventTab));
     tabs.addEventListener("keydown", (event) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
-      const nextTab = event.target === resourceTab ? eventTab : resourceTab;
+      const nextTab = event.key === "Home" ? resourceTab : event.key === "End" ? eventTab
+        : event.target === resourceTab ? eventTab : resourceTab;
       activateTab(nextTab);
       nextTab.focus();
     });
@@ -3573,6 +3728,7 @@
     const filter = el("input", {
       class: "table-filter errors-filter",
       type: "text",
+      "aria-label": "Filter stacks or log groups",
       placeholder: "filter stacks or log groups (regex)...",
       autocomplete: "off",
       autocorrect: "off",
@@ -3691,6 +3847,7 @@
       const search = el("input", {
         class: "lambda-search-input",
         type: "search",
+        "aria-label": "Filter Lambda functions",
         placeholder: "Search Lambda functions...",
       });
       const reloadBtn = el("button", { class: "btn", type: "button" }, "Reload");
@@ -3754,6 +3911,7 @@
       }
 
       function renderFunctionList() {
+        const focusKey = focusedKey(listHost);
         clear(listHost);
         const rows = filteredFunctions();
         if (rows.length === 0) {
@@ -3768,6 +3926,8 @@
             class: "lambda-row" + (active ? " active" : ""),
             type: "button",
             title: fn.arn || fn.name,
+            "data-focus-key": fn.name,
+            "aria-pressed": String(!!active),
           },
             el("span", { class: "lambda-row-name" }, fn.name || "—"),
             el("span", { class: "lambda-row-meta" },
@@ -3777,6 +3937,7 @@
           listHost.appendChild(row);
         });
         restoreResultStatus(listHost);
+        restoreKeyedFocus(listHost, focusKey);
       }
 
       function renderDetail() {
@@ -3842,7 +4003,7 @@
           return;
         }
 
-        const select = el("select", { class: "lambda-stream-select" });
+        const select = el("select", { class: "lambda-stream-select", "aria-label": "Lambda log stream" });
         state.streams.forEach(stream => {
           select.appendChild(el("option", { value: stream.name },
             `${stream.name} · ${timeLabel(stream.last_event_timestamp)}`));
@@ -4017,6 +4178,7 @@
       const search = el("input", {
         class: "lambda-search-input",
         type: "search",
+        "aria-label": "Filter CloudWatch log groups",
         placeholder: "Filter log groups (Enter searches AWS)...",
       });
       const reloadBtn = el("button", { class: "btn", type: "button" }, "Reload");
@@ -4087,6 +4249,7 @@
       }
 
       function renderGroupList() {
+        const focusKey = focusedKey(listHost);
         clear(listHost);
         const rows = filteredGroups();
         if (rows.length === 0) {
@@ -4103,6 +4266,8 @@
             class: "lambda-row" + (active ? " active" : ""),
             type: "button",
             title: group.arn || group.name,
+            "data-focus-key": group.name,
+            "aria-pressed": String(!!active),
           },
             el("span", { class: "lambda-row-name" }, envLightNodes(group.name || "—")),
             el("span", { class: "lambda-row-meta" },
@@ -4112,6 +4277,7 @@
           listHost.appendChild(row);
         });
         restoreResultStatus(listHost);
+        restoreKeyedFocus(listHost, focusKey);
       }
 
       function renderDetail() {
@@ -4166,7 +4332,7 @@
           streamHost.appendChild(el("div", { class: "muted small" }, "No log streams in this log group."));
           return;
         }
-        const select = el("select", { class: "lambda-stream-select" });
+        const select = el("select", { class: "lambda-stream-select", "aria-label": "CloudWatch log stream" });
         state.streams.forEach(stream => {
           select.appendChild(el("option", { value: stream.name },
             `${stream.name} · ${timeLabel(stream.last_event_timestamp)}`));
@@ -5025,15 +5191,7 @@
     const body = $(".aws-cli-body", widget);
     if (!body) return;
     body.dataset.tab = tab;
-    body.querySelectorAll(".cli-tab").forEach((btn) => {
-      const active = btn.dataset.tab === tab;
-      btn.classList.toggle("active", active);
-      btn.setAttribute("aria-selected", String(active));
-    });
-    const live = $(".cli-pane-live", body);
-    const pinned = $(".cli-pane-pinned", body);
-    if (live) live.hidden = tab !== "live";
-    if (pinned) pinned.hidden = tab !== "pinned";
+    syncWidgetTabs(body, "cli", tab, next => setCliTab(widget, next));
   }
 
   function pinCurrentCliCommand(widget, form) {
@@ -5131,6 +5289,7 @@
         resultHost.hidden = !want;
         toggle.textContent = want ? "▾" : "▸";
         toggle.title = want ? "Collapse pinned command" : "Expand pinned command";
+        toggle.setAttribute("aria-label", toggle.title);
         toggle.setAttribute("aria-expanded", String(want));
       };
       const setExpanded = (want) => {
@@ -5515,6 +5674,7 @@
           class: "lookup-input",
           type: "text",
           placeholder: "Resource name, ARN, or partial id...",
+          "aria-label": "Resource lookup query",
         }),
         el("div", { class: "lookup-results" }),
       ),
@@ -5846,25 +6006,15 @@
   }
 
   function openSidePanel() {
-    $("#side-panel").classList.add("open");
-    $("#side-panel").setAttribute("aria-hidden", "false");
-    $("#scrim").classList.add("open");
-    $("#scrim").hidden = false;
+    showPanel($("#side-panel"));
   }
-  function closeSidePanel() {
-    $("#side-panel").classList.remove("open");
-    $("#side-panel").setAttribute("aria-hidden", "true");
-    $("#scrim").classList.remove("open");
-    setTimeout(() => { $("#scrim").hidden = true; }, 220);
+  function closeSidePanel(options = {}) {
+    hidePanel($("#side-panel"), options);
   }
   $("#add-widget-btn").addEventListener("click", openSidePanel);
   $("#side-panel-close").addEventListener("click", closeSidePanel);
   $("#scrim").addEventListener("click", () => {
-    closeSidePanel();
-    closeSettingsPanel();
-    closeAuditPanel();
-    closeIdentityPanel();
-    closeWidgetConfigPanel();
+    closeActivePanel();
   });
 
   // Settings & audit panels — only meaningful when Tauri is present.
@@ -6213,11 +6363,23 @@
     widget.classList.add("fullscreen");
     document.body.classList.add("has-fullscreen-widget");
     fullscreenWidget = widget;
+    const button = $(".fs-btn", widget);
+    if (button) {
+      button.title = "Exit fullscreen";
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-pressed", "true");
+    }
     // Disable grid drag/resize while a widget is fullscreen.
     if (grid) grid.disable();
   }
   function exitFullscreen() {
     if (!fullscreenWidget) return;
+    const button = $(".fs-btn", fullscreenWidget);
+    if (button) {
+      button.title = "Fullscreen";
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-pressed", "false");
+    }
     fullscreenWidget.classList.remove("fullscreen");
     document.body.classList.remove("has-fullscreen-widget");
     fullscreenWidget = null;
@@ -6228,6 +6390,7 @@
     document.querySelectorAll(".fs-btn").forEach((btn) => {
       if (btn.dataset.wired === "1") return;
       btn.dataset.wired = "1";
+      btn.setAttribute("aria-pressed", String(!!btn.closest(".widget.fullscreen")));
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const widget = btn.closest(".widget");
@@ -6410,20 +6573,14 @@
       el("p", { class: "muted small" }, "Expand to load widget manifest and source."),
     );
 
-    panel.classList.add("open");
-    panel.setAttribute("aria-hidden", "false");
-    $("#scrim").classList.add("open");
-    $("#scrim").hidden = false;
+    showPanel(panel);
   }
 
-  function closeWidgetConfigPanel() {
+  function closeWidgetConfigPanel(options = {}) {
     invalidateRequests($("#cfg-source-body"));
     const panel = $("#widget-config-panel");
     if (!panel) return;
-    panel.classList.remove("open");
-    panel.setAttribute("aria-hidden", "true");
-    $("#scrim").classList.remove("open");
-    setTimeout(() => { $("#scrim").hidden = true; }, 220);
+    hidePanel(panel, options);
     currentCfgTile = null;
     currentCfgDraft = null;
   }
@@ -6487,6 +6644,7 @@
   function renderColorSwatches() {
     const wrap = $("#cfg-color-swatches");
     if (!wrap) return;
+    const focusKey = focusedKey(wrap);
     clear(wrap);
     const colors = ["neutral", ...ALLOWED_HEADER_COLORS];
     const current = currentCfgDraft.header_color || "neutral";
@@ -6495,6 +6653,9 @@
         type: "button",
         class: "color-swatch" + (c === current ? " active" : ""),
         "data-color": c,
+        "data-focus-key": c,
+        "aria-label": `Header color: ${c}`,
+        "aria-pressed": String(c === current),
         title: c,
       });
       btn.addEventListener("click", () => {
@@ -6503,6 +6664,7 @@
       });
       wrap.appendChild(btn);
     });
+    restoreKeyedFocus(wrap, focusKey);
   }
 
   async function loadSourceIntoPanel(widgetName) {
@@ -6623,16 +6785,14 @@
     });
   }
 
-  // Esc exits fullscreen first; if no fullscreen, closes side panel.
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && fullscreenWidget) {
-      e.preventDefault();
-      exitFullscreen();
-    }
-  }, true);
-
   // ===== Boot =====
   async function boot() {
+    const topbar = $(".topbar");
+    if (topbar) {
+      const updateHeight = () => document.documentElement.style.setProperty("--topbar-height", `${topbar.offsetHeight}px`);
+      updateHeight();
+      new ResizeObserver(updateHeight).observe(topbar);
+    }
     pingCore();
     if (isTauri) {
       $("#account-select").disabled = true;
