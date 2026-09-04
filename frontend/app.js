@@ -101,7 +101,13 @@
     }
     observeDiagnostics(result);
     if (["settings_set", "dashboard_set", "policy_set"].includes(command) && result?.ok === false) {
-      throw new Error("Changes were rejected. Review the input and try again.");
+      const errorType = ["StorageWriteFailed", "StorageSuperseded"].includes(result.error_type) ? result.error_type : "InvalidRequest";
+      const error = new Error(errorType === "StorageWriteFailed"
+        ? "Changes could not be saved. Try again."
+        : errorType === "StorageSuperseded" ? "Save was superseded by a newer change. Review and retry if needed."
+        : "Changes were rejected. Review the input and try again.");
+      error.error_type = errorType;
+      throw error;
     }
     return result;
   } : null;
@@ -495,13 +501,63 @@
 
   // ===== Settings (Tauri only) =====
   let cachedSettings = null;
+  let settingsStorageReady = !isTauri;
+  let settingsLoadId = 0;
+  let settingsDraftRevision = 0;
+  let settingsDraftDirty = false;
+  let settingsReadFailed = false;
+
+  function showStorageLoadWarning(store, retry, recover) {
+    const id = `${store}-storage-warning`;
+    let warning = $("#" + id);
+    if (!warning) {
+      warning = el("div", { id, class: "storage-load-warning", role: "status" },
+        el("span", {}, `${store === "settings" ? "Settings" : "Dashboard"} could not be loaded. Saved data has not been replaced.`),
+        el("button", { class: "btn btn-ghost small", type: "button", onclick: retry }, "Retry load"),
+        el("button", { class: "btn btn-ghost small", type: "button", onclick: recover },
+          store === "settings" ? "Replace settings with defaults" : "Reset layout"));
+      $(".dashboard").before(warning);
+    }
+  }
+
+  function fillSettingsForm(s) {
+    fillIfNonDefault("settings-aws-config-path", s.aws_config_path, "aws_config_path");
+    fillIfNonDefault("settings-sso-session", s.sso_session_name, "sso_session_name");
+    fillIfNonDefault("settings-default-profile", s.default_profile, "default_profile");
+    fillIfNonDefault("settings-default-region", s.default_region, "default_region");
+    settingsDraftDirty = false;
+  }
+
+  async function retrySettingsLoad() {
+    const draft = settingsDraftRevision;
+    const s = await loadSettings();
+    if (s && draft === settingsDraftRevision && !settingsDraftDirty) fillSettingsForm(s);
+  }
 
   async function loadSettings() {
-    if (!isTauri) return null;
+    if (!isTauri || settingsSavePending) return null;
+    const request = ++settingsLoadId;
+    settingsStorageReady = false;
+    $("#settings-save").disabled = true;
     try {
-      cachedSettings = await tauriInvoke("settings_get");
+      const loaded = await tauriInvoke("settings_get");
+      if (request !== settingsLoadId) return null;
+      if (!loaded || typeof loaded !== "object" || Array.isArray(loaded)
+          || loaded.ok === false || loaded._storage?.status === "failed") throw new Error("Settings unavailable");
+      cachedSettings = loaded;
+      settingsStorageReady = true;
+      $("#settings-storage-warning")?.remove();
+      $("#settings-save").disabled = settingsSavePending;
+      if (settingsReadFailed) $("#settings-status").textContent = settingsDraftDirty ? "Current edits are not saved." : "";
+      settingsReadFailed = false;
       return cachedSettings;
     } catch (e) {
+      if (request !== settingsLoadId) return null;
+      settingsStorageReady = false;
+      settingsReadFailed = true;
+      $("#settings-save").disabled = true;
+      $("#settings-status").textContent = "Settings could not be loaded. Retry loading or explicitly replace them with defaults.";
+      showStorageLoadWarning("settings", retrySettingsLoad, () => saveSettings({ preventDefault() {} }, { recover: true }));
       console.warn("Settings could not be loaded.");
       return null;
     }
@@ -529,14 +585,14 @@
     panel.setAttribute("aria-hidden", "false");
     $("#scrim").classList.add("open");
     $("#scrim").hidden = false;
-    // Re-fetch on open so external edits to settings.json are reflected.
+    // Re-fetch external edits, while preserving the user's unsaved draft.
+    const draft = settingsDraftRevision;
     loadSettings().then((s) => {
-      if (!s) return;
-      fillIfNonDefault("settings-aws-config-path", s.aws_config_path, "aws_config_path");
-      fillIfNonDefault("settings-sso-session",     s.sso_session_name, "sso_session_name");
-      fillIfNonDefault("settings-default-profile", s.default_profile, "default_profile");
-      fillIfNonDefault("settings-default-region",  s.default_region, "default_region");
-      $("#settings-status").textContent = "";
+      if (!s || draft !== settingsDraftRevision) return;
+      if (!settingsDraftDirty) {
+        fillSettingsForm(s);
+        $("#settings-status").textContent = "";
+      }
       loadPolicy();
     });
   }
@@ -549,12 +605,15 @@
   }
 
   let settingsSavePending = false;
-  async function saveSettings(e) {
+  async function saveSettings(e, options = {}) {
     e.preventDefault();
     if (!isTauri || settingsSavePending) return;
+    if (!settingsStorageReady && !options.recover) return;
     // Send empty strings for blank inputs — the backend treats empty as
     // "fall back to default" so the user doesn't need to retype defaults.
-    const params = {
+    const params = options.recover ? {
+      aws_config_path: "", sso_session_name: "", default_profile: "", default_region: "",
+    } : {
       aws_config_path:   $("#settings-aws-config-path").value.trim(),
       sso_session_name:  $("#settings-sso-session").value.trim(),
       default_profile:   $("#settings-default-profile").value.trim(),
@@ -564,13 +623,25 @@
     status.textContent = "Saving…";
     const configuration = configurationGeneration;
     const selection = currentSelectionId;
+    const draft = settingsDraftRevision;
+    ++settingsLoadId; // An older read cannot replace a newly accepted save.
     settingsSavePending = true;
     $("#settings-save").disabled = true;
     try {
       const saved = await tauriInvoke("settings_set", { params });
       if (configuration !== configurationGeneration) return;
+      ++settingsLoadId;
       cachedSettings = saved;
-      status.textContent = "Saved.";
+      settingsStorageReady = true;
+      settingsReadFailed = false;
+      $("#settings-storage-warning")?.remove();
+      if (draft === settingsDraftRevision) {
+        if (options.recover) fillSettingsForm(saved);
+        settingsDraftDirty = false;
+        status.textContent = "Saved.";
+      } else {
+        status.textContent = "Previous values saved. Current edits are not saved.";
+      }
       // A rejected save leaves the draft and verified view intact. A late
       // accepted callback also cannot replace a newer account selection.
       if (selection !== currentSelectionId) return;
@@ -603,7 +674,7 @@
       status.textContent = "Save failed: " + err;
     } finally {
       settingsSavePending = false;
-      $("#settings-save").disabled = false;
+      $("#settings-save").disabled = !settingsStorageReady;
     }
   }
 
@@ -5144,6 +5215,10 @@
     $("#settings-panel-close").addEventListener("click", closeSettingsPanel);
     $("#settings-cancel").addEventListener("click", closeSettingsPanel);
     $("#settings-form").addEventListener("submit", saveSettings);
+    $("#settings-form").addEventListener("input", () => {
+      settingsDraftRevision++;
+      settingsDraftDirty = true;
+    });
     $("#policy-save")?.addEventListener("click", savePolicy);
     $("#policy-reload")?.addEventListener("click", loadPolicy);
     // input re-renders content and re-syncs scroll; scroll only re-syncs.
@@ -5267,6 +5342,12 @@ def fetch(ctx):
   const LAYOUT_SAVE_DEBOUNCE_MS = 400;
   let grid = null;
   let layoutSaveTimer = null;
+  let dashboardStorageReady = !isTauri;
+  let restoringLayout = false;
+  let layoutSavePending = false;
+  let layoutSaveQueued = false;
+  let layoutLoadId = 0;
+  let starterLayout = [];
 
   function catalogWidget(type) {
     return prebuiltWidgets.find(w => w.gsId === type) || {
@@ -5370,14 +5451,25 @@ def fetch(ctx):
       animate: true,
       disableOneColumnMode: false,
     }, "#grid-stack");
+    starterLayout = grid.save(false).map(pickTileFields).filter(tile => tile.id);
 
     // Restore saved layout if present. In Tauri mode the source of truth is
     // the backend dashboard file; the localStorage cache is only used in
     // browser mode (no Tauri shell).
     const saved = await loadLayout();
-    if (saved && Array.isArray(saved) && saved.length > 0) {
+    if (Array.isArray(saved)) restoreLayout(saved);
+
+    // Persist only after a valid/missing file has been established. A failed
+    // read must never turn the preview/default layout into a replacement file.
+    grid.on("change added removed resizestop dragstop", () => scheduleSaveLayout());
+  }
+
+  function restoreLayout(saved) {
+    if (!grid) return;
+    restoringLayout = true;
+    try {
       saved.forEach(ensureSavedTileElement);
-      try { grid.load(saved); } catch (e) { console.warn("Could not restore layout."); }
+      grid.load(saved);
       // GridStack only restores position/size; per-tile config is opaque to
       // it. Walk the saved entries and stamp config back onto each tile.
       saved.forEach(t => {
@@ -5391,32 +5483,48 @@ def fetch(ctx):
         }
       });
       document.querySelectorAll(".grid-stack-item").forEach(renderWidgetTile);
+    } catch (_) {
+      dashboardStorageReady = false;
+      showStorageLoadWarning("dashboard", retryLayoutLoad, resetLayout);
+      console.warn("Could not restore layout.");
+    } finally {
+      restoringLayout = false;
     }
-
-    // Persist on any change.
-    grid.on("change added removed resizestop dragstop", () => scheduleSaveLayout());
   }
 
   function scheduleSaveLayout() {
-    if (!grid) return;
+    if (!grid || restoringLayout || (isTauri && !dashboardStorageReady)) return;
     if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
     layoutSaveTimer = setTimeout(saveLayout, LAYOUT_SAVE_DEBOUNCE_MS);
   }
 
+  function setLayoutSavePending(pending) {
+    layoutSavePending = pending;
+    $("#reset-layout-btn").disabled = pending;
+  }
+
   async function saveLayout() {
-    if (!grid) return;
+    if (!grid || restoringLayout || (isTauri && !dashboardStorageReady)) return;
+    if (layoutSavePending) { layoutSaveQueued = true; return; }
     let data;
     try {
       data = grid.save(false); // false = positions only, no inner HTML
     } catch (_) { return; }
     const tiles = (data || []).map(pickTileFields).filter(t => t.id);
     if (isTauri) {
+      setLayoutSavePending(true);
       try {
         await tauriInvoke("dashboard_set", { params: { tiles } });
         $("#layout-save-warning")?.remove();
       } catch (e) {
         console.warn("Dashboard could not be saved.");
         showLayoutSaveWarning("Dashboard changes were not saved. The current layout is still displayed.");
+      } finally {
+        setLayoutSavePending(false);
+        if (layoutSaveQueued) {
+          layoutSaveQueued = false;
+          if (dashboardStorageReady) saveLayout();
+        }
       }
       return;
     }
@@ -5428,13 +5536,25 @@ def fetch(ctx):
 
   async function loadLayout() {
     if (isTauri) {
+      const request = ++layoutLoadId;
+      dashboardStorageReady = false;
+      layoutSaveQueued = false;
+      if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
       try {
         const resp = await tauriInvoke("dashboard_get");
-        const tiles = (resp && Array.isArray(resp.tiles)) ? resp.tiles : [];
-        return tiles.length > 0 ? tiles : null;
+        if (request !== layoutLoadId) return undefined;
+        if (!resp || resp.ok === false || resp._storage?.status === "failed" || !Array.isArray(resp.tiles)) {
+          throw new Error("Dashboard unavailable");
+        }
+        dashboardStorageReady = true;
+        $("#dashboard-storage-warning")?.remove();
+        return resp._storage?.status === "missing" ? null : resp.tiles;
       } catch (e) {
+        if (request !== layoutLoadId) return undefined;
+        dashboardStorageReady = false;
+        showStorageLoadWarning("dashboard", retryLayoutLoad, resetLayout);
         console.warn("Dashboard could not be loaded.");
-        return null;
+        return undefined;
       }
     }
     try {
@@ -5445,23 +5565,44 @@ def fetch(ctx):
     }
   }
 
-  function showLayoutSaveWarning(message) {
+  function showLayoutSaveWarning(message, retry = saveLayout) {
     let warning = $("#layout-save-warning");
     if (!warning) {
-      warning = el("p", { id: "layout-save-warning", class: "layout-save-warning", role: "status" });
+      warning = el("div", { id: "layout-save-warning", class: "layout-save-warning", role: "status" },
+        el("span", {}), el("button", { class: "btn btn-ghost small", type: "button" }));
       $(".dashboard").before(warning);
     }
-    warning.textContent = message;
+    warning.querySelector("span").textContent = message;
+    const button = warning.querySelector("button");
+    button.textContent = retry === resetLayout ? "Retry reset" : "Retry save";
+    button.onclick = retry;
+  }
+
+  async function retryLayoutLoad() {
+    if (layoutSavePending) return;
+    const saved = await loadLayout();
+    if (saved !== undefined) restoreLayout(saved === null ? starterLayout : saved);
   }
 
   async function resetLayout() {
     if (isTauri) {
+      if (layoutSavePending) return;
+      if (layoutSaveTimer) clearTimeout(layoutSaveTimer);
+      layoutSaveQueued = false;
+      ++layoutLoadId;
+      const wasReady = dashboardStorageReady;
+      dashboardStorageReady = false;
+      setLayoutSavePending(true);
       try {
-        await tauriInvoke("dashboard_set", { params: { tiles: [] } });
+        await tauriInvoke("dashboard_set", { params: { tiles: starterLayout } });
       } catch (e) {
         console.warn("Dashboard reset could not be saved.");
-        showLayoutSaveWarning("Layout reset was not saved. The current layout is unchanged.");
+        showLayoutSaveWarning("Layout reset was not saved. The current layout is unchanged.", resetLayout);
         return;
+      } finally {
+        dashboardStorageReady = wasReady;
+        layoutSaveQueued = false;
+        setLayoutSavePending(false);
       }
       location.reload();
       return;

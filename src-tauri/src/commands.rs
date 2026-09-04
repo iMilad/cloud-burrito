@@ -109,7 +109,10 @@ async fn aws_set_account_request(
     params: Value,
     request: &mut RequestEnvelope,
 ) -> Result<Value, String> {
-    let user_settings = settings::load(&state.runtime.paths);
+    let user_settings = match load_settings(state) {
+        Ok(settings) => settings,
+        Err(error) => return Ok(error),
+    };
     let cfg_path = config_path_from_settings(&user_settings);
     let revision = state.observe_config_path(&cfg_path);
     let profile = params
@@ -195,7 +198,9 @@ async fn aws_set_account_request(
             ))
         }
     };
-    refresh_configuration_revision(state);
+    if let Err(error) = refresh_configuration_revision(state) {
+        return Ok(error);
+    }
     if let Err(error) = ctx.ensure_current(&session) {
         return Ok(finish_connection_failure(
             state,
@@ -274,10 +279,22 @@ fn superseded() -> Value {
     )
 }
 
-fn refresh_configuration_revision(state: &AppState) -> u64 {
-    state.observe_config_path(&config_path_from_settings(&settings::load(
-        &state.runtime.paths,
-    )))
+fn load_settings(state: &AppState) -> Result<Value, Value> {
+    match settings::load(&state.runtime.storage) {
+        Ok(settings) => {
+            state.observe_config_path(&config_path_from_settings(&settings));
+            Ok(settings)
+        }
+        Err(error) => {
+            state.invalidate_settings();
+            Err(error.response("settings"))
+        }
+    }
+}
+
+fn refresh_configuration_revision(state: &AppState) -> Result<u64, Value> {
+    let settings = load_settings(state)?;
+    Ok(state.observe_config_path(&config_path_from_settings(&settings)))
 }
 
 fn finish_connection_failure(
@@ -287,7 +304,9 @@ fn finish_connection_failure(
     message: &str,
     needs_sso_login: bool,
 ) -> Value {
-    refresh_configuration_revision(state);
+    if let Err(error) = refresh_configuration_revision(state) {
+        return error;
+    }
     let mut connection = state.connection.lock();
     if connection.attempt != attempt {
         return superseded();
@@ -337,7 +356,7 @@ struct ResolvedContext {
 }
 
 fn resolve_widget_ctx(state: &AppState, params: &Value) -> Result<ResolvedContext, Value> {
-    let user_settings = settings::load(&state.runtime.paths);
+    let user_settings = load_settings(state)?;
     let path = config_path_from_settings(&user_settings);
     let revision = state.observe_config_path(&path);
     let explicit = params
@@ -404,7 +423,7 @@ fn validate_request_context(
     resolved: &ResolvedContext,
     session: &std::sync::Arc<aws::context::VerifiedSession>,
 ) -> Result<(), Value> {
-    refresh_configuration_revision(state);
+    refresh_configuration_revision(state)?;
     if let Err(error) = resolved.context.ensure_current(session) {
         // An older result must not tear down a newer verified session on the
         // same context. The refresh that invalidated a context owns its failure.
@@ -662,9 +681,13 @@ pub async fn widget_get_source(params: Value) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn settings_get(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(state
+    Ok(settings_get_impl(&state))
+}
+
+fn settings_get_impl(state: &AppState) -> Value {
+    state
         .runtime
-        .with_diagnostics(settings::load(&state.runtime.paths)))
+        .with_diagnostics(load_settings(state).unwrap_or_else(|error| error))
 }
 
 #[tauri::command]
@@ -686,16 +709,25 @@ fn settings_set_impl(state: &AppState, params: Value) -> Value {
     if let Some(error) = local_validation(state, "settings_set", &params) {
         return error;
     }
-    let result = settings::save(&state.runtime.paths, &params);
-    refresh_configuration_revision(state);
+    let result = match settings::save(&state.runtime.storage, &params) {
+        Ok(result) => match refresh_configuration_revision(state) {
+            Ok(_) => result,
+            Err(error) => error,
+        },
+        Err(error) => error.response("settings"),
+    };
     state.runtime.with_diagnostics(result)
 }
 
 #[tauri::command]
 pub async fn dashboard_get(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(state
-        .runtime
-        .with_diagnostics(dashboard::load(&state.runtime.paths)))
+    Ok(dashboard_get_impl(&state))
+}
+
+fn dashboard_get_impl(state: &AppState) -> Value {
+    state.runtime.with_diagnostics(
+        dashboard::load(&state.runtime.storage).unwrap_or_else(|error| error.response("dashboard")),
+    )
 }
 
 #[tauri::command]
@@ -707,9 +739,10 @@ fn dashboard_set_impl(state: &AppState, params: Value) -> Value {
     if let Some(error) = local_validation(state, "dashboard_set", &params) {
         return error;
     }
-    state
-        .runtime
-        .with_diagnostics(dashboard::save(&state.runtime.paths, &params["tiles"]))
+    state.runtime.with_diagnostics(
+        dashboard::save(&state.runtime.storage, &params["tiles"])
+            .unwrap_or_else(|error| error.response("dashboard")),
+    )
 }
 
 #[tauri::command]
@@ -734,10 +767,18 @@ fn audit_tail_impl(state: &AppState, params: Value) -> Value {
 
 #[tauri::command]
 pub async fn aws_list_profiles(state: State<'_, AppState>) -> Result<Value, String> {
-    let cfg_path = config_path_from_settings(&settings::load(&state.runtime.paths));
+    Ok(aws_list_profiles_impl(&state))
+}
+
+fn aws_list_profiles_impl(state: &AppState) -> Value {
+    let user_settings = match load_settings(state) {
+        Ok(settings) => settings,
+        Err(error) => return state.runtime.with_diagnostics(error),
+    };
+    let cfg_path = config_path_from_settings(&user_settings);
     let mut info = state.runtime.aws.inspect_config(&cfg_path);
     info["allowed_regions"] = json!(settings::ALLOWED_REGIONS);
-    Ok(state.runtime.with_diagnostics(info))
+    state.runtime.with_diagnostics(info)
 }
 
 #[tauri::command]
@@ -854,7 +895,9 @@ async fn aws_auth_status_request(
     state: &AppState,
     request: &mut RequestEnvelope,
 ) -> Result<Value, String> {
-    refresh_configuration_revision(state);
+    if let Err(error) = refresh_configuration_revision(state) {
+        return Ok(error);
+    }
     let (last, set_at, status, attempt) = {
         let connection = state.connection.lock();
         (

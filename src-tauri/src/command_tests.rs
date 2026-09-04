@@ -754,10 +754,11 @@ async fn settings_path_switch_invalidates_pinned_cache_and_pending_selection() {
     assert!(futures::poll!(&mut pending).is_pending());
     let previous_revision = fixture.state.connection.lock().settings_revision;
     settings::save(
-        &fixture.state.runtime.paths,
+        &fixture.state.runtime.storage,
         &json!({"aws_config_path": "synthetic-config-b.ini"}),
-    );
-    let revision = refresh_configuration_revision(&fixture.state);
+    )
+    .unwrap();
+    let revision = refresh_configuration_revision(&fixture.state).unwrap();
     assert!(revision > previous_revision);
     let current_attempt = fixture.state.connection.lock().attempt;
     assert!(fixture
@@ -1228,9 +1229,10 @@ async fn invalidated_cli_waits_for_cancellation_and_runner_completion_before_ret
             }
             "path" => {
                 settings::save(
-                    &fixture.state.runtime.paths,
+                    &fixture.state.runtime.storage,
                     &json!({"aws_config_path": "synthetic-changed-config.ini"}),
-                );
+                )
+                .unwrap();
             }
             "profile" => {
                 fixture
@@ -1625,4 +1627,78 @@ async fn provider_and_policy_failures_do_not_echo_private_source_messages() {
         let error = aws::policy::Policy::parse(text).unwrap_err();
         assert!(!error.message.contains("synthetic-private-policy-marker"));
     }
+}
+
+#[tokio::test]
+async fn broken_settings_block_every_provider_entry_and_clear_verified_context() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_STORAGE", 3000).await;
+    let snapshot_calls = fixture.aws.snapshot_calls.load(Ordering::SeqCst);
+    let path = fixture.state.runtime.paths.data_file("settings.json");
+    std::fs::write(&path, "{synthetic-invalid-json").unwrap();
+    let results = [
+        settings_get_impl(&fixture.state),
+        aws_list_profiles_impl(&fixture.state),
+        aws_set_account_impl(&fixture.state, demo("demo-a", ACCOUNT_A))
+            .await
+            .unwrap(),
+        aws_auth_status_impl(&fixture.state).await.unwrap(),
+        widget_fetch_impl(&fixture.state, cli_params())
+            .await
+            .unwrap(),
+    ];
+    for result in results {
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error_type"], "StorageInvalid");
+        assert!(!result.to_string().contains("synthetic-invalid-json"));
+        assert!(!result.to_string().contains(path.to_str().unwrap()));
+    }
+    assert!(fixture.state.current_ctx().is_none());
+    assert!(fixture.state.connection.lock().overrides.is_empty());
+    assert_eq!(
+        fixture.aws.snapshot_calls.load(Ordering::SeqCst),
+        snapshot_calls
+    );
+    assert_eq!(fixture.process.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "{synthetic-invalid-json"
+    );
+    let failed_revision = fixture.state.connection.lock().settings_revision;
+    let recovered = settings_set_impl(&fixture.state, json!({"default_region":"us-east-1"}));
+    assert_eq!(recovered["_storage"]["status"], "saved");
+    assert!(fixture.state.connection.lock().settings_revision > failed_revision);
+    assert!(fixture.state.current_ctx().is_none());
+    fixture
+        .connect_a("CB_SYNTHETIC_RECOVERED_STORAGE", 3000)
+        .await;
+    assert!(fixture.state.current_ctx().is_some());
+}
+
+#[test]
+fn persistence_commands_distinguish_first_run_empty_read_and_write_failure() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        dashboard_get_impl(&fixture.state)["_storage"]["status"],
+        "missing"
+    );
+    assert_eq!(
+        dashboard_set_impl(&fixture.state, json!({"tiles":[]}))["_storage"]["status"],
+        "saved"
+    );
+    assert_eq!(
+        dashboard_get_impl(&fixture.state)["_storage"]["status"],
+        "loaded"
+    );
+    let path = fixture.state.runtime.paths.data_file("settings.json");
+    std::fs::create_dir_all(&path).unwrap();
+    assert_eq!(
+        settings_get_impl(&fixture.state)["error_type"],
+        "StorageReadFailed"
+    );
+    let response = settings_set_impl(&fixture.state, json!({"default_region":"us-east-1"}));
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error_type"], "StorageWriteFailed");
+    assert_eq!(response["_storage"]["status"], "failed");
+    assert!(path.is_dir());
 }

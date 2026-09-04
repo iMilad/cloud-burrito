@@ -277,7 +277,7 @@ test("uses CodeArtifact refresh as the first-load and reload action", async ({ p
           if (command === "settings_get") {
             return { default_profile: identity.profile, default_region: identity.region };
           }
-          if (command === "dashboard_get") return { tiles: [] };
+          if (command === "dashboard_get") return { tiles: [], _storage: { status: "missing" } };
           if (command === "aws_list_profiles") return {
             profiles: [{ name: identity.profile, account_id: identity.account_id, region: identity.region }],
             config_path: "/synthetic/aws/config",

@@ -253,9 +253,9 @@ test("validation-rejected dashboard save is visible and reset keeps the current 
     window.__resetSentinel = "synthetic-page-lifetime";
   });
   await surface.locator(".cli-pin-btn").click();
-  await expect(page.locator("#layout-save-warning")).toHaveText("Dashboard changes were not saved. The current layout is still displayed.");
+  await expect(page.locator("#layout-save-warning > span")).toHaveText("Dashboard changes were not saved. The current layout is still displayed.");
   await page.locator("#reset-layout-btn").click();
-  await expect(page.locator("#layout-save-warning")).toHaveText("Layout reset was not saved. The current layout is unchanged.");
+  await expect(page.locator("#layout-save-warning > span")).toHaveText("Layout reset was not saved. The current layout is unchanged.");
   expect(await page.evaluate(() => window.__resetSentinel)).toBe("synthetic-page-lifetime");
   await expect(surface).toHaveCount(1);
   await expect(surface.locator(".pipeline-pin-card")).toHaveCount(1);

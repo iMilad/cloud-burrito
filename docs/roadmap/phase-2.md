@@ -1,6 +1,6 @@
 # P2 — Make the core dependable
 
-Status: **Planning complete; implementation not started; validation pending.**
+Status: **P2-01 complete locally; P2-02 next. Each P2 unit is validated and committed separately; native and live-provider acceptance remains pending.**
 
 Source baseline: `0.2.9`, commit `095d1ad`, reviewed 2026-09-03. This document changes no application behavior and records no new test result. Planning does not wait for laptop availability; native acceptance remains P5.
 
@@ -39,6 +39,8 @@ P1 now supplies these interfaces; see [P1-06 evidence](p1-06-evidence.md) for th
 All units below are **not started**. Review and complete one unit before combining unrelated changes. Each completion record should identify the diff, journey IDs, relevant automated evidence, remaining native checks, and known limitations.
 
 ### P2-01 — Make persistence truthful
+
+**Complete locally:** [implementation and validation evidence](p2-01-evidence.md).
 
 **Scope:** settings/dashboard storage and command responses; CB-J05.
 

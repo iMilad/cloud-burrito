@@ -1360,6 +1360,20 @@ body.has-fullscreen-widget .topbar { z-index: 201; } /* keep topbar above the FS
   margin: 12px 18px 0;
   color: var(--warning);
 }
+.storage-load-warning {
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--bg-elev);
+}
+.storage-load-warning, .layout-save-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
 .audit-table tr.audit-fail td { color: var(--error); }
 .audit-table tr.audit-kind-aws-blocked td { color: var(--error); }
 .audit-table tr.audit-kind-aws-blocked td:nth-child(2) {

@@ -26,6 +26,7 @@ pub(crate) struct ConnectionState {
     pub attempt: u64,
     pub settings_revision: u64,
     config_path: Option<String>,
+    settings_failed: bool,
     pub status: &'static str,
     pub active: Option<AwsContext>,
     pub overrides: HashMap<PinnedKey, CachedContext>,
@@ -39,6 +40,7 @@ impl Default for ConnectionState {
             attempt: 0,
             settings_revision: 0,
             config_path: None,
+            settings_failed: false,
             status: "disconnected",
             active: None,
             overrides: HashMap::new(),
@@ -73,7 +75,8 @@ impl AppState {
     /// the context's exact parsed configuration snapshot.
     pub(crate) fn observe_config_path(&self, path: &str) -> u64 {
         let mut state = self.connection.lock();
-        if state.config_path.as_deref() != Some(path) {
+        if state.settings_failed || state.config_path.as_deref() != Some(path) {
+            state.settings_failed = false;
             let was_configured = state.config_path.is_some();
             state.config_path = Some(path.to_string());
             state.settings_revision += 1;
@@ -91,6 +94,20 @@ impl AppState {
             }
         }
         state.settings_revision
+    }
+
+    /// A broken app-settings file cannot leave a formerly verified context usable.
+    pub(crate) fn invalidate_settings(&self) {
+        let mut state = self.connection.lock();
+        if !state.settings_failed {
+            state.settings_failed = true;
+            state.settings_revision += 1;
+            state.attempt += 1;
+        }
+        state.active = None;
+        state.overrides.clear();
+        state.set_account_at = None;
+        state.status = "failed";
     }
 
     pub(crate) fn begin_attempt(&self, details: Value, settings_revision: u64) -> Option<u64> {

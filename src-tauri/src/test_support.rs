@@ -77,19 +77,24 @@ mod tests {
         let left = left_dir.paths();
         let right = right_dir.paths();
 
-        settings::save(&left, &json!({"default_profile": "synthetic-left"}));
-        assert_eq!(settings::load(&right)["default_profile"], json!(""));
-        settings::save(&right, &json!({"default_profile": "synthetic-right"}));
+        let left_store = crate::storage::Store::new(left.clone());
+        let right_store = crate::storage::Store::new(right.clone());
+        settings::save(&left_store, &json!({"default_profile": "synthetic-left"})).unwrap();
         assert_eq!(
-            settings::load(&left)["default_profile"],
+            settings::load(&right_store).unwrap()["default_profile"],
+            json!("")
+        );
+        settings::save(&right_store, &json!({"default_profile": "synthetic-right"})).unwrap();
+        assert_eq!(
+            settings::load(&left_store).unwrap()["default_profile"],
             json!("synthetic-left")
         );
 
-        dashboard::save(&left, &json!([{"id": "left-tile"}]));
-        assert_eq!(dashboard::load(&right)["tiles"], json!([]));
-        dashboard::save(&right, &json!([{"id": "right-tile"}]));
+        dashboard::save(&left_store, &json!([{"id": "left-tile"}])).unwrap();
+        assert_eq!(dashboard::load(&right_store).unwrap()["tiles"], json!([]));
+        dashboard::save(&right_store, &json!([{"id": "right-tile"}])).unwrap();
         assert_eq!(
-            dashboard::load(&left)["tiles"],
+            dashboard::load(&left_store).unwrap()["tiles"],
             json!([{"id": "left-tile"}])
         );
 

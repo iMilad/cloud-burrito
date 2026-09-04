@@ -1,6 +1,6 @@
 # Cloud Burrito — From working tool to public beta
 
-**P1-01 through P1-06 complete locally. P2-01 is next. P2–P4 remain planned; device tests deferred.**
+**P1 and P2-01 complete locally. P2-02 next; subsequent P2 units and P3–P4 remain planned; device tests deferred.**
 
 Decision reference: 2026-09-03. Keep Rust + Tauri. P1-01–03 are committed locally in `a879851`, with their historical results in [P1-01](p1-01-evidence.md), [P1-02](p1-02-evidence.md), and [P1-03 evidence](p1-03-evidence.md). P1-04 is locally implemented and validated; [P1-04 evidence](p1-04-evidence.md) records the results for its separately authorized local commit. No push or live AWS work is included. Laptop checks remain deferred, and no release state has changed.
 
@@ -40,7 +40,9 @@ A dependent unit may consume a reviewed interface fixture before a whole phase f
 
 ## Current implementation progress
 
-**P1-01–06 are complete locally. P2-01 is next.** No Windows or Ubuntu input was required for these offline implementation slices.
+**P1 and P2-01 are complete locally. P2-02 is next.**
+
+[P2-01 evidence](p2-01-evidence.md): 177 Rust, 15 Node and 40 browser tests pass; truthful storage, controlled write faults, preserved drafts and explicit recovery. The user authorized all P2 units sequentially with a separate local commit per unit, without push or AWS. No Windows or Ubuntu input was required for these offline implementation slices.
 
 P1-01 introduced explicit test storage and fake identity/process boundaries, isolated the pinned-context persistence test, and demonstrated delayed completions and zero-spawn denial. Its historical checks remain in [P1-01 evidence](p1-01-evidence.md).
 
@@ -52,7 +54,7 @@ P1-03 adds explicit legacy/named-session SSO configuration, supported named-sess
 
 The child execution deadline is the earlier of 30 seconds or credential expiry; stdout/stderr have 2 MiB/256 KiB streaming caps. Affected-context invalidation is monitored every 100 ms, and cancellation/caller drop retain direct-child termination/reap ownership. Cleanup can outlast the execution deadline while awaiting OS-confirmed exit; only an empty isolated directory is removed, so a nonempty directory can remain. Raw stderr is withheld from the UI and exact credential values are redacted from runner errors. Cleanup failure survives a superseded context as the stable `CliCleanupFailed` UI/audit error; a controlled command regression covers that ordering.
 
-At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: P2-01**, truthful persistence. Device and live-provider acceptance remain attached to their later gates.
+At the P1-04 boundary, the full Rust library suite passed **128 tests**, with no failed, ignored or filtered tests; **5 Node production-handler tests** and **13 release-helper tests** also pass. The repository security check exits successfully. Its cached dependency audit retains 20 allowed warnings and does not certify fresh advisories; see [P1-04 evidence](p1-04-evidence.md) for scoped privacy results and scanner limitations. These checks cannot establish whole-process-tree termination, actual AWS CLI execution or native OS cleanup. P1-04 is recorded in local commit `43a168c`. **P1-05 is also complete locally:** see [its evidence](p1-05-evidence.md) for tile/detail/selector ownership and synthetic browser checks. **P1-06 is complete locally:** **163 Rust, 15 Node and 33 browser tests pass**; [its evidence](p1-06-evidence.md) records strict input, hostile rendering, audit lifecycle, diagnostic failures and scoped scanner results. **Next: P2-02**, predictable settings. Device and live-provider acceptance remain attached to their later gates.
 
 ## Validation ledger
 

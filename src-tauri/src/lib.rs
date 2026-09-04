@@ -18,6 +18,7 @@ mod request;
 mod runtime;
 mod settings;
 mod state;
+mod storage;
 mod validation;
 mod widgets;
 

@@ -314,6 +314,7 @@ pub(crate) fn fixed_sdk_config(
 #[derive(Clone)]
 pub struct Runtime {
     pub paths: AppPaths,
+    pub(crate) storage: crate::storage::Store,
     pub aws: Arc<dyn AwsBackend>,
     pub process: Arc<dyn ProcessRunner>,
     pub clock: Arc<dyn Clock>,
@@ -323,8 +324,10 @@ pub struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
+        let paths = AppPaths::default();
         Self {
-            paths: AppPaths::default(),
+            storage: crate::storage::Store::new(paths.clone()),
+            paths,
             aws: Arc::new(NativeAwsBackend),
             process: Arc::new(NativeProcessRunner),
             clock: Arc::new(SystemClock),
@@ -361,6 +364,7 @@ impl Runtime {
     #[cfg(test)]
     pub fn for_test(paths: AppPaths) -> Self {
         Self {
+            storage: crate::storage::Store::new(paths.clone()),
             paths,
             aws: Arc::new(NativeAwsBackend),
             process: Arc::new(NativeProcessRunner),
