@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Cloud Burrito — Precision style</title>
+  <desc id="desc">A folded cloud on a rounded square. A selectable Cloud Burrito workspace appearance mark.</desc>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="#20231e"/>
+  <g transform="translate(23 30) scale(.82)">
+    <path fill="#f4f5ef" d="M64 191C41 191 25 175 25 153C25 133 38 117 57 112C59 93 74 79 94 79C101 57 119 44 142 44C169 44 190 63 194 89C209 89 221 98 226 110C230 120 226 127 218 133L156 170Q150 174 156 178L175 191Z"/>
+    <path fill="#f0784c" d="M226 137C234 155 228 175 213 187Q207 193 200 189L172 175Q168 173 172 170Z"/>
+  </g>
+</svg>

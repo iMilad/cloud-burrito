@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 // credential source, remote request, or native webview is involved.
 const failures = new WeakMap();
 const widget = (page, name) => page.locator(`.widget[data-widget="${name}"]`);
-const focusables = panel => panel.locator('button:visible:not([disabled]), input:visible:not([disabled]), select:visible:not([disabled]), textarea:visible:not([disabled]), summary:visible, a[href]:visible, [tabindex="0"]:visible');
+const focusables = panel => panel.locator('button:visible:not([disabled]):not([tabindex="-1"]), input:visible:not([disabled]):not([tabindex="-1"]), select:visible:not([disabled]):not([tabindex="-1"]), textarea:visible:not([disabled]):not([tabindex="-1"]), summary:visible:not([tabindex="-1"]), a[href]:visible:not([tabindex="-1"]), [tabindex="0"]:visible');
 
 async function boot(page, { theme = "dark", compact = false } = {}) {
   const errors = [];
@@ -116,9 +116,9 @@ async function noOuterOverflow(page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
 }
 
-test("all five panels exclude hidden controls and contain keyboard focus with predictable return", async ({ page }) => {
+test("all six panels exclude hidden controls and contain keyboard focus with predictable return", async ({ page }) => {
   await boot(page);
-  await expect(page.locator('.side-panel[inert][aria-hidden="true"]')).toHaveCount(5);
+  await expect(page.locator('.side-panel[inert][aria-hidden="true"]')).toHaveCount(6);
   await page.locator("#add-widget-btn").focus();
   for (let i = 0; i < 12; i++) {
     await page.keyboard.press("Tab");
@@ -126,6 +126,7 @@ test("all five panels exclude hidden controls and contain keyboard focus with pr
   }
   const cases = [
     [page.locator("#add-widget-btn"), page.locator("#side-panel")],
+    [page.locator('[data-studio-action="appearance"]'), page.locator("#appearance-panel")],
     [page.locator("#settings-btn"), page.locator("#settings-panel")],
     [page.locator("#audit-btn"), page.locator("#audit-panel")],
     [page.locator("#connection-details"), page.locator("#identity-panel")],

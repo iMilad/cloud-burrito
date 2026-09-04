@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="18 36 222 168" role="img" aria-labelledby="title desc">
   <title id="title">Cloud Burrito mark</title>
-  <desc id="desc">A charcoal cloud with a diagonal opening and an orange folded corner.</desc>
-  <path fill="#141612" d="M64 191C41 191 25 175 25 153C25 133 38 117 57 112C59 93 74 79 94 79C101 57 119 44 142 44C169 44 190 63 194 89C209 89 221 98 226 110C230 120 226 127 218 133L156 170Q150 174 156 178L175 191Z"/>
-  <path fill="#ff8657" d="M226 136C238 157 230 181 209 193Q202 198 195 193L168 176Q161 172 168 168Z"/>
+  <desc id="desc">A dark olive cloud with a diagonal opening and a terracotta folded corner.</desc>
+  <path fill="#30392c" d="M65 190C41 190 25 174 25 153C25 132 38 116 58 112C60 92 75 79 95 79C103 58 121 45 143 45C169 45 190 63 194 89C210 89 222 99 226 112C229 122 224 128 216 134L159 169Q152 174 159 179L178 190Z"/>
+  <path fill="#c87852" d="M225 139C236 159 227 180 209 190Q202 194 196 190L174 177Q167 173 173 170Z"/>
 </svg>

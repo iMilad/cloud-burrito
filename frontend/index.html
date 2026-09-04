@@ -1,19 +1,20 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-design="studio">
+<html lang="en" data-theme="dark" data-design="studio" data-appearance="paper">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cloud Burrito</title>
-  <link rel="icon" type="image/svg+xml" href="assets/cloud-burrito-icon.svg" />
+  <link id="app-icon" rel="icon" type="image/svg+xml" href="assets/cloud-burrito-icon.svg" />
   <script src="studio.js"></script>
   <link rel="stylesheet" href="vendor/gridstack.min.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="studio.css" />
+  <link rel="stylesheet" href="studio-appearances.css" />
 </head>
 <body>
   <aside class="studio-rail studio-only" aria-label="Workspace navigation">
     <a class="studio-wordmark" href="#" aria-label="Cloud Burrito workspace">
-      <img src="assets/cloud-burrito-icon.svg" alt="" width="38" height="38" />
+      <img data-studio-mark src="assets/cloud-burrito-icon.svg" alt="" width="38" height="38" />
       <span>cloud<br /><b>burrito.</b></span>
     </a>
     <div class="studio-rail-label">YOUR CONTROL ROOM</div>
@@ -29,6 +30,7 @@
     </nav>
     <div class="studio-rail-bottom">
       <div class="studio-rail-note"><span aria-hidden="true">↗</span><p>Stay curious.<br /><b>Keep the context.</b></p></div>
+      <button type="button" data-studio-action="appearance"><span aria-hidden="true">◩</span> Appearance</button>
       <button type="button" data-studio-action="settings"><span aria-hidden="true">⚙</span> Settings</button>
       <button type="button" data-studio-action="audit"><span aria-hidden="true">◷</span> Audit history</button>
       <span class="studio-edition">STUDIO EDITION <i aria-hidden="true"></i></span>
@@ -39,7 +41,7 @@
     <div class="topbar-left">
       <div class="brand">
         <img class="brand-mark brand-mark-classic" src="assets/cloud-burrito-classic-icon.svg" alt="" aria-hidden="true" />
-        <img class="brand-mark brand-mark-studio" src="assets/cloud-burrito-icon.svg" alt="" aria-hidden="true" />
+        <img class="brand-mark brand-mark-studio" data-studio-mark src="assets/cloud-burrito-icon.svg" alt="" aria-hidden="true" />
         <span class="brand-name">Cloud Burrito</span>
       </div>
       <div class="picker picker-account">
@@ -78,6 +80,7 @@
     <div class="topbar-right">
       <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout" aria-label="Reset layout">↺</button>
       <button class="btn btn-ghost" id="theme-toggle" title="Preview another theme" aria-label="Preview another theme" disabled>◐</button>
+      <button class="btn btn-ghost studio-only" id="appearance-btn" title="Workspace appearance" aria-label="Workspace appearance">◩</button>
       <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden aria-label="Audit log">⏱</button>
       <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden aria-label="Settings">⚙</button>
       <button class="btn btn-primary" id="add-widget-btn">+ Widget</button>
@@ -326,6 +329,45 @@
     </div>
   </aside>
 
+  <!-- Local presentation choices; independent from AWS and backend settings. -->
+  <aside class="side-panel appearance-panel" id="appearance-panel" role="dialog" aria-modal="true" aria-labelledby="appearance-panel-title" aria-hidden="true" tabindex="-1" inert>
+    <header class="side-panel-header">
+      <div><span class="appearance-kicker">WORKSPACE STYLE</span><h2 id="appearance-panel-title">Appearance</h2></div>
+      <button class="icon-btn" id="appearance-panel-close" title="Close" aria-label="Close appearance" type="button">✕</button>
+    </header>
+    <div class="side-panel-body">
+      <p class="appearance-intro">Choose the visual rhythm of Studio. Your workspace, context and layout stay in place.</p>
+      <div class="appearance-options" role="radiogroup" aria-label="Studio appearance">
+        <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="original">
+          <img src="assets/cloud-burrito-style-current.svg" width="48" height="48" alt="" />
+          <span><b>Studio Original</b><small>Warm · expressive · familiar</small></span>
+          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#141612"></i><i style="--choice-color:#e9eddf"></i><i style="--choice-color:#ff8657"></i></span>
+          <span class="appearance-check" aria-hidden="true">✓</span>
+        </button>
+        <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="precision">
+          <img src="assets/cloud-burrito-style-precision.svg" width="48" height="48" alt="" />
+          <span><b>Precision</b><small>Clean · restrained · intentional</small></span>
+          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#20231e"></i><i style="--choice-color:#f4f5ef"></i><i style="--choice-color:#f0784c"></i></span>
+          <span class="appearance-check" aria-hidden="true">✓</span>
+        </button>
+        <button class="appearance-choice" type="button" role="radio" aria-checked="true" tabindex="0" data-appearance-choice="paper">
+          <img src="assets/cloud-burrito-style-paper.svg" width="48" height="48" alt="" />
+          <span><b>Paper</b><small>Soft · tactile · quietly playful</small></span>
+          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#30392c"></i><i style="--choice-color:#f3eee4"></i><i style="--choice-color:#c87852"></i></span>
+          <span class="appearance-check" aria-hidden="true">✓</span>
+        </button>
+        <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="night">
+          <img src="assets/cloud-burrito-style-night.svg" width="48" height="48" alt="" />
+          <span><b>Night Shift</b><small>Crisp · neutral · focused</small></span>
+          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#181a1b"></i><i style="--choice-color:#f2f2ee"></i><i style="--choice-color:#ea875e"></i></span>
+          <span class="appearance-check" aria-hidden="true">✓</span>
+        </button>
+      </div>
+      <p id="appearance-status" class="appearance-status" role="status">Paper is active.</p>
+      <p class="muted small">Changes are saved locally on this device when storage is available. Light and dark color themes remain separate.</p>
+    </div>
+  </aside>
+
   <!-- Settings side panel -->
   <aside class="side-panel" id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
@@ -357,7 +399,7 @@
             <span id="settings-default-region-error" class="field-error" hidden></span>
           </label>
           <label>
-            <span>Appearance</span>
+            <span>Color theme</span>
             <select id="settings-theme" aria-describedby="settings-theme-error">
               <option value="dark">Dark</option>
               <option value="light">Light</option>
@@ -376,7 +418,7 @@
           <section class="audit-history-status small" aria-label="Audit history storage" data-audit-history-status></section>
           <button type="button" class="btn btn-ghost small" data-audit-preserve>Preserve current history</button>
           <p class="muted small" data-audit-preserve-status role="status"></p>
-          <p class="muted small">Blank fields use the defaults shown. Appearance changes are previews until you save.</p>
+          <p class="muted small">Blank fields use the defaults shown. Color-theme changes are previews until you save.</p>
           <p class="muted small">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. The app uses your existing SSO session to obtain temporary AWS credentials; it does not start an interactive login.</p>
           <p class="muted small">
             The app checks requested operations against its supported list and

@@ -4,14 +4,36 @@
 
   const root = document.documentElement;
   const preferenceKey = "cb.presentation.v1";
+  const appearancePreferenceKey = "cb.studio.appearance.v1";
   const validDesign = value => value === "studio" || value === "classic";
+  const appearances = {
+    original: { label: "Studio Original", asset: "assets/cloud-burrito-style-current.svg" },
+    precision: { label: "Precision", asset: "assets/cloud-burrito-style-precision.svg" },
+    paper: { label: "Paper", asset: "assets/cloud-burrito-style-paper.svg" },
+    night: { label: "Night Shift", asset: "assets/cloud-burrito-style-night.svg" },
+  };
+  const validAppearance = value => Object.hasOwn(appearances, value);
   let preferred = "studio";
+  let preferredAppearance = "paper";
+  let appearanceStorageAvailable = true;
+  let appearanceHasSavedPreference = false;
   try {
     const saved = localStorage.getItem(preferenceKey);
     if (validDesign(saved)) preferred = saved;
-  } catch (_) { /* A blocked preference store must not block the workspace. */ }
-  const queryDesign = new URLSearchParams(location.search).get("design");
+    const savedAppearance = localStorage.getItem(appearancePreferenceKey);
+    if (validAppearance(savedAppearance)) {
+      preferredAppearance = savedAppearance;
+      appearanceHasSavedPreference = true;
+    }
+  } catch (_) {
+    appearanceStorageAvailable = false;
+    /* A blocked preference store must not block the workspace. */
+  }
+  const query = new URLSearchParams(location.search);
+  const queryDesign = query.get("design");
+  const queryAppearance = query.get("appearance");
   root.dataset.design = validDesign(queryDesign) ? queryDesign : preferred;
+  root.dataset.appearance = validAppearance(queryAppearance) ? queryAppearance : preferredAppearance;
   root.dataset.density = "comfortable";
 
   let modal = null;
@@ -20,7 +42,7 @@
   let results = null;
   let initialized = false;
   const $ = selector => document.querySelector(selector);
-  const actionTargets = { settings: "#settings-btn", audit: "#audit-btn", add: "#add-widget-btn" };
+  const actionTargets = { appearance: "#appearance-btn", settings: "#settings-btn", audit: "#audit-btn", add: "#add-widget-btn" };
   const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const tiles = () => Array.from($("#grid-stack")?.children || [])
     .filter(item => item.classList.contains("grid-stack-item") && item.querySelector(".widget"));
@@ -40,6 +62,46 @@
     try { localStorage.setItem(preferenceKey, design); } catch (_) { /* Session choice still works. */ }
     const destination = $(design === "classic" ? "#studio-return" : "#studio-classic-switch");
     destination?.focus({ preventScroll: true });
+  }
+
+  function syncAppearance() {
+    const appearance = validAppearance(root.dataset.appearance) ? root.dataset.appearance : "paper";
+    const definition = appearances[appearance];
+    document.querySelectorAll("[data-appearance-choice]").forEach(button => {
+      const checked = button.dataset.appearanceChoice === appearance;
+      button.setAttribute("aria-checked", String(checked));
+      button.tabIndex = checked ? 0 : -1;
+    });
+    document.querySelectorAll("[data-studio-mark]").forEach(image => { image.src = definition.asset; });
+    const icon = $("#app-icon");
+    if (icon) icon.href = definition.asset;
+    const status = $("#appearance-status");
+    const message = validAppearance(queryAppearance) && appearance === queryAppearance
+      ? `${definition.label} URL preview is active.`
+      : !appearanceStorageAvailable ? `${definition.label} is active for this session.`
+      : appearanceHasSavedPreference ? `${definition.label} is active and saved on this device.`
+      : `${definition.label} is active as the default.`;
+    if (status && status.textContent !== message) status.textContent = message;
+  }
+
+  function chooseAppearance(appearance, options = {}) {
+    if (!validAppearance(appearance)) return;
+    root.dataset.appearance = appearance;
+    if (options.persist !== false) {
+      try {
+        localStorage.setItem(appearancePreferenceKey, appearance);
+        appearanceStorageAvailable = true;
+        appearanceHasSavedPreference = true;
+      } catch (_) { appearanceStorageAvailable = false; }
+    }
+    syncAppearance();
+    if (options.focus !== false) $("[data-appearance-choice][aria-checked='true']")?.focus({ preventScroll: true });
+  }
+
+  function openAppearance() {
+    close();
+    const appearancePanel = $("#appearance-panel");
+    if (modal && appearancePanel) modal.showPanel(appearancePanel);
   }
 
   function exitWidgetFullscreen() {
@@ -86,6 +148,10 @@
   }
 
   function delegateAction(action) {
+    if (action === "appearance") {
+      openAppearance();
+      return;
+    }
     const button = $(actionTargets[action] || "#no-studio-action");
     // The modal makes background controls inert until it closes.
     close();
@@ -110,7 +176,7 @@
         detail: "Open tool", search: `${name} ${item.getAttribute("gs-id") || ""}`,
         run: () => jumpTo(item) });
     });
-    for (const [action, label] of [["add", "Open widget library"], ["settings", "Open settings"], ["audit", "Open audit log"]]) {
+    for (const [action, label] of [["add", "Open widget library"], ["appearance", "Open appearance"], ["settings", "Open settings"], ["audit", "Open audit log"]]) {
       const button = $(actionTargets[action]);
       // Ignore modal-induced inertness here; explicit action closes it first.
       if (button && !button.disabled && !button.closest("[hidden]")) {
@@ -203,6 +269,20 @@
     results.setAttribute("aria-label", "Matching commands");
     $("#studio-launcher")?.addEventListener("click", open);
     $("#command-close")?.addEventListener("click", () => close());
+    $("#appearance-btn")?.addEventListener("click", openAppearance);
+    $("#appearance-panel-close")?.addEventListener("click", () => modal.hidePanel($("#appearance-panel")));
+    document.querySelectorAll("[data-appearance-choice]").forEach(button => {
+      button.addEventListener("click", () => chooseAppearance(button.dataset.appearanceChoice));
+      button.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const keys = Object.keys(appearances);
+        const current = keys.indexOf(button.dataset.appearanceChoice);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? keys.length - 1
+          : (current + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + keys.length) % keys.length;
+        chooseAppearance(keys[next]);
+      });
+    });
     $("#studio-classic-switch")?.addEventListener("click", () => chooseDesign("classic"));
     $("#studio-return")?.addEventListener("click", () => chooseDesign("studio"));
     $("#studio-density")?.addEventListener("click", event => {
@@ -247,7 +327,11 @@
     if (connection) new MutationObserver(updateMode).observe(connection, { attributes: true, attributeFilter: ["data-state", "hidden"] });
     updateWorkspace();
     updateMode();
+    syncAppearance();
   }
 
-  window.CloudBurritoStudio = { init, close };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", syncAppearance, { once: true });
+  else syncAppearance();
+
+  window.CloudBurritoStudio = { init, close, chooseAppearance };
 })();

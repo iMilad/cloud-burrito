@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
-  <title id="title">Cloud Burrito</title>
-  <desc id="desc">A folded cloud on a rounded square. An ivory cloud with a terracotta folded corner on a dark olive rounded square.</desc>
+  <title id="title">Cloud Burrito — Paper style</title>
+  <desc id="desc">A folded cloud on a rounded square. A selectable Cloud Burrito workspace appearance mark.</desc>
   <rect x="8" y="8" width="240" height="240" rx="62" fill="#30392c"/>
   <g transform="translate(23 30) scale(.82)">
     <path fill="#f3eee4" d="M65 190C41 190 25 174 25 153C25 132 38 116 58 112C60 92 75 79 95 79C103 58 121 45 143 45C169 45 190 63 194 89C210 89 222 99 226 112C229 122 224 128 216 134L159 169Q152 174 159 179L178 190Z"/>

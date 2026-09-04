@@ -47,7 +47,7 @@
   }
 
   function closeActivePanel(options = {}) {
-    const close = { "side-panel": closeSidePanel, "settings-panel": closeSettingsPanel,
+    const close = { "side-panel": closeSidePanel, "appearance-panel": closeAppearancePanel, "settings-panel": closeSettingsPanel,
       "audit-panel": closeAuditPanel, "identity-panel": closeIdentityPanel, "widget-config-panel": closeWidgetConfigPanel,
       "command-panel": options => window.CloudBurritoStudio?.close(options) };
     if (activePanel) close[activePanel.id]?.(options);
@@ -1359,6 +1359,10 @@
   }
   function closeSettingsPanel(options = {}) {
     hidePanel($("#settings-panel"), options);
+  }
+
+  function closeAppearancePanel(options = {}) {
+    hidePanel($("#appearance-panel"), options);
   }
 
   let settingsSavePending = false;
