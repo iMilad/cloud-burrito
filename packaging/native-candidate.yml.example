@@ -1,0 +1,238 @@
+# INACTIVE DESIGN EXAMPLE. This file is deliberately outside .github/workflows.
+# Copying it into that directory is not authorized and does not make it ready:
+# the activation job always fails. See docs/packaging/ci-orchestration.md.
+name: Unsigned native candidate (INACTIVE)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-candidate-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_NET_OFFLINE: 'true'
+  AWS_EC2_METADATA_DISABLED: 'true'
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  activation-prerequisite:
+    # Deliberately unresolved labels; no existing runner is assumed available.
+    runs-on: [self-hosted, p4-unconfigured-validation]
+    timeout-minutes: 5
+    steps:
+      - name: Stop until a separately reviewed activation change
+        shell: bash
+        run: |
+          printf '%s\n' 'INACTIVE: runner images, helper inventories, dependency review, network isolation and remote execution approval are missing.'
+          exit 1
+
+  validate-source:
+    needs: activation-prerequisite
+    runs-on: [self-hosted, p4-unconfigured-validation]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exactly the candidate commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # Activation must add reviewed offline input provisioning AFTER checkout;
+      # checkout cleaning can remove ignored node_modules and target inputs.
+      - name: Require the prepared test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node -e 'if (process.versions.node.split(".")[0] !== "22") process.exit(1)'
+          test "$(npm --version)" = '10.9.8'
+          test "$(rustc --version | cut -d' ' -f2)" = '1.91.1'
+          test -n "${CLOUD_BURRITO_CHROME_PATH:-}"
+          test -x "$CLOUD_BURRITO_CHROME_PATH"
+          test -f node_modules/@playwright/test/package.json
+          # Activation must prove node_modules matches package-lock.json,
+          # Rust targets/crates and Chromium are present, and tool binaries and
+          # offline advisory inputs match reviewed inventories. No acquisition.
+      - name: Validate the source and packaging contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-release-version.py
+          python3 scripts/check-release-privacy.py
+          python3 scripts/check-tauri-commands.py
+          python3 scripts/packaging_contract.py
+          python3 -m unittest discover -s tests/scripts -p 'test_*.py'
+          bash -n scripts/*.sh
+          node --check frontend/app.js
+          node --check frontend/row-filter-worker.js
+          node --check frontend/mock-data.js
+          git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
+      - name: Replay P1 through P3 correctness coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:unit
+          npm run test:frontend
+          cd src-tauri
+          cargo fmt --all --check
+          cargo test -p cloud-burrito --locked --offline
+          cargo clippy -p cloud-burrito --all-targets --locked --offline -- -D warnings
+
+  build-native:
+    needs: validate-source
+    name: Build and inspect ${{ matrix.id }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: macos-aarch64
+            target: aarch64-apple-darwin
+            runner: [self-hosted, p4-unconfigured-macos15-arm64]
+          - id: macos-x86_64
+            target: x86_64-apple-darwin
+            runner: [self-hosted, p4-unconfigured-macos15-x86_64]
+          - id: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            runner: [self-hosted, p4-unconfigured-windows11-x64-msvc]
+          - id: ubuntu-x86_64
+            target: x86_64-unknown-linux-gnu
+            runner: [self-hosted, p4-unconfigured-ubuntu22-04-x86_64]
+    steps:
+      - name: Checkout exactly the candidate commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # A reviewed post-checkout native helper/tool preflight is still missing.
+      - name: Cache only target-keyed Cargo dependency inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+          key: p4-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ vars.P4_RUNNER_IMAGE_DIGEST }}-${{ vars.P4_HELPER_INVENTORY_DIGEST }}-${{ hashFiles('rust-toolchain.toml', 'scripts/tool-versions.env', 'src-tauri/Cargo.lock', 'package-lock.json', 'packaging/targets.json', 'src-tauri/tauri*.conf.json') }}
+          enableCrossOsArchive: false
+          # No restore-keys, compiled outputs, helper tools or credential paths.
+          # A cache is an optimization, never a reviewed tool/input inventory.
+      - name: Build and inspect macOS using the shared wrapper
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTPUT: ${{ runner.temp }}/p4-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          ./scripts/build-release.sh "$TARGET" --output "$OUTPUT"
+      - name: Build and inspect Windows using the native wrapper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTPUT: ${{ runner.temp }}/p4-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:P4_HELPER_INVENTORY) { throw 'Reviewed helper inventory is required' }
+          ./scripts/build-release.ps1 -Target $env:TARGET -Output $env:OUTPUT -HelperInventory $env:P4_HELPER_INVENTORY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and inspect Ubuntu using the shared wrapper
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTPUT: ${{ runner.temp }}/p4-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          test -n "${P4_HELPER_INVENTORY:-}"
+          ./scripts/build-release.sh "$TARGET" --output "$OUTPUT" --helper-inventory "$P4_HELPER_INVENTORY"
+      - name: Transfer only inspected distributables and their build manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: p4-build-${{ matrix.id }}
+          path: ${{ runner.temp }}/p4-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.id }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+  inspect-artifacts:
+    # The native wrapper already ran per-format inspection on its native host.
+    # This fan-in checks all reports and files, without executing any package.
+    needs: build-native
+    runs-on: [self-hosted, p4-unconfigured-validation]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the matching verifier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Receive all four target directories
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: p4-build-*
+          merge-multiple: false
+          path: ${{ runner.temp }}/p4-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Reject partial, mixed or altered build evidence
+        shell: bash
+        env:
+          INPUTS: ${{ runner.temp }}/p4-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'scripts')
+          from assemble_candidate import collect, require
+          from packaging_contract import load_matrix
+          matrix = load_matrix()
+          base = Path(os.environ['INPUTS'])
+          expected = {'p4-build-' + row['id'] for row in matrix['targets']}
+          require({path.name for path in base.iterdir()} == expected, 'Unexpected or missing target transfer')
+          summary, _ = collect([base / name for name in sorted(expected)], matrix)
+          require(summary['source_commit'] == os.environ['GITHUB_SHA'], 'Candidate is from another workflow commit')
+          print('All four target reports and seven artifact hashes agree; native inspection was recorded on the build hosts.')
+          PY
+
+  assemble-candidate:
+    needs: inspect-artifacts
+    runs-on: [self-hosted, p4-unconfigured-validation]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the matching assembler
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Receive all four target directories
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: p4-build-*
+          merge-multiple: false
+          path: ${{ runner.temp }}/p4-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Assemble and independently verify the complete set
+        shell: bash
+        env:
+          INPUTS: ${{ runner.temp }}/p4-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          OUTPUT: ${{ runner.temp }}/p4-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 scripts/assemble_candidate.py assemble \
+            --input-dir "$INPUTS/p4-build-macos-aarch64" \
+            --input-dir "$INPUTS/p4-build-macos-x86_64" \
+            --input-dir "$INPUTS/p4-build-windows-x86_64" \
+            --input-dir "$INPUTS/p4-build-ubuntu-x86_64" \
+            --output "$OUTPUT"
+          python3 scripts/assemble_candidate.py verify "$OUTPUT"
+      - name: Retain the complete unsigned set for a separately authorized P5 handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: p4-complete-unsigned-candidate
+          path: ${{ runner.temp }}/p4-candidate-${{ github.run_id }}-${{ github.run_attempt }}/*
+          if-no-files-found: error
+          retention-days: 14
