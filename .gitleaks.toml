@@ -3,9 +3,17 @@ title = "Cloud Burrito gitleaks configuration"
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Generated and ignored local build artifacts are not publishable source."
 paths = [
   '''^src-tauri/gen/''',
   '''^src-tauri/target/''',
 ]
+
+[[allowlists]]
+description = "The exact public Studio localStorage key is not a credential."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^frontend/studio\.js$''']
+regexTarget = "secret"
+regexes = ['''^cb\.presentation\.v1$''']
