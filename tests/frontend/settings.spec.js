@@ -250,7 +250,7 @@ test("backend catalogue drives default and pinned selectors without moving an un
 });
 
 test("an unavailable profile remains pinned after an unrelated color edit and reload", async ({ page }) => {
-  const context = { mode: "pinned", profile: "synthetic-removed", account_id: "333333333333", region: "eu-west-1" };
+  const context = { mode: "pinned", profile: "synthetic-removed", account_id: "acct-removed-fixture", region: "eu-west-1" };
   const remote = await bootSettings(page, { tiles: [{ ...tile, config: { context } }] });
   await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
   const widget = page.locator('[data-widget="cfn-stacks"]');
@@ -302,7 +302,7 @@ test("new or incomplete pinned context cannot silently fall back to the default 
 });
 
 test("an unavailable saved profile cannot be repurposed into a new pinned context", async ({ page }) => {
-  const context = { mode: "pinned", profile: "synthetic-removed", account_id: "333333333333", region: "eu-west-1" };
+  const context = { mode: "pinned", profile: "synthetic-removed", account_id: "acct-removed-fixture", region: "eu-west-1" };
   await bootSettings(page, { tiles: [{ ...tile, config: { context } }] });
   await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
   await page.locator('[data-widget="cfn-stacks"] .cfg-btn').click();
