@@ -4,6 +4,13 @@
 
 ## Design direction
 
+The 2026-09-05 pre-P6 audit prompted a local repair pass, recorded in
+[P5 audit repairs](p5-audit-fixes.md). P5-07–12 cover the scanner, atomic policy
+storage, frontend integrity, Windows inspection, release gates and the canonical
+browser test runner. P5-13 records version 0.3.0, dependency review and candidate
+handoff. These repairs preserve the selected design and do not start P7 or
+authorize publication. P6 remains the next device-validation phase.
+
 Make the investigation workspace inviting and memorable: confident typography, a strong color identity, clear visual hierarchy, purposeful depth and responsive interactions. The result should help an engineer choose a next action, recognize the active context and keep evidence together. A visually striking screen still has to work with an empty workspace, long names, partial failures, large results and a keyboard.
 
 Studio is a frontend presentation of the existing product. Keep Rust + Tauri, the verified active/pinned account model, approved capabilities, bounded work and honest result states. Visible controls must lead somewhere useful; decorative metrics, invented live activity and fake cloud status are not product evidence. Demonstration data must remain explicitly synthetic and separated from connected work.

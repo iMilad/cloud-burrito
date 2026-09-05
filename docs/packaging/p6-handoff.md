@@ -1,33 +1,40 @@
 # P6 candidate handoff
 
-Renumbered from P5 on 2026-09-04. The [new P5](../roadmap/phase-5.md) changed the interface before device validation. On committed application source `5d39eed`, Studio Original, Precision, Paper and Night Shift are all integrated Studio appearances; Paper is the default and its mark is the canonical packaged operating-system icon. Rebuild all target artifacts from this reviewed source before accepting the redesigned candidate; the P4 results below describe the preserved pre-design source.
+**Prepared 2026-09-05 for candidate version 0.3.0. No device test has passed.**
+The candidate includes the [pre-P6 audit repairs](../roadmap/p5-audit-fixes.md),
+all four Studio appearances, the Paper default and its packaged icon. Build
+all targets from one clean repair commit; each accepted build receipt must
+identify that exact source and version. The build receipts, rather than earlier
+preflight results, establish which current packages have been built and inspected.
 
-**Handoff prepared; the complete candidate remains pending. No device test has passed.** Both macOS targets passed `--check` on source `5d39eed`, including the scoped 301-file privacy scan, while reporting `built: false`, `device_validated: false` and `publication: false`. The inspected P4 macOS artifacts predate this source and cannot serve as its candidate. Native Windows and Ubuntu build hosts and their reviewed helper inventories are unavailable in this task. The owner has three laptops, but their exact OS versions and CPU architectures have not been recorded. A macOS ARM64 build does not validate Intel hardware.
+Start with the [build-machine checks and commands](README.md), then use
+[the P6 plan](../roadmap/phase-6.md) as the acceptance checklist. Both Mac
+architectures can be built on this Mac. Windows and Ubuntu still need their
+declared native build hosts and reviewed helper inventories, which are not
+available in this task. The owner has three laptops; their exact OS releases
+and CPU architectures must be recorded before testing. An ARM64 build or test
+does not validate Intel hardware.
 
-Local build-readiness preparation is complete for both macOS targets and remains
-pending on native Windows and Ubuntu hosts. Start with the
-[build-machine checks and commands](README.md); compilation and packaging are
-separate from running the installed application. The device examples below are
-for the later P6 session. No current binary, native app launch, device
-acceptance, runtime acquisition, AWS access, push, release or publication has
-occurred in this preparation. Use
-[the P6 plan](../roadmap/phase-6.md) for the single acceptance checklist.
+The owner can test each accepted target as its artifacts become available.
+Full matrix acceptance still requires four targets and seven distributables
+from the same source. Compilation and package inspection do not establish
+installation, launch or device compatibility.
 
 ## Identify the candidate before testing
 
-The [p4-v1 matrix](../../packaging/targets.json) requires four targets and seven distributables. `{version}` must come from the accepted candidate manifest; the source version at preparation is `0.2.9`.
+The [p4-v1 matrix](../../packaging/targets.json) requires four targets and seven distributables. `{version}` must come from the accepted candidate manifest; the current repair version is `0.3.0`.
 
 | Target | Required files | Evidence at preparation |
 | --- | --- | --- |
-| macOS ARM64 | `cloud-burrito_{version}_aarch64_unsigned.dmg`, `cloud-burrito_{version}_aarch64_unsigned.app.zip` | Current-source preflight passed; rebuild and device execution pending |
-| macOS Intel | `cloud-burrito_{version}_x86_64_unsigned.dmg`, `cloud-burrito_{version}_x86_64_unsigned.app.zip` | Current-source preflight passed; rebuild and device execution pending |
+| macOS ARM64 | `cloud-burrito_{version}_aarch64_unsigned.dmg`, `cloud-burrito_{version}_aarch64_unsigned.app.zip` | Native build host available; require the 0.3.0 build receipt before testing |
+| macOS Intel | `cloud-burrito_{version}_x86_64_unsigned.dmg`, `cloud-burrito_{version}_x86_64_unsigned.app.zip` | Rust target available on Mac; require the 0.3.0 build receipt before testing |
 | Windows x64 | `cloud-burrito_{version}_windows_x86_64_unsigned_setup.exe` | Native host, reviewed helper inventory and build unavailable |
 | Ubuntu x64 | `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.deb`, `cloud-burrito_{version}_ubuntu22.04_x86_64_unsigned.AppImage` | Native host, reviewed helper inventory and build unavailable |
 
-See [historical P4 build evidence](../roadmap/p4-exit-evidence.md) for the
-preserved pre-design source and its local macOS artifacts. The current-source
-preflight record is in the [packaging overview](README.md). Before complete
-handoff, attach `candidate-manifest.json`, `SHA256SUMS`, and all four
+The [P4 build evidence](../roadmap/p4-exit-evidence.md) and the
+[earlier preflight records](README.md#earlier-source-records) describe historical
+sources, including `205303c` and `5d39eed`; they are not 0.3.0 package or device
+evidence. Before complete handoff, attach `candidate-manifest.json`, `SHA256SUMS`, and all four
 `build-manifest-<target-id>.json` files from the
 [candidate assembler](provenance.md). Record the exact source commit, version
 and artifact hash in every device result. All seven files must share the same
@@ -38,6 +45,13 @@ The candidate floors are macOS 13.0, Windows 11 24H2 x64 and Ubuntu 22.04 x64. T
 ## Verify transferred bytes
 
 Obtain the manifests/checksums with the candidate through the agreed transfer route. Checksums detect changed bytes relative to that evidence; unsigned metadata does not authenticate a publisher. Do not continue after a mismatch.
+
+For an individual target before complete assembly, compare every transferred
+artifact's SHA-256 with its `inspection.artifacts[].sha256` entry in the matching
+`build-manifest-<target-id>.json`. Use the recorded filenames, source commit and
+version together; a partial transfer does not have the complete candidate's
+`SHA256SUMS` file. The macOS release-staging helper can also produce target
+checksums covering its two artifacts and preserved receipt.
 
 For the complete transferred directory on macOS:
 
@@ -54,10 +68,10 @@ sha256sum -c SHA256SUMS
 For the selected Windows installer in PowerShell, compare the full output with its exact `SHA256SUMS` entry:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\cloud-burrito_0.2.9_windows_x86_64_unsigned_setup.exe'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\cloud-burrito_0.3.0_windows_x86_64_unsigned_setup.exe'
 ```
 
-The Windows example assumes version `0.2.9`; use the manifest's filename if different. A one-file comparison validates only that file. Full-set verification can also use `python3 scripts/assemble_candidate.py verify <candidate-directory>` from the matching reviewed source when Python is available; Python is not an end-user app requirement.
+The Windows example assumes version `0.3.0`; use the manifest's filename if different. A one-file comparison validates only that file. Full-set verification can also use `python3 scripts/assemble_candidate.py verify <candidate-directory>` from the matching reviewed source when Python is available; Python is not an end-user app requirement.
 
 ## Install only during the authorized device session
 
@@ -68,13 +82,13 @@ The Windows example assumes version `0.2.9`; use the manifest's filename if diff
 **Ubuntu:** test the `.deb` primary route and AppImage secondary route separately on the declared baseline. After approval, a local package installation example is:
 
 ```sh
-sudo apt install ./cloud-burrito_0.2.9_ubuntu22.04_x86_64_unsigned.deb
+sudo apt install ./cloud-burrito_0.3.0_ubuntu22.04_x86_64_unsigned.deb
 ```
 
 Review dependency/elevation prompts before proceeding; downloading runtime dependencies is a separate authorized setup action. The generated package metadata determines GTK/WebKitGTK requirements. For the verified AppImage, grant execution to that single file, then open it during the device session:
 
 ```sh
-chmod u+x ./cloud-burrito_0.2.9_ubuntu22.04_x86_64_unsigned.AppImage
+chmod u+x ./cloud-burrito_0.3.0_ubuntu22.04_x86_64_unsigned.AppImage
 ```
 
 AppImage still has host requirements, including a possible FUSE 2 compatibility need. Record a blocked launch without automatically installing libraries or executing extraction workarounds. See [Ubuntu policy](linux.md).

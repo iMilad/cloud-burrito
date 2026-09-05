@@ -2,9 +2,11 @@
 
 The source has packaging paths for all three desktop operating systems. A full
 candidate contains four targets and seven files. Build each target from the same
-clean committed source. The selected application source is `5d39eed`: all four
-Studio appearances are integrated, Paper is the default, and its mark is the
-canonical packaged operating-system icon.
+clean committed source. The current repair candidate is **0.3.0**; select the
+source commit recorded in its build receipts. It includes the
+[pre-P6 audit repairs](../roadmap/p5-audit-fixes.md), all four Studio appearances,
+the Paper default and the matching packaged operating-system icon. The earlier
+`5d39eed` preflight is historical evidence only.
 
 | Build environment | Target | Files for later device testing |
 | --- | --- | --- |
@@ -35,6 +37,21 @@ See [Windows](windows.md), [Ubuntu](linux.md), and the
 [helper inventory contract](native-helper-cache.md) for exact requirements.
 The helper inventory must already have been reviewed; the build command does
 not acquire tools or create an approved inventory from arbitrary local files.
+
+Provision locked Rust dependencies before entering the offline build boundary,
+including on a cold cache. On each already provisioned native host, use its
+target (choose one line):
+
+```sh
+cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
+cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target x86_64-apple-darwin
+cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target x86_64-unknown-linux-gnu
+```
+
+This preparation can download registry packages; the build wrapper remains
+offline. It does not replace the native compiler, installed Rust target or
+reviewed NSIS/AppImage helper inventory.
 
 On the Mac:
 
@@ -79,12 +96,23 @@ Use `--output` or PowerShell `-Output` to select a different new directory.
 Existing candidates are never overwritten. No app installation, launch or
 publication is part of the build.
 
-Transfer the four target directories through the agreed route, then follow
-[candidate assembly and verification](provenance.md). Only after all seven
-artifacts and their matching receipts are present is the complete candidate
-ready for the owner's [device tests](p6-handoff.md).
+Each accepted target directory can begin the owner's
+[device tests](p6-handoff.md) after its files are checked against its receipt.
+Transfer all four target directories through the agreed route, then follow
+[candidate assembly and verification](provenance.md). Complete matrix acceptance
+requires all seven artifacts and their matching receipts from the same source.
 
 ## Current evidence
+
+The 2026-09-05 repairs pass the complete 152-test canonical browser gate,
+357 Rust tests, 30 Node units and 132 release-helper tests. See the
+[repair evidence and remaining upstream dependency disposition](../roadmap/p5-audit-fixes.md).
+Windows and Ubuntu native hosts/helper inventories are still unavailable in
+this task. Target-specific build receipts, when present, are authoritative for
+new 0.3.0 package outcomes; no receipt means no accepted package for that target.
+No installed-device test has passed.
+
+### Earlier source records
 
 As of 2026-09-04, earlier macOS ARM64 and Intel builds were inspected in P4;
 those files predate Studio, the appearance selector and the Paper icon. They are
@@ -101,7 +129,7 @@ registry and the scoped 295-file privacy scan passed. The helper regression
 suite passed 116 tests, including the new preflight cases. This remains the
 historical build-input record for that earlier Studio/logo source.
 
-On the current committed application source `5d39eed`, both
+On the earlier committed application source `5d39eed`, both
 `macos-aarch64 --check` and `macos-x86_64 --check` passed on this Mac. The
 committed source contains the integrated Studio Original, Precision, Paper and
 Night Shift appearances plus the Paper default/canonical package icon. The

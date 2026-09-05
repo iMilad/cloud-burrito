@@ -7,6 +7,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+Target version: **0.3.0**, a local candidate for device testing. No release or
+tag has been published for these changes.
+
+### Added
+
+- Studio with four selectable appearances: Original, Precision, Paper and
+  Night Shift. Paper is the default; Classic remains available.
+- Investigation workspaces, bounded table rendering and explicit partial,
+  unavailable and stale result states.
+- Native candidate build paths and inspection receipts for macOS ARM64/Intel,
+  Windows x64 and Ubuntu 22.04 x64. Windows/Linux device acceptance is pending.
+
+### Fixed
+
+- Preserve an unavailable pinned account when saving unrelated widget settings.
+- Keep newer policy drafts when asynchronous reads or saves finish, and report
+  rejected saves without claiming success.
+- Restore scrolling, grid controls and keyboard focus after a fullscreen widget
+  is removed.
+- Accept the pinned stock NSIS template while rejecting custom installer hooks.
+- Provision locked application dependencies before offline release builds and
+  transfer the inspected candidate archives with their original checksums.
+
+### Security
+
+- Verify account contexts and fence stale work; constrain CLI handoff and bound
+  background work, outputs and retained diagnostics.
+- Replace policy files atomically, preserving the active policy on partial
+  writes, sync failures and rename failures.
+- Update `anyhow` to 1.0.103 for RUSTSEC-2026-0190. Remaining upstream dependency
+  warnings are tracked separately; this is not a clean-advisory claim.
+- Limit the secret-scanner exception to the exact public Studio preference key
+  in its source file, with positive and negative detector checks.
+
 ## [0.2.9] - 2026-07-15
 
 ### Added
