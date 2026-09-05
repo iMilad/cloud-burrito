@@ -23,6 +23,66 @@ use crate::test_support::TestDir;
 const ACCOUNT_A: &str = "acct-a-fixture";
 const ACCOUNT_B: &str = "acct-b-fixture";
 
+#[test]
+fn policy_editor_save_distinguishes_success_validation_and_storage_failures() {
+    let fixture = Fixture::new();
+    let text = "statements:\n  - effect: Deny\n    action: ['*']\n";
+    let result = policy_set_impl(&fixture.state, json!({"text":text}));
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["raw"], text);
+    let path = aws::policy::policy_path(&fixture.state.runtime.paths);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+    let invalid = "statements: [ : : :";
+    let result = policy_set_impl(&fixture.state, json!({"text":invalid}));
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["error_type"], "InvalidRequest");
+    assert_eq!(result["raw"], invalid);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+    let blocked = Fixture::new();
+    let blocked_path = aws::policy::policy_path(&blocked.state.runtime.paths);
+    std::fs::create_dir_all(&blocked_path).unwrap();
+    let result = policy_set_impl(&blocked.state, json!({"text":text}));
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["error_type"], "StorageWriteFailed");
+    assert_eq!(result["raw"], text);
+    assert!(blocked_path.is_dir());
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+    blocked.aws.assert_no_resolution();
+    blocked.no_process();
+}
+
+#[test]
+fn policy_editor_read_distinguishes_malformed_saved_text_from_storage_failure() {
+    let fixture = Fixture::new();
+    let result = policy_get_impl(&fixture.state);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["valid"], true);
+    let path = aws::policy::policy_path(&fixture.state.runtime.paths);
+    let invalid = "statements: [ : : :";
+    std::fs::write(&path, invalid).unwrap();
+    let result = policy_get_impl(&fixture.state);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["raw"], invalid);
+
+    let blocked = Fixture::new();
+    std::fs::create_dir_all(aws::policy::policy_path(&blocked.state.runtime.paths)).unwrap();
+    let result = policy_get_impl(&blocked.state);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["valid"], false);
+    assert_eq!(result["error_type"], "StorageReadFailed");
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+    blocked.aws.assert_no_resolution();
+    blocked.no_process();
+}
+
 #[tokio::test]
 async fn fifty_identical_cold_pins_share_one_verified_context_and_one_worker() {
     let fixture = Fixture::new();

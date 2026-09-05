@@ -4,13 +4,22 @@
 //! Evaluation: explicit Deny > matching Allow > default-deny. Query starts also
 //! require the user's policy to allow the registered cleanup operation.
 
-use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::Deserialize;
 
 use super::guard::{self, OperationEffect};
 use crate::paths::AppPaths;
+use crate::storage::{self, FileSystem, NativeFileSystem};
+
+// Match the runtime's policy read budget, including direct file edits.
+const MAX_POLICY_BYTES: usize = 2 * 1024 * 1024;
+// Protect the complete read/create/migrate/save transaction. In particular, an
+// old default discovered by one request must not overwrite a concurrent save.
+// This orders app requests; external editors and other processes are not locked.
+static POLICY_IO: Mutex<()> = Mutex::new(());
 
 /// Glob match supporting `*` (any run, incl. empty) and `?` (one char).
 /// Case-sensitive.
@@ -62,6 +71,24 @@ pub struct Policy {
 #[derive(Debug, Clone)]
 pub struct PolicyError {
     pub message: String,
+    kind: PolicyErrorKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PolicyErrorKind {
+    Invalid,
+    ReadFailed,
+    WriteFailed,
+}
+
+impl PolicyError {
+    pub(crate) fn error_type(&self) -> &'static str {
+        match self.kind {
+            PolicyErrorKind::Invalid => "InvalidRequest",
+            PolicyErrorKind::ReadFailed => "StorageReadFailed",
+            PolicyErrorKind::WriteFailed => "StorageWriteFailed",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +118,7 @@ impl Policy {
         };
         let raw: RawPolicy = serde_yaml::from_str(yaml).map_err(|_| PolicyError {
             message: "Policy text or storage could not be processed".into(),
+            kind: PolicyErrorKind::Invalid,
         })?;
         let mut statements = Vec::new();
         for (i, st) in raw.statements.into_iter().enumerate() {
@@ -100,6 +128,7 @@ impl Policy {
                 _ => {
                     return Err(PolicyError {
                         message: format!("statement {}: effect must be Allow or Deny", i + 1),
+                        kind: PolicyErrorKind::Invalid,
                     })
                 }
             };
@@ -110,6 +139,7 @@ impl Policy {
                             "statement {}: action must be 'service:Action' or '*'",
                             i + 1
                         ),
+                        kind: PolicyErrorKind::Invalid,
                     });
                 }
             }
@@ -339,40 +369,58 @@ pub fn policy_path(paths: &AppPaths) -> PathBuf {
     paths.data_file("policy.yaml")
 }
 
-fn ensure_parent(path: &std::path::Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(())
-}
-
 /// Read the raw policy text, creating the default file only when it is missing.
 pub fn raw_text(paths: &AppPaths) -> Result<String, PolicyError> {
+    let filesystem: Arc<dyn FileSystem> = Arc::new(NativeFileSystem);
+    raw_text_with_filesystem(paths, &filesystem)
+}
+
+fn raw_text_with_filesystem(
+    paths: &AppPaths,
+    filesystem: &Arc<dyn FileSystem>,
+) -> Result<String, PolicyError> {
+    let _transaction = POLICY_IO.lock();
     let path = policy_path(paths);
-    match fs::read_to_string(&path) {
-        Ok(text) => {
+    let bytes = filesystem
+        .read_bounded(&path, MAX_POLICY_BYTES)
+        .map_err(|_| PolicyError {
+            message: "could not read policy file".into(),
+            kind: PolicyErrorKind::ReadFailed,
+        })?;
+    match bytes {
+        Some(bytes) => {
+            if bytes.len() > MAX_POLICY_BYTES {
+                return Err(PolicyError {
+                    message: "policy file exceeds the supported size".into(),
+                    kind: PolicyErrorKind::ReadFailed,
+                });
+            }
+            let text = String::from_utf8(bytes).map_err(|_| PolicyError {
+                message: "could not read policy file".into(),
+                kind: PolicyErrorKind::ReadFailed,
+            })?;
             if let Some(upgraded) = upgrade_legacy_default_text(&text) {
-                fs::write(&path, &upgraded).map_err(|_| PolicyError {
-                    message: "could not upgrade default policy".into(),
-                })?;
+                storage::replace_bytes(filesystem, &path, upgraded.as_bytes(), || true).map_err(
+                    |_| PolicyError {
+                        message: "could not upgrade default policy".into(),
+                        kind: PolicyErrorKind::WriteFailed,
+                    },
+                )?;
                 Ok(upgraded)
             } else {
                 Ok(text)
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        None => {
             let default = default_yaml();
-            ensure_parent(&path).map_err(|_| PolicyError {
-                message: "could not create policy directory".into(),
-            })?;
-            fs::write(&path, &default).map_err(|_| PolicyError {
-                message: "could not write default policy".into(),
-            })?;
+            storage::replace_bytes(filesystem, &path, default.as_bytes(), || true).map_err(
+                |_| PolicyError {
+                    message: "could not write default policy".into(),
+                    kind: PolicyErrorKind::WriteFailed,
+                },
+            )?;
             Ok(default)
         }
-        Err(_) => Err(PolicyError {
-            message: "could not read policy file".into(),
-        }),
     }
 }
 
@@ -383,14 +431,29 @@ pub fn load(paths: &AppPaths) -> Result<Policy, PolicyError> {
 
 /// Validate + write candidate text. Does not write when invalid.
 pub fn write_text(paths: &AppPaths, text: &str) -> Result<Policy, PolicyError> {
+    let filesystem: Arc<dyn FileSystem> = Arc::new(NativeFileSystem);
+    write_text_with_filesystem(paths, text, &filesystem)
+}
+
+fn write_text_with_filesystem(
+    paths: &AppPaths,
+    text: &str,
+    filesystem: &Arc<dyn FileSystem>,
+) -> Result<Policy, PolicyError> {
+    let _transaction = POLICY_IO.lock();
+    if text.len() > MAX_POLICY_BYTES {
+        return Err(PolicyError {
+            message: "policy text exceeds the supported size".into(),
+            kind: PolicyErrorKind::Invalid,
+        });
+    }
     let policy = Policy::parse(text)?;
-    let path = policy_path(paths);
-    ensure_parent(&path).map_err(|_| PolicyError {
-        message: "Policy text or storage could not be processed".into(),
-    })?;
-    fs::write(&path, text).map_err(|_| PolicyError {
-        message: "Policy text or storage could not be processed".into(),
-    })?;
+    storage::replace_bytes(filesystem, &policy_path(paths), text.as_bytes(), || true).map_err(
+        |_| PolicyError {
+            message: "Policy changes could not be saved; the previous policy file was kept.".into(),
+            kind: PolicyErrorKind::WriteFailed,
+        },
+    )?;
     Ok(policy)
 }
 
@@ -444,7 +507,268 @@ fn lower_service_segment(pattern: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::WritableFile;
     use crate::test_support::TestDir;
+    use std::fs;
+    use std::io::{self, Write};
+    use std::path::Path;
+    use std::sync::{mpsc, Barrier};
+    use std::time::Duration;
+
+    const ALLOW_PREFIX: &str = "statements:\n  - effect: Allow\n    action: [logs:*]\n";
+    const RESTRICTED: &str = "statements:\n  - effect: Deny\n    action: ['*']\n";
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Fault {
+        Read,
+        PartialWrite,
+        Sync,
+        Rename,
+    }
+
+    struct FaultFs(Fault);
+
+    impl FileSystem for FaultFs {
+        fn read_bounded(&self, path: &Path, max: usize) -> io::Result<Option<Vec<u8>>> {
+            if self.0 == Fault::Read {
+                return Err(io::Error::other("SYNTHETIC_PRIVATE_POLICY_READ_ERROR"));
+            }
+            NativeFileSystem.read_bounded(path, max)
+        }
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            NativeFileSystem.create_dir_all(path)
+        }
+        fn create_new(&self, path: &Path) -> io::Result<Box<dyn WritableFile>> {
+            Ok(Box::new(FaultWriter {
+                inner: NativeFileSystem.create_new(path)?,
+                fault: self.0,
+                wrote: false,
+            }))
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            if self.0 == Fault::Rename {
+                return Err(io::Error::other("synthetic rename failure"));
+            }
+            NativeFileSystem.rename(from, to)
+        }
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            NativeFileSystem.remove_file(path)
+        }
+    }
+
+    struct FaultWriter {
+        inner: Box<dyn WritableFile>,
+        fault: Fault,
+        wrote: bool,
+    }
+
+    impl Write for FaultWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fault == Fault::PartialWrite {
+                if self.wrote {
+                    return Err(io::Error::other("synthetic partial write failure"));
+                }
+                self.wrote = true;
+                return self
+                    .inner
+                    .write(&bytes[..bytes.len().min(ALLOW_PREFIX.len())]);
+            }
+            self.inner.write(bytes)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    impl WritableFile for FaultWriter {
+        fn sync_all(&mut self) -> io::Result<()> {
+            if self.fault == Fault::Sync {
+                return Err(io::Error::other("synthetic sync failure"));
+            }
+            self.inner.sync_all()
+        }
+    }
+
+    fn legacy_yaml() -> String {
+        let mut text = "statements:\n  - effect: Allow\n    action:\n".to_string();
+        for (service, operation) in LEGACY_DEFAULT_OPS {
+            text.push_str(&format!("      - {service}:{operation}\n"));
+        }
+        text
+    }
+
+    #[test]
+    fn failed_save_with_valid_allow_prefix_keeps_previous_deny_policy() {
+        let candidate = format!("{ALLOW_PREFIX}  - effect: Deny\n    action: [logs:StartQuery]\n");
+        assert_eq!(
+            Policy::parse(ALLOW_PREFIX)
+                .unwrap()
+                .decision("logs", "StartQuery"),
+            Effect::Allow
+        );
+        assert_eq!(
+            Policy::parse(&candidate)
+                .unwrap()
+                .decision("logs", "StartQuery"),
+            Effect::Deny
+        );
+        for fault in [Fault::PartialWrite, Fault::Sync, Fault::Rename] {
+            let directory = TestDir::new();
+            let paths = directory.paths();
+            write_text(&paths, RESTRICTED).unwrap();
+            let filesystem: Arc<dyn FileSystem> = Arc::new(FaultFs(fault));
+            let error = write_text_with_filesystem(&paths, &candidate, &filesystem).unwrap_err();
+            assert!(error.message.contains("previous policy file was kept"));
+            assert_eq!(fs::read_to_string(policy_path(&paths)).unwrap(), RESTRICTED);
+            assert_eq!(
+                crate::runtime::read_current_policy(&paths, false)
+                    .unwrap()
+                    .decision("logs", "StartQuery"),
+                Effect::Deny
+            );
+            assert_eq!(
+                fs::read_dir(policy_path(&paths).parent().unwrap())
+                    .unwrap()
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn failed_initialization_or_migration_never_leaves_a_partial_active_policy() {
+        for original in [None, Some(legacy_yaml())] {
+            for fault in [Fault::PartialWrite, Fault::Sync, Fault::Rename] {
+                let directory = TestDir::new();
+                let paths = directory.paths();
+                if let Some(text) = &original {
+                    write_text(&paths, text).unwrap();
+                }
+                let filesystem: Arc<dyn FileSystem> = Arc::new(FaultFs(fault));
+                assert!(raw_text_with_filesystem(&paths, &filesystem).is_err());
+                assert_eq!(fs::read_to_string(policy_path(&paths)).ok(), original);
+                assert_eq!(
+                    fs::read_dir(policy_path(&paths).parent().unwrap())
+                        .unwrap()
+                        .count(),
+                    usize::from(original.is_some())
+                );
+                assert_eq!(raw_text(&paths).unwrap(), default_yaml());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_or_oversize_candidate_cannot_replace_saved_policy() {
+        let directory = TestDir::new();
+        let paths = directory.paths();
+        write_text(&paths, RESTRICTED).unwrap();
+        for text in [
+            "statements: [ : : :".to_string(),
+            " ".repeat(MAX_POLICY_BYTES + 1),
+        ] {
+            assert!(write_text(&paths, &text).is_err());
+            assert_eq!(fs::read_to_string(policy_path(&paths)).unwrap(), RESTRICTED);
+        }
+    }
+
+    #[test]
+    fn unreadable_or_oversize_policy_is_not_treated_as_missing() {
+        let directory = TestDir::new();
+        let paths = directory.paths();
+        write_text(&paths, RESTRICTED).unwrap();
+        let filesystem: Arc<dyn FileSystem> = Arc::new(FaultFs(Fault::Read));
+        let error = raw_text_with_filesystem(&paths, &filesystem).unwrap_err();
+        assert!(!error.message.contains("SYNTHETIC_PRIVATE"));
+        assert_eq!(fs::read_to_string(policy_path(&paths)).unwrap(), RESTRICTED);
+        for bytes in [vec![b' '; MAX_POLICY_BYTES + 1], vec![0xff]] {
+            fs::write(policy_path(&paths), &bytes).unwrap();
+            assert!(raw_text(&paths).is_err());
+            assert_eq!(fs::read(policy_path(&paths)).unwrap(), bytes);
+        }
+        fs::write(policy_path(&paths), b"statements: [ : : :").unwrap();
+        assert_eq!(raw_text(&paths).unwrap(), "statements: [ : : :");
+        assert!(load(&paths).is_err());
+    }
+
+    struct DelayedRenameFs {
+        ready: mpsc::Sender<()>,
+        release: Arc<Barrier>,
+    }
+
+    impl FileSystem for DelayedRenameFs {
+        fn read_bounded(&self, path: &Path, max: usize) -> io::Result<Option<Vec<u8>>> {
+            NativeFileSystem.read_bounded(path, max)
+        }
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            NativeFileSystem.create_dir_all(path)
+        }
+        fn create_new(&self, path: &Path) -> io::Result<Box<dyn WritableFile>> {
+            NativeFileSystem.create_new(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.ready.send(()).unwrap();
+            self.release.wait();
+            NativeFileSystem.rename(from, to)
+        }
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            NativeFileSystem.remove_file(path)
+        }
+    }
+
+    #[test]
+    fn initialization_migration_and_save_serialize_with_later_explicit_save() {
+        for operation in ["initialize", "migrate", "save"] {
+            let directory = TestDir::new();
+            let paths = directory.paths();
+            if operation == "migrate" {
+                write_text(&paths, &legacy_yaml()).unwrap();
+            } else if operation == "save" {
+                write_text(&paths, RESTRICTED).unwrap();
+            }
+            let (ready, received) = mpsc::channel();
+            let release = Arc::new(Barrier::new(2));
+            let filesystem: Arc<dyn FileSystem> = Arc::new(DelayedRenameFs {
+                ready,
+                release: release.clone(),
+            });
+            let old_paths = paths.clone();
+            let old = std::thread::spawn(move || {
+                if operation == "save" {
+                    write_text_with_filesystem(&old_paths, ALLOW_PREFIX, &filesystem).unwrap();
+                } else {
+                    raw_text_with_filesystem(&old_paths, &filesystem).unwrap();
+                }
+            });
+            received.recv_timeout(Duration::from_secs(5)).unwrap();
+            // The transaction must still hold the policy lock at replacement.
+            assert!(POLICY_IO.try_lock().is_none());
+            if operation == "save" {
+                // Readers can only see the complete old file until rename.
+                assert_eq!(
+                    Policy::parse(&fs::read_to_string(policy_path(&paths)).unwrap())
+                        .unwrap()
+                        .decision("logs", "StartQuery"),
+                    Effect::Deny
+                );
+            }
+            let (new_ready, new_received) = mpsc::channel();
+            let new_paths = paths.clone();
+            let new = std::thread::spawn(move || {
+                new_ready.send(()).unwrap();
+                write_text(&new_paths, RESTRICTED).unwrap();
+            });
+            new_received.recv_timeout(Duration::from_secs(5)).unwrap();
+            release.wait();
+            old.join().unwrap();
+            new.join().unwrap();
+            assert_eq!(fs::read_to_string(policy_path(&paths)).unwrap(), RESTRICTED);
+            assert_eq!(
+                load(&paths).unwrap().decision("logs", "StartQuery"),
+                Effect::Deny
+            );
+        }
+    }
 
     #[test]
     fn glob_matches() {

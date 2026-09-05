@@ -184,36 +184,55 @@ impl Store {
         if ticket != order.next_ticket.load(Ordering::SeqCst) {
             return Err(StorageError::Superseded);
         }
-        let destination = self.paths.data_file(name);
-        let parent = destination.parent().ok_or(StorageError::WriteFailed)?;
-        self.filesystem
-            .create_dir_all(parent)
-            .map_err(|_| StorageError::WriteFailed)?;
-        let sequence = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
-        let temporary = parent.join(format!(".{name}.{}.{sequence}.tmp", std::process::id()));
-        // Cleanup ownership starts only after create_new succeeds. A collision
-        // cannot remove or truncate an unrelated existing file.
-        let mut file = self
-            .filesystem
-            .create_new(&temporary)
-            .map_err(|_| StorageError::WriteFailed)?;
-        let mut cleanup = Temporary {
-            path: temporary,
-            filesystem: self.filesystem.clone(),
-            owned: true,
-        };
-        let written = file.write_all(&output.0).and_then(|()| file.sync_all());
-        drop(file);
-        written.map_err(|_| StorageError::WriteFailed)?;
-        if ticket != order.next_ticket.load(Ordering::SeqCst) {
-            return Err(StorageError::Superseded);
-        }
-        self.filesystem
-            .rename(&cleanup.path, &destination)
-            .map_err(|_| StorageError::WriteFailed)?;
-        cleanup.owned = false;
-        Ok(())
+        replace_bytes(
+            &self.filesystem,
+            &self.paths.data_file(name),
+            &output.0,
+            || ticket == order.next_ticket.load(Ordering::SeqCst),
+        )
     }
+}
+
+/// Replace a complete file without exposing partial bytes at its live path.
+/// The caller owns ordering and validation; `can_replace` is checked after
+/// writing and syncing, immediately before the atomic rename.
+pub(crate) fn replace_bytes(
+    filesystem: &Arc<dyn FileSystem>,
+    destination: &Path,
+    bytes: &[u8],
+    can_replace: impl FnOnce() -> bool,
+) -> Result<(), StorageError> {
+    let parent = destination.parent().ok_or(StorageError::WriteFailed)?;
+    let name = destination.file_name().ok_or(StorageError::WriteFailed)?;
+    filesystem
+        .create_dir_all(parent)
+        .map_err(|_| StorageError::WriteFailed)?;
+    let sequence = NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed);
+    let mut temporary_name = std::ffi::OsString::from(".");
+    temporary_name.push(name);
+    temporary_name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+    let temporary = parent.join(temporary_name);
+    // Cleanup ownership starts only after create_new succeeds. A collision
+    // cannot remove or truncate an unrelated existing file.
+    let mut file = filesystem
+        .create_new(&temporary)
+        .map_err(|_| StorageError::WriteFailed)?;
+    let mut cleanup = Temporary {
+        path: temporary,
+        filesystem: filesystem.clone(),
+        owned: true,
+    };
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    written.map_err(|_| StorageError::WriteFailed)?;
+    if !can_replace() {
+        return Err(StorageError::Superseded);
+    }
+    filesystem
+        .rename(&cleanup.path, destination)
+        .map_err(|_| StorageError::WriteFailed)?;
+    cleanup.owned = false;
+    Ok(())
 }
 
 struct Temporary {

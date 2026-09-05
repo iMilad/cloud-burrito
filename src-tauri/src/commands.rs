@@ -1544,6 +1544,7 @@ async fn aws_auth_status_request(
 fn policy_status(state: &AppState, raw: String) -> Value {
     match aws::policy::Policy::parse(&raw) {
         Ok(p) => json!({
+            "ok": true,
             "raw": raw,
             "valid": true,
             "error": Value::Null,
@@ -1551,6 +1552,7 @@ fn policy_status(state: &AppState, raw: String) -> Value {
             "path": aws::policy::policy_path(&state.runtime.paths).to_string_lossy(),
         }),
         Err(e) => json!({
+            "ok": true,
             "raw": raw,
             "valid": false,
             "error": e.message,
@@ -1562,12 +1564,17 @@ fn policy_status(state: &AppState, raw: String) -> Value {
 
 #[tauri::command]
 pub async fn policy_get(state: State<'_, AppState>) -> Result<Value, String> {
-    let result = match aws::policy::raw_text(&state.runtime.paths) {
-        Ok(raw) => policy_status(&state, raw),
-        Err(e) => json!({"raw":"", "valid":false, "error":e.message, "actions":[],
-            "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()}),
-    };
-    final_diagnostics(&state, Ok(result)).await
+    final_diagnostics(&state, Ok(policy_get_impl(&state))).await
+}
+
+fn policy_get_impl(state: &AppState) -> Value {
+    match aws::policy::raw_text(&state.runtime.paths) {
+        Ok(raw) => policy_status(state, raw),
+        Err(e) => {
+            json!({"ok":false, "error_type":e.error_type(), "raw":"", "valid":false, "error":e.message, "actions":[],
+            "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()})
+        }
+    }
 }
 
 #[tauri::command]
@@ -1586,8 +1593,10 @@ fn policy_set_impl(state: &AppState, params: Value) -> Value {
             policy_status(state, text)
         }
         // Only the intentional local policy editor receives its candidate text.
-        Err(e) => json!({"raw":text, "valid":false, "error":e.message, "actions":[],
-            "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()}),
+        Err(e) => {
+            json!({"ok":false, "error_type":e.error_type(), "raw":text, "valid":false, "error":e.message, "actions":[],
+            "path":aws::policy::policy_path(&state.runtime.paths).to_string_lossy()})
+        }
     };
     state.runtime.with_diagnostics(result)
 }
