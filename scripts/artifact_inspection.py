@@ -470,15 +470,61 @@ def extract_external(path: Path, destination: Path, expected_type: str) -> None:
     inventory(destination)
 
 
-def inspect_windows(path: Path, temporary: Path, version: str, build_dir: Path | None, *, source_root: Path = ROOT) -> tuple[str, dict]:
-    require(build_dir is not None, "Windows inspection requires the generated NSIS script")
-    script = build_dir / "nsis/x64/installer.nsi"
+NSIS_STOCK_INCLUDES = [
+    'MUI2.nsh', 'FileFunc.nsh', 'x64.nsh', 'WordFunc.nsh', '"utils.nsh"',
+    '"FileAssociation.nsh"', '"Win\\COM.nsh"', '"Win\\Propkey.nsh"',
+    '"StrFunc.nsh"', 'MultiUser.nsh',
+]
+# Tauri CLI 2.11.4 embeds tauri-bundler 2.9.4. These generated files are
+# written with a UTF-8 BOM; hashes identify the upstream bytes without it.
+NSIS_GENERATED_INCLUDES = {
+    'utils.nsh': 'b27b407f886cca738e44e774f15e6b556b43ce52557a7c8891ee4eca7dd8013d',
+    'FileAssociation.nsh': '85ce72519d5461b5777f95123176b5536de163abd9a4742f9235453c4ddf56d8',
+    'English.nsh': '1dad40b023707a61f828db1e184d9c1b029cb530c2dbbc4790db265872ef7b5e',
+}
+
+
+def inspect_nsis_script(script: Path, version: str) -> None:
+    """Allow only stock dormant hook call sites and the pinned include set.
+
+    Platform configuration disallows custom templates/hooks/language files;
+    the native helper inventory separately verifies the NSIS include tree.
+    This checks generated bundler files too, so a stock filename cannot hide
+    a supplied hook definition. It does not execute NSIS or the installer.
+    """
     text = read(script, MAX_TOOL_OUTPUT).decode("utf-8-sig")
     require(re.search(r'(?m)^!define INSTALLMODE "currentUser"\s*$', text) is not None,
             "Generated installer is not currentUser mode")
     require(re.search(r'(?m)^!define VERSION "' + re.escape(version) + r'"\s*$', text) is not None,
             "Generated installer version mismatch")
-    require(not re.search(r"NSIS_HOOK_|\.cloud_burrito|(?i:\.aws(?:[\\/\"\s]|$))", text), "Installer hook or user-data migration is forbidden")
+    remainder = text
+    for hook in ('PREINSTALL', 'POSTINSTALL', 'PREUNINSTALL', 'POSTUNINSTALL'):
+        # Exact three-line blocks: no definition, condition nesting, comments,
+        # argument, alternate branch or extra command can become exempt.
+        pattern = (r'(?m)^[ \t]*!ifmacrodef NSIS_HOOK_' + hook + r'[ \t]*\r?\n'
+                   r'[ \t]*!insertmacro NSIS_HOOK_' + hook + r'[ \t]*\r?\n'
+                   r'[ \t]*!endif[ \t]*(?:\r?\n|$)')
+        remainder, count = re.subn(pattern, '', remainder)
+        require(count == 1, "Generated installer stock hook guards differ from the pinned template")
+    require(not re.search(r"(?i:NSIS_HOOK_|\.cloud_burrito|\.aws(?:[\\/\"\s]|$))", remainder),
+            "Installer hook or user-data migration is forbidden")
+    # Match the bundler's escaping for an absolute generated language path.
+    escaped = ''.join({'"': '$\\"', '$': '$$', '`': '$\\`', '\n': '$\\n',
+                       '\t': '$\\t', '\r': '$\\r'}.get(c, c)
+                      for c in str(script.parent / 'English.nsh'))
+    includes = re.findall(r'(?im)^[ \t]*!include\b([^\r\n]*)', text)
+    require([value.strip() for value in includes] == [*NSIS_STOCK_INCLUDES, f'"{escaped}"'],
+            "Custom or unexpected installer include is forbidden")
+    for name, expected in NSIS_GENERATED_INCLUDES.items():
+        data = read(script.parent / name, MAX_TOOL_OUTPUT)
+        require(data.startswith(b'\xef\xbb\xbf') and hashlib.sha256(data[3:]).hexdigest() == expected,
+                "Generated installer include differs from the pinned upstream bytes")
+
+
+def inspect_windows(path: Path, temporary: Path, version: str, build_dir: Path | None, *, source_root: Path = ROOT) -> tuple[str, dict]:
+    require(build_dir is not None, "Windows inspection requires the generated NSIS script")
+    script = build_dir / "nsis/x64/installer.nsi"
+    inspect_nsis_script(script, version)
     installer = pe(read(path), amd64=False, version=version, installer=True)
     payload = temporary / "payload"
     extract_external(path, payload, "Nsis")

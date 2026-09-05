@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
 import json
+import re
 import stat
 import struct
 import sys
@@ -148,6 +150,80 @@ class ArtifactInspectionTests(unittest.TestCase):
                 INSPECT.pe(value, amd64=True, version="0.2.9", installer=True)
         with self.assertRaises(INSPECT.InspectionError):
             INSPECT.pe(fake_pe()[:400], amd64=True, version="0.2.9")
+
+    def stock_nsis_script(self, directory=None):
+        directory = directory or self.root
+        directory.mkdir(parents=True, exist_ok=True)
+        fixtures = ROOT / 'tests/scripts/fixtures/tauri-nsis-2.9.4'
+        template = (fixtures / 'installer.nsi').read_bytes()
+        self.assertEqual(hashlib.sha256(template).hexdigest(),
+                         '20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079')
+        text = template.decode()
+        includes = re.findall(r'(?m)^[ \t]*!include[^\r\n]*', text)
+        includes = [line for line in includes if '{{installer_hooks}}' not in line]
+        includes = [line.replace('{{this}}', str(directory / 'English.nsh')) for line in includes]
+        guards = re.findall(r'(?m)^[ \t]*!ifmacrodef NSIS_HOOK_[^\n]*\n[^\n]*\n[ \t]*!endif', text)
+        self.assertEqual(len(guards), 4)
+        generated = '!define INSTALLMODE "currentUser"\n!define VERSION "0.2.9"\n'
+        generated += '\n'.join([*includes, *guards]) + '\n'
+        script = directory / 'installer.nsi'
+        script.write_text(generated, encoding='utf-8-sig')
+        for name in INSPECT.NSIS_GENERATED_INCLUDES:
+            (directory / name).write_bytes(b'\xef\xbb\xbf' + (fixtures / name).read_bytes())
+        return script, generated
+
+    def test_pinned_stock_nsis_guards_and_includes_are_accepted(self):
+        script, generated = self.stock_nsis_script()
+        INSPECT.inspect_nsis_script(script, '0.2.9')
+        script.write_bytes(b'\xef\xbb\xbf' + generated.replace('\n', '\r\n').encode())
+        INSPECT.inspect_nsis_script(script, '0.2.9')
+
+    def test_windows_inspection_continues_to_payload_for_stock_generated_script(self):
+        script, _ = self.stock_nsis_script(self.root / 'nsis/x64')
+        installer = self.root / 'synthetic-setup.exe'
+        installer.write_bytes(fake_pe(machine=0x14c))
+        def extracted(path, destination, expected_type):
+            self.assertEqual(expected_type, 'Nsis')
+            destination.mkdir()
+            (destination / 'cloud-burrito.exe').write_bytes(fake_pe())
+        with mock.patch.object(INSPECT, 'extract_external', side_effect=extracted) as extraction:
+            payload_hash, details = INSPECT.inspect_windows(installer, self.root, '0.2.9', self.root)
+        extraction.assert_called_once()
+        self.assertEqual(len(payload_hash), 64)
+        self.assertFalse(details['custom_hooks'])
+        self.assertEqual(details['generated_script_sha256'], INSPECT.digest(script))
+
+    def test_nsis_rejects_defined_unconditional_changed_or_duplicate_hooks(self):
+        script, generated = self.stock_nsis_script()
+        for changed in [
+            generated + '!macro NSIS_HOOK_PREINSTALL\n!macroend\n',
+            generated + '!define NSIS_HOOK_PREINSTALL\n',
+            generated + '!insertmacro NSIS_HOOK_PREINSTALL\n',
+            generated.replace('!ifmacrodef NSIS_HOOK_PREINSTALL', '!if 1'),
+            generated.replace('!insertmacro NSIS_HOOK_PREINSTALL', '!insertmacro NSIS_HOOK_PREINSTALL extra'),
+            generated + '!ifmacrodef NSIS_HOOK_PREINSTALL\n!insertmacro NSIS_HOOK_PREINSTALL\n!endif\n',
+            generated + '!macro nsis_hook_preinstall\n!macroend\n',
+        ]:
+            with self.subTest(tail=changed[-90:]):
+                script.write_text(changed, encoding='utf-8-sig')
+                with self.assertRaises(INSPECT.InspectionError):
+                    INSPECT.inspect_nsis_script(script, '0.2.9')
+
+    def test_nsis_custom_includes_user_data_and_modified_stock_includes_are_rejected(self):
+        script, generated = self.stock_nsis_script()
+        for changed in [generated + '!include "custom.nsh"\n',
+                        generated + '!include /NONFATAL "custom.nsh"\n',
+                        generated.replace('"utils.nsh"', '"../utils.nsh"'),
+                        generated.replace('English.nsh', 'English_custom.nsh'),
+                        generated + 'Delete "$PROFILE\\.cloud_burrito\\config"\n',
+                        generated + 'Delete "$PROFILE\\.aws\\config"\n']:
+            script.write_text(changed, encoding='utf-8-sig')
+            with self.subTest(tail=changed[-90:]), self.assertRaises(INSPECT.InspectionError):
+                INSPECT.inspect_nsis_script(script, '0.2.9')
+        script.write_text(generated, encoding='utf-8-sig')
+        (self.root / 'utils.nsh').write_text('!macro NSIS_HOOK_PREINSTALL\n!macroend\n', encoding='utf-8-sig')
+        with self.assertRaisesRegex(INSPECT.InspectionError, 'upstream bytes'):
+            INSPECT.inspect_nsis_script(script, '0.2.9')
 
     def test_elf_baseline_and_architecture(self):
         self.assertEqual(INSPECT.elf(fake_elf())["maximum_glibc_reference"], "2.35")
