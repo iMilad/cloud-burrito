@@ -17,9 +17,17 @@ npx playwright install chromium
 Before opening a pull request:
 
 ```bash
+npm run test:unit
 npm run test:frontend
 ./scripts/security-check.sh
 ```
+
+The frontend gate uses the Chromium revision installed by the locked Playwright
+version. It rejects `CLOUD_BURRITO_CHROME_PATH` overrides: a system Chrome run
+previously passed every assertion but hung while closing the browser process.
+The gate includes teardown and fails after five minutes if it cannot finish.
+After changing the Playwright lock, rerun `npx playwright install chromium`.
+See [Playwright's browser version contract](https://playwright.dev/docs/browsers).
 
 The security check validates release metadata, source privacy, formatting,
 tests, Clippy, script syntax, whitespace, and any supported security scanners
