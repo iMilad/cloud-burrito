@@ -1457,46 +1457,108 @@
     }
   }
 
-  function applyPolicyStatus(s) {
-    if (!s) return;
-    const editor = $("#policy-editor");
+  let policyDraftRevision = 0;
+  let policyDraftDirty = false;
+  let policyLoadId = 0;
+  let policyLoadPending = false;
+  let policySavePending = false;
+  let policyStorageReady = false;
+
+  function updatePolicyControls() {
+    $("#policy-save").disabled = policySavePending || !policyStorageReady;
+    const reload = $("#policy-reload");
+    reload.disabled = policySavePending || policyLoadPending;
+    reload.textContent = policyDraftDirty ? "Discard edits & reload" : "Reload & validate";
+    reload.title = policyDraftDirty ? "Replace the current draft with the saved policy" : "Read and validate the saved policy";
+  }
+
+  function setPolicyStatus(message, valid = null) {
     const status = $("#policy-status");
+    status.textContent = message;
+    status.className = valid === true ? "small policy-ok" : valid === false ? "small policy-bad" : "small";
+  }
+
+  function applyPolicyStatus(s, { replaceDraft, saved = false } = {}) {
+    if (!s || s.ok === false || typeof s.raw !== "string" || typeof s.valid !== "boolean") {
+      throw new Error("Policy response was incomplete. Reload to verify.");
+    }
+    const editor = $("#policy-editor");
     const path = $("#policy-path");
     if (path) path.textContent = s.path || "";
-    if (typeof s.raw === "string") {
+    if (replaceDraft) {
       editor.value = s.raw;
       editor.scrollTop = 0;
       editor.scrollLeft = 0;
       renderPolicyHighlight();
+      policyDraftDirty = false;
     }
+    const subject = saved ? "Saved policy" : "Saved policy on disk";
+    const suffix = replaceDraft ? "" : " Current edits are not saved or validated.";
     if (s.valid) {
       const n = Array.isArray(s.actions) ? s.actions.length : 0;
-      status.textContent = "✓ valid — " + n + " action(s) allowed";
-      status.className = "small policy-ok";
+      setPolicyStatus(`${subject} is valid — ${n} action(s) allowed.${suffix}`, replaceDraft ? true : null);
     } else {
-      status.textContent = "✗ " + (s.error || "invalid policy");
-      status.className = "small policy-bad";
+      setPolicyStatus(`${subject} is invalid: ${s.error || "invalid policy"}.${suffix}`, false);
     }
   }
 
-  async function loadPolicy() {
-    if (!isTauri) return;
+  async function loadPolicy({ discardDraft = false } = {}) {
+    if (!isTauri || policySavePending || policyLoadPending) return;
+    // Opening Settings never discards a policy draft. Only the explicitly
+    // labelled reload action replaces edits that existed when it was clicked.
+    if (policyDraftDirty && !discardDraft) return;
+    const request = ++policyLoadId;
+    const draft = policyDraftRevision;
+    policyLoadPending = true;
+    updatePolicyControls();
+    setPolicyStatus("Loading saved policy…");
     try {
-      applyPolicyStatus(await tauriInvoke("policy_get"));
+      const loaded = await tauriInvoke("policy_get");
+      if (request !== policyLoadId) return;
+      applyPolicyStatus(loaded, { replaceDraft: draft === policyDraftRevision });
+      policyStorageReady = true;
     } catch (e) {
-      $("#policy-status").textContent = "policy_get failed: " + e;
+      if (request !== policyLoadId) return;
+      setPolicyStatus("Policy could not be loaded. Current edits are preserved. " + e, false);
+    } finally {
+      if (request === policyLoadId) {
+        policyLoadPending = false;
+        updatePolicyControls();
+      }
     }
   }
 
   async function savePolicy() {
-    if (!isTauri) return;
+    if (!isTauri || policySavePending || !policyStorageReady) return;
     const text = $("#policy-editor").value;
-    $("#policy-status").textContent = "Saving…";
+    const draft = policyDraftRevision;
+    ++policyLoadId; // An earlier read cannot replace an accepted save or its status.
+    policyLoadPending = false;
+    policySavePending = true;
+    updatePolicyControls();
+    setPolicyStatus("Saving policy…");
     try {
-      applyPolicyStatus(await tauriInvoke("policy_set", { params: { text } }));
+      const saved = await tauriInvoke("policy_set", { params: { text } });
+      // A legacy rejection is not proof that anything was written to disk.
+      if (saved?.valid === false) throw new Error("Policy was rejected. Review the draft and try again.");
+      if (saved?.raw !== text) throw new Error("Policy save response did not match the submitted draft. Reload to verify.");
+      applyPolicyStatus(saved, { replaceDraft: draft === policyDraftRevision, saved: true });
     } catch (e) {
-      $("#policy-status").textContent = "Save failed: " + e;
+      setPolicyStatus("Policy save failed. Current edits are not saved. " + e, false);
+    } finally {
+      policySavePending = false;
+      updatePolicyControls();
     }
+  }
+
+  function markPolicyDirty() {
+    ++policyDraftRevision;
+    policyDraftDirty = true;
+    setPolicyStatus(policySavePending
+      ? "Saving the submitted policy. Current edits are not saved or validated."
+      : "Current policy edits are not saved or validated.");
+    updatePolicyControls();
+    renderPolicyHighlight(true);
   }
 
   function escapeHtml(s) {
@@ -6727,10 +6789,11 @@
     $("#settings-form").addEventListener("submit", saveSettings);
     $("#settings-form").addEventListener("input", markSettingsDirty);
     $("#policy-save")?.addEventListener("click", savePolicy);
-    $("#policy-reload")?.addEventListener("click", loadPolicy);
+    $("#policy-reload")?.addEventListener("click", () => loadPolicy({ discardDraft: true }));
     // input re-renders content and re-syncs scroll; scroll only re-syncs.
-    $("#policy-editor")?.addEventListener("input", () => renderPolicyHighlight(true));
+    $("#policy-editor")?.addEventListener("input", markPolicyDirty);
     $("#policy-editor")?.addEventListener("scroll", syncPolicyScroll);
+    updatePolicyControls();
 
     const auditBtn = $("#audit-btn");
     if (auditBtn) {
@@ -7061,9 +7124,10 @@
 
   // ===== Fullscreen widget toggle (Jira-style) =====
   let fullscreenWidget = null;
+  let fullscreenGridState = null;
 
   function enterFullscreen(widget) {
-    if (fullscreenWidget) exitFullscreen();
+    if (fullscreenWidget) exitFullscreen({ restoreFocus: false });
     widget.classList.add("fullscreen");
     document.body.classList.add("has-fullscreen-widget");
     fullscreenWidget = widget;
@@ -7074,9 +7138,12 @@
       button.setAttribute("aria-pressed", "true");
     }
     // Disable grid drag/resize while a widget is fullscreen.
-    if (grid) grid.disable();
+    if (grid) {
+      fullscreenGridState = { disableDrag: !!grid.opts.disableDrag, disableResize: !!grid.opts.disableResize };
+      grid.disable();
+    }
   }
-  function exitFullscreen() {
+  function exitFullscreen({ restoreFocus = true } = {}) {
     if (!fullscreenWidget) return;
     const button = $(".fs-btn", fullscreenWidget);
     if (button) {
@@ -7087,7 +7154,12 @@
     fullscreenWidget.classList.remove("fullscreen");
     document.body.classList.remove("has-fullscreen-widget");
     fullscreenWidget = null;
-    if (grid) grid.enable();
+    if (grid && fullscreenGridState) {
+      grid.enableMove(!fullscreenGridState.disableDrag);
+      grid.enableResize(!fullscreenGridState.disableResize);
+    }
+    fullscreenGridState = null;
+    if (restoreFocus && !activePanel && !focusSafely(button)) focusSafely($("#add-widget-btn"));
   }
 
   function wireFullscreenButtons() {
@@ -7246,7 +7318,8 @@
 
     // Account section
     $("#cfg-context-error").textContent = "";
-    populateOverrideProfileSelect();
+    populateOverrideProfileSelect(currentCfgDraft.context);
+    $("#cfg-override-account").value = "";
     populateOverrideRegionSelect(currentCfgDraft.context.mode === "pinned"
       ? currentCfgDraft.context.region : topbarState.region || cachedSettings?.default_region);
     const useOverride = $("#cfg-use-override");
@@ -7289,19 +7362,14 @@
     currentCfgDraft = null;
   }
 
-  function populateOverrideProfileSelect() {
+  function populateOverrideProfileSelect(current) {
     const sel = $("#cfg-override-profile");
     if (!sel) return;
     resetSelect(sel);
     const cached = readProfilesCache();
     const profiles = cached ? cached.profiles.filter(profile => profile.eligibility === "supported_sso") : [];
-    if (profiles.length === 0) {
-      addOption(sel, "", "(no profiles — open Settings)");
-      sel.disabled = true;
-      return;
-    }
-    sel.disabled = false;
-    addOption(sel, "", "(pick profile)");
+    sel.disabled = profiles.length === 0;
+    addOption(sel, "", profiles.length ? "(pick profile)" : "(no profiles — open Settings)");
     profiles.forEach(p => {
       const opt = addOption(sel, p.name, `${p.name}${p.account_id ? " · " + p.account_id : ""}`, {
         accountId: p.account_id || "",
@@ -7309,6 +7377,14 @@
       });
       void opt;
     });
+    if (current?.mode === "pinned" && !profiles.some(profile => profile.name === current.profile)) {
+      // Discovery can lose a profile without changing the saved pin. Keep the
+      // exact choice visible so unrelated edits cannot adopt the topbar account.
+      addOption(sel, current.profile, `${current.profile} — unavailable (saved pin)`, {
+        accountId: current.account_id, region: current.region, unavailable: "true",
+      });
+      $("#cfg-context-error").textContent = "Saved profile is unavailable. Its pinned context is preserved; choose another profile or turn off pinning to change it.";
+    }
     sel.onchange = () => {
       const opt = sel.options[sel.selectedIndex];
       if (!opt) return;
@@ -7422,15 +7498,23 @@
       const profile = $("#cfg-override-profile").value.trim();
       const accountId = $("#cfg-override-account").value.trim();
       const region = $("#cfg-override-region").value.trim();
+      if (!profile || !accountId) {
+        $("#cfg-context-error").textContent = "Choose a supported profile with an account before saving this pinned context.";
+        focusSafely($("#cfg-override-profile"));
+        return;
+      }
       if (!allowedRegions.includes(region)) {
         $("#cfg-context-error").textContent = "Choose a supported region before saving this pinned context.";
         return;
       }
-      if (profile && accountId && region) {
-        currentCfgDraft.context = { mode: "pinned", profile, account_id: accountId, region };
-      } else {
-        currentCfgDraft.context = { ...INHERIT_CONTEXT };
+      const option = $("#cfg-override-profile").selectedOptions[0];
+      const previous = currentCfgDraft.context;
+      if (option?.dataset.unavailable === "true" && (previous.mode !== "pinned"
+          || previous.profile !== profile || previous.account_id !== accountId || previous.region !== region)) {
+        $("#cfg-context-error").textContent = "Choose an available supported profile to change this pinned context.";
+        return;
       }
+      currentCfgDraft.context = { mode: "pinned", profile, account_id: accountId, region };
     } else {
       currentCfgDraft.context = { ...INHERIT_CONTEXT };
     }
@@ -7477,12 +7561,16 @@
         e.stopPropagation();
         const item = btn.closest(".grid-stack-item");
         if (!item) return;
+        const restoreFocus = item.contains(document.activeElement);
+        const nextFocus = item.nextElementSibling?.querySelector(".rm-btn") || item.previousElementSibling?.querySelector(".rm-btn");
+        if (fullscreenWidget && item.contains(fullscreenWidget)) exitFullscreen({ restoreFocus: false });
         invalidateRequests(item);
         if (grid) {
           grid.removeWidget(item, true);
         } else {
           item.remove();
         }
+        if (restoreFocus && !focusSafely(nextFocus)) focusSafely($("#add-widget-btn"));
         // Re-render the "+ Widget" panel so removed tiles flip from Show → Add.
         renderPrebuiltList();
       });
@@ -7498,6 +7586,8 @@
         if (!node.isConnected) disposeRenderTree(node);
       }
       if (comboOwnerInput && !comboOwnerInput.isConnected) closePipelineCombo();
+      // Layout recovery and GridStack can remove a tile without its own button.
+      if (fullscreenWidget && !fullscreenWidget.isConnected) exitFullscreen();
     }).observe(document.body, { childList: true, subtree: true });
     const topbar = $(".topbar");
     if (topbar) {

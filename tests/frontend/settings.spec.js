@@ -249,6 +249,75 @@ test("backend catalogue drives default and pinned selectors without moving an un
   expect(await page.evaluate(() => window.__settingsFixture.persisted.tiles[0].config.context)).toEqual(context);
 });
 
+test("an unavailable profile remains pinned after an unrelated color edit and reload", async ({ page }) => {
+  const context = { mode: "pinned", profile: "synthetic-removed", account_id: "333333333333", region: "eu-west-1" };
+  const remote = await bootSettings(page, { tiles: [{ ...tile, config: { context } }] });
+  await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
+  const widget = page.locator('[data-widget="cfn-stacks"]');
+  await widget.locator(".cfg-btn").click();
+  await expect(page.locator("#cfg-use-override")).toBeChecked();
+  await expect(page.locator("#cfg-override-profile")).toHaveValue(context.profile);
+  await expect(page.locator("#cfg-override-profile option:checked")).toContainText("unavailable (saved pin)");
+  await expect(page.locator("#cfg-context-error")).toContainText("pinned context is preserved");
+  await page.locator('.color-swatch[data-color="blue"]').click();
+  await page.locator("#cfg-save").click();
+  await expect(page.locator("#widget-config-panel")).toHaveAttribute("aria-hidden", "true");
+  await page.clock.fastForward(500);
+  await expect(page.locator("#layout-save-status")).toHaveText("Layout saved.");
+  expect(await page.evaluate(() => window.__settingsFixture.persisted.tiles[0].config)).toMatchObject({ context, header_color: "blue" });
+  expect((await callsFor(page, "widget_fetch")).every(call => JSON.stringify(call.params.context) === JSON.stringify(context))).toBe(true);
+  await page.reload();
+  await widget.locator(".cfg-btn").click();
+  await expect(page.locator("#cfg-use-override")).toBeChecked();
+  await expect(page.locator("#cfg-override-profile")).toHaveValue(context.profile);
+  expect(await page.evaluate(() => window.__settingsFixture.persisted.tiles[0].config.context)).toEqual(context);
+  expect(remote).toEqual([]);
+});
+
+test("new or incomplete pinned context cannot silently fall back to the default account", async ({ page }) => {
+  await bootSettings(page);
+  await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
+  await page.locator('[data-widget="cfn-stacks"] .cfg-btn').click();
+  await page.locator("#cfg-use-override").check();
+  await expect(page.locator("#cfg-override-account")).toHaveValue("");
+  await page.locator("#cfg-save").click();
+  await expect(page.locator("#cfg-context-error")).toContainText("Choose a supported profile with an account");
+  await expect(page.locator("#widget-config-panel")).toHaveAttribute("aria-hidden", "false");
+  expect(await callsFor(page, "dashboard_set")).toEqual([]);
+
+  await page.locator("#cfg-override-profile").selectOption("demo-b");
+  await expect(page.locator("#cfg-override-account")).toHaveValue(profiles[1].account_id);
+  await page.locator("#cfg-override-profile").selectOption("");
+  await page.locator("#cfg-save").click();
+  await expect(page.locator("#cfg-context-error")).toContainText("Choose a supported profile with an account");
+  expect(await callsFor(page, "dashboard_set")).toEqual([]);
+
+  await page.locator("#cfg-override-profile").selectOption("demo-b");
+  await page.locator("#cfg-save").click();
+  await page.clock.fastForward(500);
+  await expect(page.locator("#layout-save-status")).toHaveText("Layout saved.");
+  expect(await page.evaluate(() => window.__settingsFixture.persisted.tiles[0].config.context)).toEqual({
+    mode: "pinned", profile: "demo-b", account_id: profiles[1].account_id, region: "eu-west-1",
+  });
+});
+
+test("an unavailable saved profile cannot be repurposed into a new pinned context", async ({ page }) => {
+  const context = { mode: "pinned", profile: "synthetic-removed", account_id: "333333333333", region: "eu-west-1" };
+  await bootSettings(page, { tiles: [{ ...tile, config: { context } }] });
+  await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
+  await page.locator('[data-widget="cfn-stacks"] .cfg-btn').click();
+  await page.locator("#cfg-override-region").selectOption("us-east-1");
+  await page.locator("#cfg-save").click();
+  await expect(page.locator("#cfg-context-error")).toContainText("Choose an available supported profile");
+  expect(await callsFor(page, "dashboard_set")).toEqual([]);
+  expect(await page.evaluate(() => window.__settingsFixture.persisted.tiles[0].config.context)).toEqual(context);
+  await page.locator("#cfg-use-override").uncheck();
+  await page.locator("#cfg-save").click();
+  await page.clock.fastForward(500);
+  await expect(page.locator("#layout-save-status")).toHaveText("Layout saved.");
+  expect(await page.evaluate(() => window.__settingsFixture.persisted.tiles[0].config?.context)).toBeUndefined();
+});
+
 test("credential source changes reverify the context while layout save states stay truthful", async ({ page }) => {
   await bootSettings(page, { settings: { default_profile: "demo-a" } });
   await expect(page.locator('[data-widget="cfn-stacks"]')).toContainText("evidence-demo-a");

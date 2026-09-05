@@ -187,6 +187,47 @@ test("rapid reopen, removed opener and fullscreen panels keep a usable focus and
   expect(await page.evaluate(() => document.activeElement !== document.body && document.activeElement.isConnected && !document.activeElement.closest("[inert]"))).toBe(true);
 });
 
+for (const compact of [false, true]) {
+  test(`removing a fullscreen widget restores scrolling, grid controls and focus${compact ? " in an empty workspace" : " on a remaining widget"}`, async ({ page }) => {
+    await boot(page, { compact });
+    const stack = widget(page, "cfn-stacks");
+    await stack.locator(".fs-btn").click();
+    await expect(page.locator("body")).toHaveClass(/has-fullscreen-widget/);
+    expect(await page.locator("#grid-stack").evaluate(node => [!!node.gridstack.opts.disableDrag, !!node.gridstack.opts.disableResize])).toEqual([true, true]);
+    await stack.locator(".rm-btn").click();
+    await expect(stack).toHaveCount(0);
+    await expect(page.locator("body")).not.toHaveClass(/has-fullscreen-widget/);
+    expect(await page.locator("body").evaluate(node => getComputedStyle(node).overflow)).not.toBe("hidden");
+    expect(await page.locator("#grid-stack").evaluate(node => [!!node.gridstack.opts.disableDrag, !!node.gridstack.opts.disableResize])).toEqual([false, false]);
+    if (compact) await expect(page.locator("#add-widget-btn")).toBeFocused();
+    else await expect(page.locator(".grid-stack-item .rm-btn:focus")).toHaveCount(1);
+    if (!compact) {
+      const remaining = page.locator(".grid-stack-item").filter({ has: widget(page, "pipeline-runs") });
+      await expect(remaining).not.toHaveClass(/ui-draggable-disabled|ui-resizable-disabled/);
+      // A surviving widget can still enter and leave fullscreen normally.
+      await widget(page, "pipeline-runs").locator(".fs-btn").click();
+      await page.keyboard.press("Escape");
+      await expect(page.locator("body")).not.toHaveClass(/has-fullscreen-widget/);
+      await expect(widget(page, "pipeline-runs").locator(".fs-btn")).toBeFocused();
+    }
+  });
+}
+
+test("external fullscreen removal restores prior grid restrictions without stealing modal focus", async ({ page }) => {
+  await boot(page);
+  await page.locator("#grid-stack").evaluate(node => node.gridstack.enableMove(false));
+  const stack = widget(page, "cfn-stacks");
+  await stack.locator(".fs-btn").click();
+  await openWithKeyboard(page.locator("#settings-btn"), page.locator("#settings-panel"));
+  const focused = await page.evaluate(() => document.activeElement.id);
+  await stack.evaluate(node => node.closest(".grid-stack-item").remove());
+  await expect(page.locator("body")).not.toHaveClass(/has-fullscreen-widget/);
+  expect(await page.locator("#grid-stack").evaluate(node => [!!node.gridstack.opts.disableDrag, !!node.gridstack.opts.disableResize])).toEqual([true, false]);
+  expect(await page.evaluate(() => document.activeElement.id)).toBe(focused);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#settings-btn")).toBeFocused();
+});
+
 async function checkTabs(tabs) {
   const first = tabs.first(), last = tabs.last();
   await first.focus();
