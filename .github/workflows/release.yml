@@ -88,6 +88,9 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium
 
+      - name: Test frontend units
+        run: npm run test:unit
+
       - name: Test browser mode
         run: npm run test:frontend
 
@@ -157,10 +160,8 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             suffix: aarch64
-            macho_arch: arm64
           - target: x86_64-apple-darwin
             suffix: x86_64
-            macho_arch: x86_64
 
     steps:
       - name: Checkout release tag
@@ -207,63 +208,31 @@ jobs:
             cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
           fi
 
-      - name: Build unsigned release bundle
+      # A target-keyed cache is only an optimization. Provision the application's
+      # exact lock before the wrapper enters its offline build boundary.
+      - name: Provision locked application dependencies
+        working-directory: src-tauri
         shell: bash
+        run: cargo fetch --locked --target "${{ matrix.target }}"
+
+      - name: Build and inspect unsigned candidate
+        shell: bash
+        env:
+          CANDIDATE_OUTPUT: ${{ runner.temp }}/release-candidate-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.suffix }}
         run: |
           set -euo pipefail
-          ./scripts/build-release.sh "${{ matrix.target }}"
+          ./scripts/build-release.sh "${{ matrix.target }}" --output "$CANDIDATE_OUTPUT"
 
-      - name: Verify unsigned bundle and disk image
+      - name: Stage exact inspected bytes and build receipt
         shell: bash
+        env:
+          CANDIDATE_OUTPUT: ${{ runner.temp }}/release-candidate-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.suffix }}
         run: |
           set -euo pipefail
-          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
-          binary="$app/Contents/MacOS/cloud-burrito"
-          dmg="$(
-            find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" \
-              -maxdepth 1 -name '*.dmg' -print -quit
-          )"
-          test -d "$app"
-          test -x "$binary"
-          test -n "$dmg"
-          test "$(lipo -archs "$binary")" = "${{ matrix.macho_arch }}"
-          plutil -lint "$app/Contents/Info.plist"
-
-          assert_no_publisher_identity() {
-            local target="$1"
-            local metadata team
-            metadata="$(codesign --display --verbose=4 "$target" 2>&1 || true)"
-            if grep -q '^Authority=' <<< "$metadata"; then
-              echo "publisher identity unexpectedly present in $target" >&2
-              exit 1
-            fi
-            team="$(sed -n 's/^TeamIdentifier=//p' <<< "$metadata")"
-            if [[ -n "$team" && "$team" != "not set" ]]; then
-              echo "publisher team unexpectedly present in $target" >&2
-              exit 1
-            fi
-          }
-
-          assert_no_publisher_identity "$app"
-          assert_no_publisher_identity "$binary"
-          assert_no_publisher_identity "$dmg"
-          hdiutil verify "$dmg"
-
-      - name: Stage release assets
-        shell: bash
-        run: |
           version="$(python3 scripts/check-release-version.py --print-version)"
-          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Cloud Burrito.app"
-          dmg_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
-          mkdir -p release-assets
-          ditto -c -k --keepParent "$app" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}_unsigned.app.zip"
-          dmg="$(find "$dmg_dir" -maxdepth 1 -name '*.dmg' -print -quit)"
-          test -n "$dmg"
-          cp "$dmg" "release-assets/cloud-burrito_${version}_${{ matrix.suffix }}_unsigned.dmg"
-          (
-            cd release-assets
-            shasum -a 256 *.app.zip *.dmg > "SHA256SUMS-${{ matrix.suffix }}.txt"
-          )
+          python3 scripts/stage_release_assets.py stage \
+            --target "${{ matrix.target }}" --input-dir "$CANDIDATE_OUTPUT" \
+            --output release-assets --source-commit "$GITHUB_SHA" --version "$version"
 
       - name: Upload release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -308,12 +277,14 @@ jobs:
       - name: Check release metadata
         run: python3 scripts/check-release-version.py "${TAG_NAME}"
 
-      - name: Combine and verify checksums
+      - name: Verify transferred candidate bytes and combine checksums
         shell: bash
         run: |
-          cd release-assets
-          cat SHA256SUMS-*.txt | sort -k2 > SHA256SUMS.txt
-          shasum -a 256 -c SHA256SUMS.txt
+          set -euo pipefail
+          python3 scripts/stage_release_assets.py verify \
+            --input-dir release-assets --source-commit "$GITHUB_SHA" \
+            --version "${TAG_NAME#app-v}" --write-combined
+          (cd release-assets && shasum -a 256 -c SHA256SUMS.txt)
 
       - name: Publish draft GitHub release
         env:
@@ -326,6 +297,7 @@ jobs:
             "Unsigned macOS convenience builds for Cloud Burrito ${version}." \
             "No publisher certificate, account, or team identity was used." \
             "Build from the tagged source with ./scripts/build-release.sh if preferred." \
+            "Preserved build receipts describe native inspections; checksums do not authenticate a publisher." \
             "" \
             "Verify checksums with: shasum -a 256 -c SHA256SUMS.txt")"
 

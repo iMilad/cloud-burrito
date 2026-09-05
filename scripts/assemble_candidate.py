@@ -175,8 +175,18 @@ def inspection_assertions(item, row, version):
                     details.get('extraction') == 'external archive tool', 'AppImage static extraction was not recorded')
 
 
-def collect(input_dirs, matrix, assembled=False):
-    require(len(input_dirs) == (1 if assembled else 4), 'Exactly four target directories are required')
+def collect(input_dirs, matrix, assembled=False, *, target_ids=None, extra_files=()):
+    # Full candidate assembly always uses all four targets. The release staging
+    # helper may explicitly select a native subset without weakening source
+    # identity checks, which continue to use the complete packaging matrix.
+    rows = matrix['targets']
+    if target_ids is not None:
+        require(isinstance(target_ids, list) and target_ids and
+                all(isinstance(value, str) for value in target_ids) and
+                len(set(target_ids)) == len(target_ids) and
+                set(target_ids) <= {row['id'] for row in rows}, 'Invalid target selection')
+        rows = [row for row in rows if row['id'] in target_ids]
+    require(len(input_dirs) == (1 if assembled else len(rows)), 'Exactly the selected target directories are required')
     directories = [directory(path) for path in input_dirs]
     require(len(set(directories)) == len(directories), 'Duplicate target directory')
     catalog, groups = {}, []
@@ -189,7 +199,7 @@ def collect(input_dirs, matrix, assembled=False):
             names.add(path.name)
             catalog[path.name] = path
         groups.append(names)
-    manifest_names = {f"build-manifest-{row['id']}.json": row for row in matrix['targets']}
+    manifest_names = {f"build-manifest-{row['id']}.json": row for row in rows}
     require(set(manifest_names) <= set(catalog), 'A required target build manifest is missing')
     records, common, version = [], None, None
     expected = set(manifest_names)
@@ -237,11 +247,13 @@ def collect(input_dirs, matrix, assembled=False):
                     'Each target directory must contain only its artifacts and build manifest')
         records.append({'filename': name, 'role': 'build-manifest', 'target': row['target'], **before})
         expected.update(wanted)
-    require(set(artifact_names(version, matrix)) == {record['filename'] for record in records if record['role'] == 'artifact'},
+    require(set(artifact_names(version, {**matrix, 'targets': rows})) == {record['filename'] for record in records if record['role'] == 'artifact'},
             'Candidate does not contain the complete matrix artifact set')
-    require(set(catalog) == expected | ({MANIFEST, SUMS} if assembled else set()), 'Missing or extra candidate files')
+    require(set(catalog) == expected | ({MANIFEST, SUMS} if assembled and target_ids is None else set(extra_files)),
+            'Missing or extra candidate files')
     summary = {'schema_version': 1, 'matrix_revision': matrix['matrix_revision'], 'version': version, **common,
-               'status': 'complete-recorded-inspections', 'targets': [row['target'] for row in matrix['targets']],
+               'status': 'complete-recorded-inspections' if target_ids is None else 'selected-recorded-inspections',
+               'targets': [row['target'] for row in rows],
                'files': sorted(records, key=lambda record: record['filename']), 'limitations': LIMITATIONS}
     return summary, catalog
 

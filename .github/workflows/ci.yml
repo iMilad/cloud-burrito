@@ -48,6 +48,9 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Test frontend units
+        run: npm run test:unit
+
       - name: Test browser mode
         run: npm run test:frontend
 

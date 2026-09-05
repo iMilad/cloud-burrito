@@ -121,6 +121,11 @@ jobs:
           enableCrossOsArchive: false
           # No restore-keys, compiled outputs, helper tools or credential paths.
           # A cache is an optimization, never a reviewed tool/input inventory.
+      # Activation must provision the locked target crates even on a cold cache,
+      # before any wrapper invocation. Restore reviewed inputs on the runner or
+      # add an explicitly reviewed acquisition step using:
+      # cargo fetch --locked --target "$TARGET"
+      # Do not weaken CARGO_NET_OFFLINE inside the build wrapper.
       - name: Build and inspect macOS using the shared wrapper
         if: runner.os == 'macOS'
         shell: bash
