@@ -102,14 +102,18 @@ async function openWithKeyboard(opener, panel) {
 }
 
 async function insideViewport(locator) {
-  await locator.scrollIntoViewIfNeeded();
-  const box = await locator.boundingBox();
-  const viewport = await locator.page().evaluate(() => ({ width: innerWidth, height: innerHeight }));
-  expect(box).not.toBeNull();
-  expect(box.x).toBeGreaterThanOrEqual(-1);
-  expect(box.y).toBeGreaterThanOrEqual(-1);
-  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
-  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
+  // Opening a panel exposes its controls before its slide-in transition finishes.
+  // Assert the settled geometry without disabling motion or relaxing the bounds.
+  await expect(async () => {
+    await locator.scrollIntoViewIfNeeded();
+    const box = await locator.boundingBox();
+    const viewport = await locator.page().evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    expect(box).not.toBeNull();
+    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.y).toBeGreaterThanOrEqual(-1);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
+  }).toPass({ timeout: 2_000, intervals: [50, 100, 250] });
 }
 
 async function noOuterOverflow(page) {
