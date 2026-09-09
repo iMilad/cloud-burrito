@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aws_config::SdkConfig;
 use aws_credential_types::provider::ProvideCredentials;
@@ -197,6 +197,9 @@ struct ScriptedAws {
     identity_calls: AtomicUsize,
     resolved_snapshots: Mutex<Vec<SsoProfileSnapshot>>,
     identity_keys: Mutex<Vec<String>>,
+    token_expiries: Mutex<HashMap<String, SystemTime>>,
+    token_expiry_snapshots: Mutex<Vec<SsoProfileSnapshot>>,
+    token_expiry_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl ScriptedAws {
@@ -308,6 +311,19 @@ impl AwsBackend for ScriptedAws {
                 .expect("unexpected credential resolution: no scripted response");
             receiver.await.expect("scripted credential sender dropped")
         })
+    }
+
+    fn sso_token_expiry(&self, snapshot: &SsoProfileSnapshot) -> Option<SystemTime> {
+        self.token_expiry_snapshots.lock().push(snapshot.clone());
+        let expiry = self
+            .token_expiries
+            .lock()
+            .get(snapshot.token_cache_key())
+            .copied();
+        if let Some(hook) = self.token_expiry_hook.lock().take() {
+            hook();
+        }
+        expiry
     }
 
     fn caller_identity<'a>(
@@ -679,6 +695,136 @@ async fn matched_identity_uses_the_exact_resource_sdk_credentials_and_auth_cache
     assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.state.connection.lock().set_account_at, Some(1234.0));
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn sso_token_expiry_changes_independently_from_role_credentials_and_reconnect() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_ROLE_A1", 5000).await;
+    fixture.aws.token_expiries.lock().insert(
+        "synthetic-session".into(),
+        UNIX_EPOCH + Duration::from_secs(2000),
+    );
+    let first = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(first["sso_token_expires_at"], "1970-01-01T00:33:20Z");
+    assert_eq!(first["expires_at"], "1970-01-01T01:23:20Z");
+
+    // An external terminal login may replace only the selected SSO cache.
+    fixture.aws.token_expiries.lock().insert(
+        "synthetic-session".into(),
+        UNIX_EPOCH + Duration::from_secs(3200),
+    );
+    let updated = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(updated["sso_token_expires_at"], "1970-01-01T00:53:20Z");
+    assert_eq!(updated["expires_at"], first["expires_at"]);
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 1);
+
+    fixture.clock.0.store(1400, Ordering::SeqCst);
+    fixture.connect_a("CB_SYNTHETIC_ROLE_A2", 6000).await;
+    let reconnected = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(
+        reconnected["sso_token_expires_at"],
+        updated["sso_token_expires_at"]
+    );
+    assert_eq!(reconnected["expires_at"], "1970-01-01T01:40:00Z");
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.aws.identity_calls.load(Ordering::SeqCst), 2);
+    assert!(fixture
+        .aws
+        .token_expiry_snapshots
+        .lock()
+        .iter()
+        .all(|snapshot| snapshot.profile == "demo-a"));
+
+    fixture.aws.token_expiries.lock().insert(
+        "synthetic-other-session".into(),
+        UNIX_EPOCH + Duration::from_secs(4000),
+    );
+    fixture
+        .aws
+        .snapshots
+        .lock()
+        .get_mut("demo-b")
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .session_name = Some("synthetic-other-session".into());
+    fixture.aws.ready(
+        "demo-b",
+        "CB_SYNTHETIC_ROLE_B1",
+        ACCOUNT_B,
+        "principal-b",
+        7000,
+    );
+    assert_eq!(
+        aws_set_account_impl(&fixture.state, demo("demo-b", ACCOUNT_B))
+            .await
+            .unwrap()["ok"],
+        true
+    );
+    let other = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(other["sso_token_expires_at"], "1970-01-01T01:06:40Z");
+    assert_eq!(other["profile"], "demo-b");
+    assert_eq!(
+        fixture
+            .aws
+            .token_expiry_snapshots
+            .lock()
+            .last()
+            .unwrap()
+            .account_id,
+        ACCOUNT_B
+    );
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn sso_token_expiry_unknown_or_expired_never_falls_back_to_role_expiration() {
+    let fixture = Fixture::new();
+    let unselected = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert!(unselected["sso_token_expires_at"].is_null());
+    assert!(fixture.aws.token_expiry_snapshots.lock().is_empty());
+    fixture.connect_a("CB_SYNTHETIC_VALID_ROLE", 5000).await;
+    let unknown = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(unknown["logged_in"], true);
+    assert!(unknown["sso_token_expires_at"].is_null());
+    assert_eq!(unknown["expires_at"], "1970-01-01T01:23:20Z");
+
+    fixture.aws.token_expiries.lock().insert(
+        "synthetic-session".into(),
+        UNIX_EPOCH + Duration::from_secs(1000),
+    );
+    let expired = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(expired["sso_token_expires_at"], "1970-01-01T00:16:40Z");
+    assert_eq!(
+        expired["logged_in"], true,
+        "valid AWS credentials are independent of SSO token expiry"
+    );
+    assert_eq!(expired["expires_at"], unknown["expires_at"]);
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+    fixture.no_process();
+}
+
+#[tokio::test]
+async fn sso_token_expiry_read_cannot_publish_metadata_after_selection_changes() {
+    let fixture = Fixture::new();
+    fixture.connect_a("CB_SYNTHETIC_OLD_ROLE", 5000).await;
+    fixture.aws.token_expiries.lock().insert(
+        "synthetic-session".into(),
+        UNIX_EPOCH + Duration::from_secs(2000),
+    );
+    let connection = fixture.state.connection.clone();
+    *fixture.aws.token_expiry_hook.lock() = Some(Box::new(move || {
+        connection.lock().attempt += 1;
+    }));
+    let result = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(result["error_type"], "Superseded");
+    assert_eq!(result["has_context"], false);
+    assert!(result["sso_token_expires_at"].is_null());
+    assert!(result["expires_at"].is_null());
+    assert_eq!(fixture.aws.token_expiry_snapshots.lock().len(), 1);
     fixture.no_process();
 }
 

@@ -1474,7 +1474,8 @@ async fn aws_auth_status_request(
         "has_context": false, "profile": lp("profile"), "account_id": lp("account_id"),
         "region": lp("region"), "sso_session": lp("sso_session"), "caller_arn": Value::Null,
         "logged_in": false, "needs_sso_login": lp("needs_sso_login").as_bool().unwrap_or(false),
-        "expires_at": Value::Null, "set_account_at": set_at, "read_only_guard_active": true,
+        "expires_at": Value::Null, "sso_token_expires_at": Value::Null,
+        "set_account_at": set_at, "read_only_guard_active": true,
         "error": lp("error"), "connection_state": status, "attempt_id": attempt,
     });
     let resolved = match resolve_widget_ctx(state, &json!({})) {
@@ -1508,6 +1509,22 @@ async fn aws_auth_status_request(
             return Ok(out);
         }
     };
+    // Read the selected SSO cache on every accepted poll, including when the
+    // verified AWS role credentials are reused. A terminal login can replace
+    // the cached token independently of those credentials. This read never
+    // invokes an SSO provider; inability to inspect it means unknown expiry.
+    let backend = state.runtime.aws.clone();
+    let snapshot = session.snapshot.clone();
+    let sso_token_expiry = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || backend.sso_token_expiry(&snapshot)),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten();
+    // Metadata read completion cannot attach an older SSO cache to a newer
+    // selected account, provider snapshot or settings generation.
     if let Err(error) = validate_request_context(state, &resolved, &session) {
         out["error_type"] = error["error_type"].clone();
         out["error"] = error["error"].clone();
@@ -1537,6 +1554,12 @@ async fn aws_auth_status_request(
     out["expires_at"] = json!(aws_smithy_types::DateTime::from(session.expires_at)
         .fmt(aws_smithy_types::date_time::Format::DateTime)
         .unwrap_or_default());
+    out["sso_token_expires_at"] =
+        json!(
+            sso_token_expiry.and_then(|expiry| aws_smithy_types::DateTime::from(expiry)
+                .fmt(aws_smithy_types::date_time::Format::DateTime)
+                .ok())
+        );
     Ok(out)
 }
 

@@ -25,8 +25,10 @@ tag has been published for these changes.
   reachable from the topbar, including fullscreen widgets and pending startup.
 - Allow connection details to close and reopen without reconnecting, preserving
   the choice across polls and restart while surfacing a new connection failure.
-- Label the auth countdown as remaining temporary credential lifetime and
-  explain why reconnecting with an existing SSO session can renew credentials.
+- Show the selected cached SSO access token's remaining lifetime in the topbar.
+  Retrying the connection or obtaining new account credentials does not reset
+  that timer; genuine token renewal updates its actual expiry. Keep account
+  credential expiration separately in Identity details.
 - Keep result feedback compact with optional technical details and local display
   preferences for tips and expanded results. Limited, stale and failed results
   retain visible status and recovery information.

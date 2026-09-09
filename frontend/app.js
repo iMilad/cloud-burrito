@@ -2275,8 +2275,8 @@
       ? `Profile: ${verified.profile} · Verified account: ${verified.account_id} · Region: ${verified.region}`
       : `Selected profile: ${profile} · Region: ${region} · Account is not verified`;
     $("#connection-retry").disabled = ["discovering", "verifying"].includes(connectionState);
-    $("#connection-retry").textContent = connectionState === "verified" ? "Reconnect" : "Retry connection";
-    $("#connection-retry").title = "Rediscover profiles and verify the selected account. This can obtain fresh temporary AWS credentials using your existing SSO session; it does not start an interactive login.";
+    $("#connection-retry").textContent = "Retry connection";
+    $("#connection-retry").title = "Rediscover profiles and verify the selected account using your existing SSO session. This does not restart the token countdown; a supported token may renew when needed.";
     $("#connection-details").disabled = !lastAuthStatus && !lastSetAccountResult;
   }
 
@@ -2620,7 +2620,7 @@
   let authStatusTimer = null;
 
   function formatRemaining(expiresAt) {
-    if (!expiresAt) return null;
+    if (typeof expiresAt !== "string" || !expiresAt.trim()) return null;
     const t = Date.parse(expiresAt);
     if (Number.isNaN(t)) return null;
     const diff = t - Date.now();
@@ -2682,7 +2682,9 @@
     if (info.logged_in && info.has_context) setConnectionState("verified", meta);
     else if (info.connection_state === "verifying") setConnectionState("verifying");
     else if (lastSetAccountResult || info.needs_sso_login) setConnectionState(connectionFailureState(info));
-    const remaining = formatRemaining(info.expires_at);
+    // Read the selected SSO token's actual cache expiry on every accepted poll.
+    // A new role credential set or connection attempt is not a new SSO timer.
+    const remaining = formatRemaining(info.sso_token_expires_at);
     if (info.connection_state === "verifying") {
       pill.dataset.state = "checking";
       label.textContent = "auth: verifying account …";
@@ -2690,7 +2692,7 @@
       pill.dataset.state = info.logged_in ? "online" : "checking";
       const parts = [info.logged_in ? "AWS verified" : "AWS checking"];
       if (info.account_id) parts.push(info.account_id);
-      parts.push(`credentials: ${remaining || "expiry unknown"}`);
+      parts.push(`SSO token: ${remaining || "expiry unknown"}`);
       label.textContent = parts.join(" · ");
     } else if (info.needs_sso_login) {
       pill.dataset.state = "offline";
@@ -2703,7 +2705,9 @@
       // Last set-account had an error other than expired SSO.
       label.textContent = "auth: error — click for details";
     }
-    pill.title = "Temporary AWS credential lifetime, not time since SSO login. Open identity details for expiration and account verification.";
+    pill.title = remaining === "expired"
+      ? "The cached SSO access token has expired. Existing account credentials may still be usable, and a supported SSO token may renew when needed. Open identity details."
+      : "Remaining lifetime of the selected cached SSO access token. Retry connection does not restart this countdown. Open identity details for token and account credential expiration.";
     // Repaint the Identity panel if it happens to be open.
     if ($("#identity-panel")?.classList.contains("open")) renderIdentityPanel(info);
   }
@@ -2754,6 +2758,7 @@
       ["Account", info.account_id],
       ["Region", info.region],
       ["SSO session", info.sso_session],
+      ["SSO access token expires", formatRemaining(info.sso_token_expires_at) ? info.sso_token_expires_at : "(unknown)"],
       ["Caller ARN", info.caller_arn || "(resolved on next refresh)"],
       ["Temporary AWS credentials expire", info.expires_at || "(unknown)"],
       ["Last account verification",
@@ -2769,7 +2774,7 @@
       dl.appendChild(el("dd", { class: "mono" }, v || "(empty)"));
     });
     wrap.appendChild(dl);
-    wrap.appendChild(el("p", { class: "muted small" }, "This is the remaining lifetime of temporary AWS credentials. The original SSO login time is not tracked by this app. Reconnecting can obtain fresh credentials using your existing SSO session."));
+    wrap.appendChild(el("p", { class: "muted small" }, "The countdown uses the expiry of your selected SSO access token. Retry connection does not restart it. If the CLI or SDK renews that token, its actual expiry changes. This is the access token lifetime; the overall sign-in session expiry is not available here."));
     const scope = el("dl", { class: "identity-kv identity-scope" });
     for (const [label, text] of [
       ["Resource reads", "Reviewed operations inspect resources; infrastructure changes are not supported."],
@@ -2789,7 +2794,7 @@
         class: "btn btn-primary",
         type: "button", "data-focus-key": "identity-retry",
         onclick: () => applyTopbarSelection({ fromProfile: false }),
-      }, "Reconnect"));
+      }, "Retry connection"));
     }
     wrap.appendChild(actions);
     restoreKeyedFocus(wrap, focusKey);

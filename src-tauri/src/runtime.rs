@@ -41,6 +41,11 @@ pub type CallerIdentity = aws_sdk_sts::operation::get_caller_identity::GetCaller
 pub trait AwsBackend: Send + Sync {
     fn inspect_config(&self, path: &str, sso_constraint: Option<&str>) -> Value;
     fn snapshot_sso(&self, ctx: &AwsContext) -> Result<SsoProfileSnapshot, String>;
+    /// Read-only metadata for the selected SSO cache. Never resolves or renews
+    /// a token, and never substitutes the separate AWS role-credential expiry.
+    fn sso_token_expiry(&self, _snapshot: &SsoProfileSnapshot) -> Option<SystemTime> {
+        None
+    }
     fn resolve_sso<'a>(
         &'a self,
         snapshot: &'a SsoProfileSnapshot,
@@ -130,6 +135,46 @@ fn validate_sso_cache_metadata(text: &str, snapshot: &SsoProfileSnapshot) -> Res
     Ok(value)
 }
 
+fn selected_sso_cache_path(
+    snapshot: &SsoProfileSnapshot,
+    named_path: impl FnOnce(&str) -> Result<PathBuf, String>,
+    legacy_path: impl FnOnce(&str) -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    match snapshot.session_name.as_deref() {
+        Some(session) => named_path(session),
+        None => legacy_path(snapshot.token_cache_key()),
+    }
+}
+
+/// Expiration is display metadata, not an authorization decision. Preserve an
+/// expired timestamp so the UI can show it; invalid or unrelated cache data
+/// provides no timestamp. Only the timestamp leaves this boundary.
+fn parse_sso_token_expiry(text: &str, snapshot: &SsoProfileSnapshot) -> Option<SystemTime> {
+    let value = validate_sso_cache_metadata(text, snapshot).ok()?;
+    value
+        .get("accessToken")?
+        .as_str()
+        .filter(|token| !token.trim().is_empty())?;
+    let expiry = value.get("expiresAt")?.as_str()?;
+    let normalized = expiry.strip_suffix("UTC").map(|date| format!("{date}Z"));
+    let expiry =
+        DateTime::from_str(normalized.as_deref().unwrap_or(expiry), Format::DateTime).ok()?;
+    SystemTime::try_from(expiry).ok()
+}
+
+fn read_sso_token_expiry(
+    path: &std::path::Path,
+    snapshot: &SsoProfileSnapshot,
+) -> Option<SystemTime> {
+    // Refuse directories and special files before opening; metadata reads must
+    // not wait on a pipe/device or create a missing cache.
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let text = bounded_read(path, 128 * 1024).ok()?;
+    parse_sso_token_expiry(&text, snapshot)
+}
+
 /// Legacy profiles have no refresh registration. The selected start URL is the
 /// cache key; expired tokens use the existing external `aws sso login` workflow.
 fn legacy_sso_token(snapshot: &SsoProfileSnapshot) -> Result<String, String> {
@@ -177,6 +222,14 @@ impl AwsBackend for NativeAwsBackend {
                 settings_revision: ctx.settings_revision,
             },
         )
+    }
+
+    fn sso_token_expiry(&self, snapshot: &SsoProfileSnapshot) -> Option<SystemTime> {
+        require_live_aws();
+        let path =
+            selected_sso_cache_path(snapshot, named_sso_cache_path, config_file::sso_cache_path)
+                .ok()?;
+        read_sso_token_expiry(&path, snapshot)
     }
 
     fn resolve_sso<'a>(
@@ -519,6 +572,139 @@ mod tests {
             registration_scopes: None,
             settings_revision: 1,
         }
+    }
+
+    fn synthetic_token(expiry: &str) -> Value {
+        serde_json::json!({
+            "startUrl": "https://example.awsapps.com/start",
+            "region": "us-east-1",
+            "accessToken": "CB_SYNTHETIC_METADATA_ONLY_TOKEN",
+            "expiresAt": expiry
+        })
+    }
+
+    #[test]
+    fn sso_token_expiry_parses_both_cache_forms_and_preserves_past_timestamps() {
+        for session in [None, Some("synthetic-session")] {
+            let snapshot = cache_snapshot(session);
+            for expiry in ["2000-01-01T00:00:00Z", "2000-01-01T00:00:00UTC"] {
+                let value = synthetic_token(expiry).to_string();
+                assert_eq!(
+                    parse_sso_token_expiry(&value, &snapshot),
+                    Some(UNIX_EPOCH + std::time::Duration::from_secs(946684800))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sso_token_expiry_rejects_unrelated_incomplete_and_malformed_cache_metadata() {
+        for session in [None, Some("synthetic-session")] {
+            let snapshot = cache_snapshot(session);
+            for (field, replacement) in [
+                (
+                    "startUrl",
+                    serde_json::json!("https://other.example.invalid/start"),
+                ),
+                ("region", serde_json::json!("eu-west-1")),
+                ("accessToken", Value::Null),
+                ("accessToken", serde_json::json!("")),
+                ("accessToken", serde_json::json!("  ")),
+                ("accessToken", serde_json::json!(42)),
+                ("expiresAt", Value::Null),
+                ("expiresAt", serde_json::json!(42)),
+                (
+                    "expiresAt",
+                    serde_json::json!("CB_SYNTHETIC_INVALID_EXPIRY"),
+                ),
+            ] {
+                let mut value = synthetic_token("2000-01-01T00:00:00Z");
+                value[field] = replacement;
+                assert!(parse_sso_token_expiry(&value.to_string(), &snapshot).is_none());
+            }
+            for text in ["{}", "[]", "null", "CB_SYNTHETIC_INVALID_JSON"] {
+                assert!(parse_sso_token_expiry(text, &snapshot).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn sso_token_expiry_selects_only_the_configured_named_or_legacy_cache() {
+        let dir = crate::test_support::TestDir::new();
+        let expected = dir.path().join("synthetic-selected-cache.json");
+        let named = cache_snapshot(Some("synthetic-session"));
+        assert_eq!(
+            selected_sso_cache_path(
+                &named,
+                |key| {
+                    assert_eq!(key, "synthetic-session");
+                    Ok(expected.clone())
+                },
+                |_| panic!("named SSO metadata must never fall back to a legacy cache")
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(selected_sso_cache_path(
+            &named,
+            |_| Err("synthetic missing named cache".into()),
+            |_| panic!("failed named SSO lookup must not select another cache")
+        )
+        .is_err());
+        let legacy = cache_snapshot(None);
+        assert_eq!(
+            selected_sso_cache_path(
+                &legacy,
+                |_| panic!("legacy SSO metadata must never select a named cache"),
+                |key| {
+                    assert_eq!(key, legacy.start_url);
+                    Ok(expected.clone())
+                }
+            )
+            .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn sso_token_expiry_reads_are_bounded_read_only_and_observe_cache_replacement() {
+        let dir = crate::test_support::TestDir::new();
+        let path = dir.path().join("synthetic-cache.json");
+        let snapshot = cache_snapshot(Some("synthetic-session"));
+        assert!(read_sso_token_expiry(&path, &snapshot).is_none());
+        assert!(!path.exists());
+        assert!(read_sso_token_expiry(dir.path(), &snapshot).is_none());
+        for (date, seconds) in [
+            ("2000-01-01T00:00:00Z", 946684800),
+            ("2000-01-02T00:00:00Z", 946771200),
+        ] {
+            let bytes = synthetic_token(date).to_string();
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(
+                read_sso_token_expiry(&path, &snapshot),
+                Some(UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), bytes);
+        }
+        let oversized = format!(
+            "{}{}",
+            synthetic_token("2000-01-01T00:00:00Z"),
+            " ".repeat(128 * 1024)
+        );
+        std::fs::write(&path, &oversized).unwrap();
+        assert!(read_sso_token_expiry(&path, &snapshot).is_none());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            oversized.len() as u64
+        );
+        std::fs::write(&path, [0xff]).unwrap();
+        assert!(read_sso_token_expiry(&path, &snapshot).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "unexpected live AWS/provider or personal configuration access")]
+    fn native_sso_token_expiry_rejects_personal_cache_access_in_tests() {
+        NativeAwsBackend.sso_token_expiry(&cache_snapshot(Some("synthetic-session")));
     }
 
     #[test]

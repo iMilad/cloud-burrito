@@ -8,20 +8,30 @@ source commit. Earlier 0.3.0 packages do not contain these repairs.
 | --- | --- |
 | Classic shows the old logo | Classic uses the selected Cloud Fold mark, including saved appearance during startup. |
 | Connection details occupy the workspace | Close the section or use **Connection** in the topbar. The choice survives polls and restart. A new failure opens recovery once; repeated polls respect dismissal. Opening from fullscreen reveals the section. |
-| The auth countdown looks like elapsed login time | The label explicitly describes remaining temporary AWS credential lifetime. Identity details show the expiration and last account verification separately. Unknown expiration stays unknown. |
+| Retry connection appears to reset the login countdown | The topbar shows the selected cached SSO access token's remaining lifetime. It is reread on status checks and does not reset when new account credentials are obtained. Identity details show both expirations separately. Unknown token expiration stays unknown. |
 | Returning to Studio is inaccessible | **Studio view** is in the Classic topbar and works during fullscreen and pending native settings loading. An explicit choice survives reload. |
 | “Limited result” is unclear | A short explanation remains visible. For ten returned pipeline runs with a continuation token: “Showing 10 results. More were not loaded.” No total or older history is inferred. |
 | Technical boxes consume too much space | Result details start collapsed. **Settings → Display preferences** provides **Show tips** and **Expand result details**, applied immediately on this device. Storage failure is reported as session-only. |
 
-## Credential timing
+## SSO token timing
 
-The countdown is computed from the backend's credential expiration, not from
-the time the app opened or the original SSO login. Reconnect rediscovers profiles
-and verifies the selected account. That can obtain fresh temporary role
-credentials using an existing SSO session, which can explain a renewed twelve
-hours. The app does not track the original SSO login timestamp. This behavior was
-checked against the credential provider code and synthetic responses; no live
-AWS verification was performed.
+The topbar countdown uses the selected SSO cache's actual access-token expiry.
+Reading that metadata does not invoke a token provider or renew the token.
+A new account-credential expiry or a new connection attempt does not
+reset this timer. The account-credential expiry remains available in Identity
+details as a separate value.
+
+Retry connection rediscovers profiles and verifies the selected account using
+the existing SSO session. The CLI or SDK can genuinely renew a supported SSO
+access token; when that happens the next status check shows its new actual
+expiry. The app does not invent a login timestamp or infer the overall portal
+sign-in session duration from an access-token or account-credential lifetime.
+
+Unavailable, malformed or mismatched cache metadata produces an unknown token
+expiry. An expired SSO access token can coexist with still-valid account
+credentials; it does not by itself invalidate the account context. These paths
+are checked using synthetic fixtures, without inspecting the owner's credentials
+or connecting to AWS.
 
 ## Compact feedback preserves meaning
 
@@ -38,8 +48,9 @@ preferences are independent of the AWS settings Save/Cancel transaction.
 
 ## Verification and next test
 
-Regression coverage includes synthetic credential countdowns (12h → 10h and
-37m → 32m after reconnect), unknown expiry, connection dismissal and recovery,
+Regression coverage includes independent token and account-credential lifetimes,
+retry and restart without timer reset, actual token renewal, unknown and expired
+tokens, connection dismissal and recovery,
 Classic/Studio navigation, disclosure focus, preference persistence and storage
 failure. Browser fixtures block external requests and contain synthetic identities.
 
