@@ -189,6 +189,32 @@ test("switching and reloading both designs preserves the saved layout, widget co
   expect(await storage(page)).toEqual({ ...before, "cb.presentation.v1": "studio" });
 });
 
+test("Classic has a reachable topbar return from fullscreen at desktop and narrow widths", async ({ page }) => {
+  for (const width of [1480, 1024, 500]) {
+    await page.setViewportSize({ width, height: 900 });
+    await boot(page, "/?design=classic&appearance=precision");
+    const target = widget(page, "pipeline-runs");
+    await target.locator(".fs-btn").click();
+    await expect(target).toHaveClass(/fullscreen/);
+    await expect(page.locator("body")).toHaveClass(/has-fullscreen-widget/);
+
+    const returnButton = page.getByRole("button", { name: "Studio view", exact: true });
+    await expect(page.locator(".topbar-right #studio-return")).toBeVisible();
+    await expect(returnButton).toBeInViewport();
+    // A normal click verifies that the fullscreen widget cannot cover the control.
+    await returnButton.click();
+    await expect(page.locator("html")).toHaveAttribute("data-design", "studio");
+    await expect(target).not.toHaveClass(/fullscreen/);
+    await expect(page.locator("body")).not.toHaveClass(/has-fullscreen-widget/);
+    await expect(page.locator("#studio-classic-switch")).toBeFocused();
+    expect(new URL(page.url()).searchParams.has("design")).toBe(false);
+    expect(new URL(page.url()).searchParams.get("appearance")).toBe("precision");
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-design", "studio");
+    await expect(page.locator("html")).toHaveAttribute("data-appearance", "precision");
+  }
+});
+
 test("compact mode and reduced-motion navigation remain usable at a narrow desktop width", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });

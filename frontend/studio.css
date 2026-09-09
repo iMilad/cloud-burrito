@@ -3,10 +3,7 @@
 [data-design="studio"] .brand-mark-classic { display: none; }
 [data-design="studio"] .brand-mark-studio { display: block; }
 [data-design="classic"] #studio-return {
-  position: fixed; z-index: 190; right: 22px; bottom: 20px; display: flex;
-  align-items: center; gap: 16px; padding: 10px 16px; border: 1px solid var(--border-strong);
-  border-radius: 30px; background: var(--bg-elev); color: var(--text-primary);
-  box-shadow: 0 4px 20px #0003; font: 600 12px var(--font-sans); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
 }
 html[data-design="studio"] {
   --studio-rail-width: 204px;

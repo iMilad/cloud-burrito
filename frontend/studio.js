@@ -58,8 +58,15 @@
   function chooseDesign(design) {
     if (!validDesign(design)) return;
     close();
+    exitWidgetFullscreen();
     root.dataset.design = design;
     try { localStorage.setItem(preferenceKey, design); } catch (_) { /* Session choice still works. */ }
+    // A deliberate choice finishes a URL preview, so reload keeps that choice.
+    if (validDesign(queryDesign)) {
+      const url = new URL(location.href);
+      url.searchParams.delete("design");
+      try { history.replaceState(history.state, "", url); } catch (_) { /* Restricted history must not block switching. */ }
+    }
     const destination = $(design === "classic" ? "#studio-return" : "#studio-classic-switch");
     destination?.focus({ preventScroll: true });
   }
@@ -250,7 +257,8 @@
   function updateMode() {
     const native = typeof window.__TAURI__ !== "undefined";
     const connection = $("#connection-status");
-    const verified = native && connection && !connection.hidden && connection.dataset.state === "verified";
+    // Disclosure visibility is a user preference, not an identity signal.
+    const verified = native && connection?.dataset.state === "verified";
     const label = $("#studio-mode-label");
     label.textContent = !native ? "Demo · synthetic data"
       : verified ? "Desktop · identity verified" : "Desktop · identity required";
@@ -283,8 +291,6 @@
         chooseAppearance(keys[next]);
       });
     });
-    $("#studio-classic-switch")?.addEventListener("click", () => chooseDesign("classic"));
-    $("#studio-return")?.addEventListener("click", () => chooseDesign("studio"));
     $("#studio-density")?.addEventListener("click", event => {
       const compact = root.dataset.density !== "compact";
       root.dataset.density = compact ? "compact" : "comfortable";
@@ -330,8 +336,15 @@
     syncAppearance();
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", syncAppearance, { once: true });
-  else syncAppearance();
+  function initPresentation() {
+    // View navigation must remain usable while native settings are still loading.
+    $("#studio-classic-switch")?.addEventListener("click", () => chooseDesign("classic"));
+    $("#studio-return")?.addEventListener("click", () => chooseDesign("studio"));
+    syncAppearance();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initPresentation, { once: true });
+  else initPresentation();
 
   window.CloudBurritoStudio = { init, close, chooseAppearance };
 })();

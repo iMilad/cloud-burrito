@@ -43,6 +43,25 @@ test("a stored style updates the mark before an asynchronous native boot complet
   await expect(page.locator("#app-icon")).toHaveAttribute("href", /style-precision\.svg$/);
 });
 
+test("Classic uses the current mark and can return to Studio while native settings are pending", async ({ page }) => {
+  await page.addInitScript(key => {
+    localStorage.setItem("cb.presentation.v1", "classic");
+    localStorage.setItem(key, "night");
+    window.__TAURI__ = { core: { invoke: () => new Promise(() => {}) } };
+  }, KEY);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".brand-mark-classic")).toBeVisible();
+  await expect(page.locator(".brand-mark-classic")).toHaveAttribute("src", /style-night\.svg$/);
+  await page.getByRole("button", { name: "Studio view", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-design", "studio");
+  await expect(page.locator("html")).toHaveAttribute("data-appearance", "night");
+  await expect(page.locator("#studio-classic-switch")).toBeFocused();
+  expect(await page.evaluate(() => localStorage.getItem("cb.presentation.v1"))).toBe("studio");
+  await page.locator("#studio-classic-switch").click();
+  await expect(page.locator("html")).toHaveAttribute("data-design", "classic");
+  await expect(page.locator("#studio-return")).toBeFocused();
+});
+
 test("Paper is the safe default and every allowlisted style persists its matching in-app mark", async ({ page }) => {
   await boot(page);
   await expect(page.locator("html")).toHaveAttribute("data-appearance", "paper");
@@ -87,6 +106,7 @@ test("style, color theme and Classic view remain independent", async ({ page }) 
   await page.locator("#studio-classic-switch").click();
   await expect(page.locator("html")).toHaveAttribute("data-design", "classic");
   await expect(page.locator(".brand-mark-classic")).toBeVisible();
+  await expect(page.locator(".brand-mark-classic")).toHaveAttribute("src", /style-precision\.svg$/);
   await expect(page.locator(".brand-mark-studio")).toBeHidden();
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-design", "classic");
