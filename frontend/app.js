@@ -2180,6 +2180,8 @@
       ? `Profile: ${verified.profile} · Verified account: ${verified.account_id} · Region: ${verified.region}`
       : `Selected profile: ${profile} · Region: ${region} · Account is not verified`;
     $("#connection-retry").disabled = ["discovering", "verifying"].includes(connectionState);
+    $("#connection-retry").textContent = connectionState === "verified" ? "Reconnect" : "Retry connection";
+    $("#connection-retry").title = "Rediscover profiles and verify the selected account. This can obtain fresh temporary AWS credentials using your existing SSO session; it does not start an interactive login.";
     $("#connection-details").disabled = !lastAuthStatus && !lastSetAccountResult;
   }
 
@@ -2582,9 +2584,9 @@
       label.textContent = "auth: verifying account …";
     } else if (info.logged_in || info.has_context) {
       pill.dataset.state = info.logged_in ? "online" : "checking";
-      const parts = [info.logged_in ? "auth: ok" : "auth: active"];
+      const parts = [info.logged_in ? "AWS verified" : "AWS checking"];
       if (info.account_id) parts.push(info.account_id);
-      if (remaining) parts.push(remaining);
+      parts.push(`credentials: ${remaining || "expiry unknown"}`);
       label.textContent = parts.join(" · ");
     } else if (info.needs_sso_login) {
       pill.dataset.state = "offline";
@@ -2597,7 +2599,7 @@
       // Last set-account had an error other than expired SSO.
       label.textContent = "auth: error — click for details";
     }
-    pill.title = "Click for full identity details";
+    pill.title = "Temporary AWS credential lifetime, not time since SSO login. Open identity details for expiration and account verification.";
     // Repaint the Identity panel if it happens to be open.
     if ($("#identity-panel")?.classList.contains("open")) renderIdentityPanel(info);
   }
@@ -2649,8 +2651,8 @@
       ["Region", info.region],
       ["SSO session", info.sso_session],
       ["Caller ARN", info.caller_arn || "(resolved on next refresh)"],
-      ["Verified credentials expire", info.expires_at || "(unknown)"],
-      ["Last set-account succeeded at",
+      ["Temporary AWS credentials expire", info.expires_at || "(unknown)"],
+      ["Last account verification",
         info.set_account_at ? new Date(info.set_account_at * 1000).toLocaleString() : "(never)"],
       ["Application operation checks",
         info.read_only_guard_active === false
@@ -2663,6 +2665,7 @@
       dl.appendChild(el("dd", { class: "mono" }, v || "(empty)"));
     });
     wrap.appendChild(dl);
+    wrap.appendChild(el("p", { class: "muted small" }, "This is the remaining lifetime of temporary AWS credentials. The original SSO login time is not tracked by this app. Reconnecting can obtain fresh credentials using your existing SSO session."));
     const scope = el("dl", { class: "identity-kv identity-scope" });
     for (const [label, text] of [
       ["Resource reads", "Reviewed operations inspect resources; infrastructure changes are not supported."],
@@ -2682,7 +2685,7 @@
         class: "btn btn-primary",
         type: "button", "data-focus-key": "identity-retry",
         onclick: () => applyTopbarSelection({ fromProfile: false }),
-      }, "Retry set-account"));
+      }, "Reconnect"));
     }
     wrap.appendChild(actions);
     restoreKeyedFocus(wrap, focusKey);

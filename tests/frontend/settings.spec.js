@@ -223,7 +223,7 @@ test("late credential save invalidates a newer account and pinned evidence befor
   await expect.poll(async () => (await callsFor(page, "aws_set_account")).length).toBe(3);
   await expect(inherited).not.toContainText("evidence-demo-b");
   await expect(pinned).not.toContainText("evidence-demo-a");
-  await expect(page.locator("#auth-status")).not.toContainText("auth: ok");
+  await expect(page.locator("#auth-status")).not.toContainText("AWS verified");
   expect((await callsFor(page, "aws_set_account"))[2].params.profile).toBe("demo-b");
   await page.evaluate(() => { window.__settingsFixture.releaseVerification(); });
   await expect(inherited).toContainText("evidence-demo-b");
