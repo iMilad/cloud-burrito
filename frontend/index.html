@@ -78,6 +78,7 @@
     </div>
     <div class="topbar-right">
       <button type="button" class="btn btn-ghost" id="studio-return" title="Switch to the modern Studio workspace">Studio view <span aria-hidden="true">↗</span></button>
+      <button type="button" class="btn btn-ghost" id="connection-toggle" aria-label="Connection details" aria-controls="connection-status" aria-expanded="false" hidden><span class="connection-dot" aria-hidden="true"></span>Connection</button>
       <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout" aria-label="Reset layout">↺</button>
       <button class="btn btn-ghost" id="theme-toggle" title="Preview another theme" aria-label="Preview another theme" disabled>◐</button>
       <button class="btn btn-ghost studio-only" id="appearance-btn" title="Workspace appearance" aria-label="Workspace appearance">◩</button>
@@ -99,6 +100,7 @@
       <button type="button" class="btn btn-ghost small" id="connection-settings">Settings</button>
       <button type="button" class="btn btn-ghost small" id="connection-retry">Retry connection</button>
       <button type="button" class="btn btn-ghost small" id="connection-details">Identity details</button>
+      <button type="button" class="icon-btn" id="connection-close" aria-label="Close connection details" title="Close connection details">✕</button>
     </div>
   </section>
 
@@ -176,7 +178,7 @@
                     <span class="muted small pipeline-name-hint"></span>
                   </label>
                   <p class="muted small pipeline-error"></p>
-                  <p class="muted small">Profile, account, and region come from this widget's context.</p>
+                  <p class="muted small ui-hint">Profile, account, and region come from this widget's context.</p>
                 </form>
                 <div class="widget-data pipeline-runs-rows" hidden></div>
               </div>
@@ -364,7 +366,7 @@
         </button>
       </div>
       <p id="appearance-status" class="appearance-status" role="status">Paper is active.</p>
-      <p class="muted small">Changes are saved locally on this device when storage is available. Light and dark color themes remain separate.</p>
+      <p class="muted small ui-hint">Changes are saved locally on this device when storage is available. Light and dark color themes remain separate.</p>
     </div>
   </aside>
 
@@ -375,6 +377,12 @@
       <button class="icon-btn" id="settings-panel-close" title="Close" aria-label="Close settings" type="button">✕</button>
     </header>
     <div class="side-panel-body">
+      <section class="panel-section display-preferences" aria-labelledby="display-preferences-title">
+        <h3 class="panel-section-title" id="display-preferences-title">Display preferences</h3>
+        <label><input type="checkbox" id="settings-show-tips" />Show tips</label>
+        <label><input type="checkbox" id="settings-expand-result-details" />Expand result details</label>
+        <p class="muted small" id="display-preferences-status" role="status">Display preferences apply immediately and are saved on this device.</p>
+      </section>
       <section class="panel-section">
         <h3 class="panel-section-title">AWS</h3>
         <form id="settings-form" class="settings-form">
@@ -418,8 +426,8 @@
           <section class="audit-history-status small" aria-label="Audit history storage" data-audit-history-status></section>
           <button type="button" class="btn btn-ghost small" data-audit-preserve>Preserve current history</button>
           <p class="muted small" data-audit-preserve-status role="status"></p>
-          <p class="muted small">Blank fields use the defaults shown. Color-theme changes are previews until you save.</p>
-          <p class="muted small">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. The app uses your existing SSO session to obtain temporary AWS credentials; it does not start an interactive login.</p>
+          <p class="muted small ui-hint">Blank fields use the defaults shown. Color-theme changes are previews until you save.</p>
+          <p class="muted small ui-hint">Use a profile configured for IAM Identity Center (SSO). Complete your existing SSO login outside this app, then retry the connection. The app uses your existing SSO session to obtain temporary AWS credentials; it does not start an interactive login.</p>
           <p class="muted small">
             The app checks requested operations against its supported list and
             your policy before execution. Logs Insights requires permission to

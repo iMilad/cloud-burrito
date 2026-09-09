@@ -21,6 +21,15 @@ tag has been published for these changes.
 
 ### Fixed
 
+- Use the selected Cloud Fold mark in Classic and keep the Studio return control
+  reachable from the topbar, including fullscreen widgets and pending startup.
+- Allow connection details to close and reopen without reconnecting, preserving
+  the choice across polls and restart while surfacing a new connection failure.
+- Label the auth countdown as remaining temporary credential lifetime and
+  explain why reconnecting with an existing SSO session can renew credentials.
+- Keep result feedback compact with optional technical details and local display
+  preferences for tips and expanded results. Limited, stale and failed results
+  retain visible status and recovery information.
 - Preserve an unavailable pinned account when saving unrelated widget settings.
 - Keep newer policy drafts when asynchronous reads or saves finish, and report
   rejected saves without claiming success.

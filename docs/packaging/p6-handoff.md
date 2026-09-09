@@ -7,6 +7,9 @@ all targets from one clean repair commit; each accepted build receipt must
 identify that exact source and version. The build receipts, rather than earlier
 preflight results, establish which current packages have been built and inspected.
 
+The [initial UI feedback repairs](../roadmap/p6-ui-feedback.md) dated 2026-09-09
+require a fresh candidate. Earlier 0.3.0 packages lack these changes.
+
 Start with the [build-machine checks and commands](README.md), then use
 [the P6 plan](../roadmap/phase-6.md) as the acceptance checklist. Both Mac
 architectures can be built on this Mac. Windows and Ubuntu still need their

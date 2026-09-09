@@ -28,6 +28,45 @@
     while (node.firstChild) node.removeChild(node.firstChild);
   };
 
+  // Presentation choices are immediate and local; they never save AWS settings.
+  const displayPreferenceKey = "cloud-burrito.display-preferences";
+  const displayPreferences = { showTips: false, expandResultDetails: false };
+  let resultDetailsPreferenceRevision = 0;
+  try {
+    const saved = JSON.parse(localStorage.getItem(displayPreferenceKey));
+    for (const key of Object.keys(displayPreferences)) {
+      if (typeof saved?.[key] === "boolean") displayPreferences[key] = saved[key];
+    }
+  } catch (_) { /* Safe compact defaults also work without local storage. */ }
+  document.documentElement.dataset.showTips = String(displayPreferences.showTips);
+  const failedDisplaySaves = new Set();
+
+  function saveDisplayChoice(key, value) {
+    try { localStorage.setItem(key, value); failedDisplaySaves.delete(key); }
+    catch (_) { failedDisplaySaves.add(key); }
+    $("#display-preferences-status").textContent = failedDisplaySaves.size
+      ? "This display choice is session only because local storage is unavailable."
+      : "Display preferences apply immediately and are saved on this device.";
+  }
+
+  for (const [id, key] of [["settings-show-tips", "showTips"], ["settings-expand-result-details", "expandResultDetails"]]) {
+    const input = $("#" + id);
+    input.checked = displayPreferences[key];
+    input.addEventListener("change", () => {
+      displayPreferences[key] = input.checked;
+      document.documentElement.dataset.showTips = String(displayPreferences.showTips);
+      if (key === "expandResultDetails") {
+        resultDetailsPreferenceRevision++;
+        document.querySelectorAll(".result-details").forEach(details => {
+          details.open = input.checked;
+          details.parentElement.parentElement._resultDetailsOpen = input.checked;
+          details.parentElement.parentElement._resultDetailsPreferenceRevision = resultDetailsPreferenceRevision;
+        });
+      }
+      saveDisplayChoice(displayPreferenceKey, JSON.stringify(displayPreferences));
+    });
+  }
+
   // One modal surface owns keyboard focus. Closed panels stay inert throughout
   // their visual transition; the scrim has no delayed hide that can race reopen.
   let activePanel = null;
@@ -694,15 +733,41 @@
     Object.entries(coverage.sections || {}).forEach(([name, section]) => appendCoverage(status, section, displayName(name)));
   }
 
-  function paintResultStatus(host, state, spec, view, message) {
+  function rememberResultDetails(host) {
+    const previousDetails = host.querySelector(":scope > .result-status > .result-details");
+    if (previousDetails) host._resultDetailsOpen = previousDetails.open;
+    return previousDetails?.querySelector("summary") === document.activeElement;
+  }
+
+  function paintResultStatus(host, state, spec, view, message, restoreDetailsFocus = false) {
+    restoreDetailsFocus = rememberResultDetails(host) || restoreDetailsFocus;
+    if (host._resultDetailsPreferenceRevision !== resultDetailsPreferenceRevision) {
+      host._resultDetailsOpen = displayPreferences.expandResultDetails;
+      host._resultDetailsPreferenceRevision = resultDetailsPreferenceRevision;
+    }
     host.querySelectorAll(":scope > .result-status").forEach(node => node.remove());
     const labels = { loading: "Loading", success: "Updated", empty: "Empty response", limited: "Limited result", partial: "Partial result", stale: "Stale evidence", denied: "Denied", expired: "Credentials expired", failed: "Failed", cancelled: "Cancelled" };
     const status = el("div", { class: "result-status small", "data-state": state },
       el("strong", {}, labels[state] || "Result"));
     if (view?.cached) status.appendChild(el("span", { class: "result-cached" }, "Cached evidence · original capture time"));
     if (view?.receivedAt) status.appendChild(el("time", { datetime: view.receivedAt, class: "result-received" }, `Received ${new Date(view.receivedAt).toLocaleString()}`));
+    const details = el("details", { class: "result-details", open: host._resultDetailsOpen ?? displayPreferences.expandResultDetails },
+      el("summary", {}, "Result details"));
+    const detailBody = el("div", { class: "result-details-body" });
+    details.appendChild(detailBody);
+    details.addEventListener("toggle", () => {
+      if (details.isConnected) host._resultDetailsOpen = details.open;
+    });
     const context = view?.context || (spec?._request?.context_id ? spec._request : null);
-    if (context) status.appendChild(el("div", { class: "result-context" }, `Profile: ${context.profile} · Verified account: ${context.account_id} · Region: ${context.region}`));
+    if (context) detailBody.appendChild(el("div", { class: "result-context" }, `Profile: ${context.profile} · Verified account: ${context.account_id} · Region: ${context.region}`));
+    const coverage = ["loading", "stale"].includes(state) && view ? view.coverage : spec?.coverage;
+    if (coverage?.completeness === "limited" || state === "limited") {
+      const count = coverage?.counts?.returned;
+      const summary = coverage?.has_more === true
+        ? `${Number.isSafeInteger(count) ? `Showing ${count} results. ` : ""}More were not loaded.`
+        : "Some results were omitted or a result limit was reached.";
+      status.appendChild(el("span", { class: "result-limit" }, summary));
+    }
     if (state === "loading" && view) status.appendChild(el("div", {}, "Showing the previous result while refreshing."));
     const activeRequest = host._activeResultRequest;
     if (isTauri && state === "loading" && activeRequest?.current()) {
@@ -731,9 +796,10 @@
     if (message) status.appendChild(el("div", { class: "result-failure" }, message));
     if (view && ["loading", "stale"].includes(state)) {
       status.appendChild(el("div", {}, `Retained result: ${labels[view.state] || "Updated"}.`));
-      appendCoverage(status, view.coverage, "Retained coverage");
+      appendCoverage(detailBody, view.coverage, "Retained coverage");
     }
-    if (spec && state !== "loading") appendCoverage(status, spec.coverage, state === "stale" ? "Refresh coverage" : "Coverage");
+    if (spec && state !== "loading") appendCoverage(detailBody, spec.coverage, state === "stale" ? "Refresh coverage" : "Coverage");
+    if (detailBody.childElementCount) status.appendChild(details);
     const cleanup = spec?.cleanup || spec?.data?.cleanup;
     if (cleanup) {
       const confirmed = cleanup.status === "stopped" && cleanup.remote_stop_confirmed === true;
@@ -742,6 +808,7 @@
       if (!confirmed && cleanup.remote_queries_may_still_run === true) status.appendChild(el("div", {}, "Remote queries may still be running."));
     } else if (state === "cancelled" || resultState(spec) === "cancelled") status.appendChild(el("div", { class: "result-cleanup" }, "The request is no longer awaited. This does not confirm that remote work stopped."));
     host.prepend(status);
+    if (restoreDetailsFocus && document.activeElement === document.body) focusSafely(details.querySelector("summary"));
     announceResult(host, state);
     updateEvidenceLinks(host);
     showQueryRecovery(host.closest?.(".widget"));
@@ -1026,6 +1093,7 @@
   function failResult(host, request, message, spec) {
     if (!request?.current()) return;
     const previous = host._resultView?.key === request.resultKey ? host._resultView : null;
+    const restoreDetailsFocus = rememberResultDetails(host);
     clear(host);
     if (previous) host.append(...previous.nodes);
     else host.appendChild(el("div", { class: "muted small" }, message));
@@ -1035,7 +1103,7 @@
       previous.displaySpec = { coverage: spec?.coverage, error_type: spec?.error_type, _request: spec?._request, cleanup: spec?.cleanup || spec?.data?.cleanup, ok: false };
       previous.displayMessage = message;
     }
-    paintResultStatus(host, previous ? "stale" : resultState(spec || { ok: false }), spec, previous, message);
+    paintResultStatus(host, previous ? "stale" : resultState(spec || { ok: false }), spec, previous, message, restoreDetailsFocus);
   }
 
   function renderWithResultState(host, spec, render) {
@@ -1053,6 +1121,7 @@
     if (resultFailure(spec) && !resultHasEvidence(spec) && previous) {
       return failResult(host, request, spec.error || spec.data?.error || spec.reason || "The refresh did not complete.", spec);
     }
+    const restoreDetailsFocus = rememberResultDetails(host);
     host._renderingResult = true;
     try { render(); } finally { host._renderingResult = false; }
     const state = resultState(spec);
@@ -1062,7 +1131,7 @@
     if (usable) host._resultView = view;
     else delete host._resultView;
     host.hidden = false;
-    paintResultStatus(host, state, spec, usable ? view : null);
+    paintResultStatus(host, state, spec, usable ? view : null, undefined, restoreDetailsFocus);
   }
 
   function validResultShape(spec) {
@@ -2144,6 +2213,24 @@
   let freshProfiles = [];
   let freshProfilesConfiguration = -1;
   let connectionState = "discovering";
+  const connectionDisclosureKey = "cloud-burrito.connection-details-open";
+  let connectionDetailsOpen = true;
+  try { connectionDetailsOpen = localStorage.getItem(connectionDisclosureKey) !== "false"; }
+  catch (_) { /* A disclosure still works for this session. */ }
+
+  function setConnectionDetailsOpen(open, persist = false) {
+    connectionDetailsOpen = open;
+    const strip = $("#connection-status");
+    const returnFocus = !open && strip.contains(document.activeElement);
+    strip.hidden = !open;
+    $("#connection-toggle").setAttribute("aria-expanded", String(open));
+    if (open && persist) {
+      exitFullscreen({ restoreFocus: false });
+      strip.scrollIntoView({ block: "nearest" });
+    }
+    if (persist) saveDisplayChoice(connectionDisclosureKey, String(open));
+    if (returnFocus) focusSafely($("#connection-toggle"));
+  }
   const CONNECTION_STATES = {
     discovering: ["Discovering profiles", "Reading the configured AWS profile file. No account is verified yet."],
     missing_config: ["AWS config file not found", "Choose your existing AWS config file in Settings, then retry discovery."],
@@ -2162,11 +2249,19 @@
 
   function setConnectionState(state, verified) {
     if (!isTauri) return;
+    const previousState = connectionState;
     connectionState = CONNECTION_STATES[state] ? state : "failed";
     const [title, message] = CONNECTION_STATES[connectionState];
     const strip = $("#connection-status");
-    strip.hidden = false;
     strip.dataset.state = connectionState;
+    const toggle = $("#connection-toggle");
+    toggle.hidden = false;
+    toggle.dataset.state = connectionState;
+    toggle.title = title + " — show or hide connection details";
+    // A new problem deserves attention once; background polls must not reopen
+    // details that the user has dismissed. Visibility is not connection state.
+    const needsAttention = !["discovering", "verifying", "verified"].includes(connectionState);
+    setConnectionDetailsOpen(needsAttention && previousState !== connectionState ? true : connectionDetailsOpen);
     const announcement = $("#connection-announcement");
     if (announcement && announcement.dataset.state !== connectionState) {
       announcement.dataset.state = connectionState;
@@ -2224,6 +2319,15 @@
   $("#connection-settings").addEventListener("click", openSettingsPanel);
   $("#connection-retry").addEventListener("click", retryConnection);
   $("#connection-details").addEventListener("click", openIdentityPanel);
+  $("#connection-toggle").addEventListener("click", () => setConnectionDetailsOpen(!!fullscreenWidget || !connectionDetailsOpen, true));
+  $("#connection-close").addEventListener("click", () => setConnectionDetailsOpen(false, true));
+  $("#connection-status").addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setConnectionDetailsOpen(false, true);
+    }
+  });
 
   function setPillInFlight(label) {
     const pill = $("#auth-status");
@@ -6508,7 +6612,7 @@
                   el("span", { class: "muted small pipeline-name-hint" }),
                 ),
                 el("p", { class: "muted small pipeline-error" }),
-                el("p", { class: "muted small" }, "Profile, account, and region come from this widget's context."),
+                el("p", { class: "muted small ui-hint" }, "Profile, account, and region come from this widget's context."),
               ),
               el("div", { class: "widget-data pipeline-runs-rows", hidden: true }),
             ),
