@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { clickThemeToggle } from "./presentation-controls.mjs";
 
 // The production presentation layer runs against browser-only synthetic data.
 // Every non-local request is blocked; no native bridge or provider is installed.
@@ -155,7 +156,7 @@ test("switching and reloading both designs preserves the saved layout, widget co
   await boot(page);
   await expect(items(page)).toHaveCount(2);
   await expect(widget(page, "cfn-stacks")).toHaveAttribute("data-header-color", "blue");
-  await page.locator("#theme-toggle").click();
+  await clickThemeToggle(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   const before = await storage(page);
   const geometry = () => items(page).evaluateAll(nodes => nodes.map(node => ({

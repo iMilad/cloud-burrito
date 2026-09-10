@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { clickThemeToggle } from "./presentation-controls.mjs";
 
 const KEY = "ui.contrast";
 const failures = new WeakMap();
@@ -84,7 +85,7 @@ test("contrast persists and follows appearance, theme and Classic switches witho
   await adjust(page, 30);
   expect(await palette(page)).toEqual(night);
   await page.keyboard.press("Escape");
-  await page.locator("#theme-toggle").click();
+  await clickThemeToggle(page);
   const otherTheme = await palette(page);
   expect(otherTheme.adjusted).not.toEqual(night.adjusted);
   await openAppearance(page);

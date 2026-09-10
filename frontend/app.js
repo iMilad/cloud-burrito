@@ -2588,7 +2588,7 @@
     if (!isTauri) {
       const sel = $("#account-select");
       resetSelect(sel);
-      addOption(sel, "", "(browser mode — no profiles)");
+      addOption(sel, "", "Demo workspace");
       sel.disabled = true;
       syncTopbarPicker(sel);
       const regSel = $("#region-select");

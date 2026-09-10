@@ -19,6 +19,9 @@ tag has been published for these changes.
 - A slimmer, always-visible Studio introduction with investigation shortcuts
   and a clear active-demo indicator. Compact widget view is the default and
   remembers a user's opt-out.
+- A lighter Studio top bar with aligned account/region labels, a compact demo
+  indicator, theme preview in Appearance, and reset under Workspace options.
+  AWS identity status and the actual SSO-token countdown remain visible.
 - Investigation workspaces, bounded table rendering and explicit partial,
   unavailable and stale result states.
 - Native candidate build paths and inspection receipts for macOS ARM64/Intel,

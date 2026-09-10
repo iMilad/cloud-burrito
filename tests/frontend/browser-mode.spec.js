@@ -27,7 +27,7 @@ test("starts in browser mode and renders mock widgets", async ({ page }) => {
 
   const account = page.getByRole("combobox", { name: "Default account" });
   await expect(account).toBeDisabled();
-  await expect(account).toHaveValue("(browser mode — no profiles)");
+  await expect(account).toHaveValue("Demo workspace");
 
   const region = page.getByRole("combobox", { name: "Default region" });
   await expect(region).toBeEnabled();
@@ -90,7 +90,7 @@ test("a delayed blur cannot dismiss a picker that has already regained focus", a
   const region = page.getByRole("combobox", { name: "Default region" });
   await region.focus();
   await region.fill("us");
-  await page.locator("#theme-toggle").focus();
+  await page.locator("#add-widget-btn").focus();
   await region.focus();
   await region.fill("us");
   await page.clock.fastForward(120);

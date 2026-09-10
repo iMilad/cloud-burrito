@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { clickResetLayout } from "./presentation-controls.mjs";
 
 const HOSTILE = "<img src=x onerror=window.__securityInjected=1><svg onload=window.__securityInjected=2>";
 const PRIVATE_MARKER = "CB_SYNTHETIC_DIAGNOSTIC_SECRET";
@@ -268,7 +269,7 @@ test("validation-rejected dashboard save is visible and reset keeps the current 
   });
   await surface.locator(".cli-pin-btn").click();
   await expect(page.locator("#layout-save-warning > span")).toHaveText("Dashboard changes were not saved. The current layout is still displayed.");
-  await page.locator("#reset-layout-btn").click();
+  await clickResetLayout(page);
   await expect(page.locator("#layout-save-warning > span")).toHaveText("Layout reset was not saved. The current layout is unchanged.");
   expect(await page.evaluate(() => window.__resetSentinel)).toBe("synthetic-page-lifetime");
   await expect(surface).toHaveCount(1);

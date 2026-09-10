@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { clickThemeToggle } from "./presentation-controls.mjs";
 
 const KEY = "cb.studio.appearance.v1";
 const choices = ["original", "precision", "paper", "night"];
@@ -101,7 +102,7 @@ test("style, color theme and Classic view remain independent", async ({ page }) 
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
   await page.keyboard.press("Escape");
 
-  await page.locator("#theme-toggle").click();
+  await clickThemeToggle(page);
   await expect(page.locator("html")).toHaveAttribute("data-appearance", "precision");
   await page.locator("#studio-classic-switch").click();
   await expect(page.locator("html")).toHaveAttribute("data-design", "classic");
@@ -163,7 +164,7 @@ test("all eight style and color-theme combinations fit desktop and compact layou
         expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
         await expect.poll(() => page.locator("[data-studio-mark]").evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
         await page.keyboard.press("Escape");
-        await page.locator("#theme-toggle").click();
+        await clickThemeToggle(page);
         await openAppearance(page);
       }
     }

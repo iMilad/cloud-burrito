@@ -15,6 +15,8 @@
   <script src="contrast.js" defer></script>
   <link rel="stylesheet" href="widget-headers.css" />
   <link rel="stylesheet" href="studio-workspace.css" />
+  <link rel="stylesheet" href="studio-topbar.css" />
+  <script src="studio-topbar.js" defer></script>
 </head>
 <body>
   <aside class="studio-rail studio-only" aria-label="Workspace navigation">
@@ -69,6 +71,7 @@
         </select>
       </div>
       <span class="sr-only" id="topbar-picker-status" aria-live="polite"></span>
+      <span id="studio-demo-status" class="studio-only" hidden title="Browser preview uses sample data. Live AWS data requires the desktop app."><span aria-hidden="true"></span>Demo</span>
       <span class="ro-badge" title="Resource reads use reviewed operations. Queries can incur charges, and SSO obtains temporary credentials. See Identity details.">
         <span class="ro-dot"></span>RESOURCE READS
       </span>
@@ -83,13 +86,21 @@
     </div>
     <div class="topbar-right">
       <button type="button" class="btn btn-ghost" id="studio-return" title="Switch to the modern Studio workspace">Studio view <span aria-hidden="true">↗</span></button>
-      <button type="button" class="btn btn-ghost" id="connection-toggle" aria-label="Connection details" aria-controls="connection-status" aria-expanded="false" hidden><span class="connection-dot" aria-hidden="true"></span>Connection</button>
+      <button type="button" class="btn btn-ghost" id="connection-toggle" aria-label="Connection details" aria-controls="connection-status" aria-expanded="false" hidden><span class="connection-dot" aria-hidden="true"></span><span class="connection-toggle-label">Connection</span></button>
       <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout" aria-label="Reset layout">↺</button>
       <button class="btn btn-ghost" id="theme-toggle" title="Preview another theme" aria-label="Preview another theme" disabled>◐</button>
       <button class="btn btn-ghost studio-only" id="appearance-btn" title="Workspace appearance" aria-label="Workspace appearance">◩</button>
       <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden aria-label="Audit log">⏱</button>
       <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden aria-label="Settings">⚙</button>
       <button class="btn btn-primary" id="add-widget-btn">+ Widget</button>
+      <details id="studio-workspace-menu" class="studio-only">
+        <summary id="studio-workspace-menu-toggle" aria-label="Workspace options" title="Workspace options" aria-controls="studio-workspace-menu-panel" aria-expanded="false"><span aria-hidden="true">⋯</span></summary>
+        <div id="studio-workspace-menu-panel" aria-label="Workspace options">
+          <button type="button" id="studio-menu-appearance">Appearance <span aria-hidden="true">↗</span></button>
+          <div id="studio-reset-slot"></div>
+          <p>Resource reads use reviewed operations. Queries can incur charges. See Identity details for AWS access information.</p>
+        </div>
+      </details>
     </div>
   </header>
 
@@ -347,6 +358,10 @@
     </header>
     <div class="side-panel-body">
       <p class="appearance-intro">Choose the visual rhythm of Studio. Your workspace, context and layout stay in place.</p>
+      <section class="appearance-theme" aria-labelledby="appearance-theme-title">
+        <h3 id="appearance-theme-title">Color theme</h3>
+        <div id="appearance-theme-slot"></div>
+      </section>
       <div class="appearance-options" role="radiogroup" aria-label="Studio appearance">
         <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="original">
           <img src="assets/cloud-burrito-style-current.svg" width="48" height="48" alt="" />

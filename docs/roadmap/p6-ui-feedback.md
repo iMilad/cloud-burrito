@@ -48,6 +48,15 @@ preferences are independent of the AWS settings Save/Cancel transaction.
 
 ## Widget presentation follow-up
 
+- The Studio top bar uses small labels above aligned default account and region
+  values, without large filled picker boxes. Browser previews identify the
+  account as **Demo workspace** and show an amber **Demo** mode indicator.
+  **Appearance → Color theme** contains the existing theme preview control;
+  **Workspace options (⋯) → Reset layout** contains the existing reset action.
+  The original controls return to the top bar in Classic. Native identity and
+  SSO-token expiry keep their existing behavior, with the connection disclosure
+  beside them. Backend failures remain visible; successful core-version details
+  no longer occupy another Studio badge. The overview banner is unchanged.
 - Studio starts with **Compact view** enabled; an explicit opt-out survives
   restart. The introduction stays visible with its artwork and three shortcuts
   in a slimmer layout, independent of widget density. The previous expand/hide

@@ -1,0 +1,85 @@
+/* Light context controls; the accepted overview and widget styles stay separate. */
+html[data-design="studio"] .topbar {
+  min-height: 58px; padding: 7px 28px; gap: 12px;
+}
+html[data-design="studio"] .topbar-left { gap: 6px; }
+html[data-design="studio"] .topbar-right { border: 0; padding-left: 0; gap: 8px; }
+html[data-design="studio"] .topbar .picker {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px;
+  height: 42px; min-height: 0; padding: 3px 10px;
+  border: 1px solid transparent; border-radius: 5px; background: transparent;
+}
+html[data-design="studio"] .topbar .picker:hover { background: var(--bg-hover); }
+html[data-design="studio"] .topbar .picker:focus-within { border-color: var(--accent); background: var(--bg-subtle); }
+html[data-design="studio"] .topbar .picker-label {
+  font: 600 8px/10px var(--font-sans); letter-spacing: .09em; text-transform: uppercase;
+}
+html[data-design="studio"] .topbar .picker-search {
+  font-size: 12px; line-height: 22px; height: 22px; min-height: 22px; padding-block: 0; font-weight: 550;
+}
+html[data-design="studio"] .topbar .picker-account .picker-search { width: 168px; }
+html[data-design="studio"] .topbar .picker-region { margin-right: 8px; }
+html[data-design="studio"] .topbar .picker-region .picker-search { width: 105px; }
+html[data-design="studio"] .topbar .picker-account { position: relative; margin-right: 7px; }
+html[data-design="studio"] .topbar .picker-account::after {
+  content: ""; position: absolute; right: -8px; top: 11px; bottom: 11px; width: 1px; background: var(--border);
+}
+html[data-design="studio"] .topbar :is(.ro-badge, #core-status[data-state="online"]) { display: none; }
+html[data-design="studio"][data-runtime="browser"] #core-status { display: none; }
+html[data-design="studio"] #studio-demo-status {
+  display: inline-flex; align-items: center; gap: 7px; padding: 4px 0;
+  color: var(--warning); font: 550 11px/18px var(--font-sans);
+}
+#studio-demo-status > span { width: 6px; height: 6px; background: currentColor; border-radius: 50%; }
+html[data-design="studio"] .topbar .core-status {
+  min-height: 28px; height: auto; padding: 4px 5px; border: 1px solid transparent;
+  background: transparent; font: 500 10px/18px var(--font-sans);
+  white-space: normal; text-align: left; max-width: 100%;
+}
+html[data-design="studio"] #auth-status:hover { background: var(--bg-hover); }
+html[data-design="studio"] .topbar .core-dot { flex: 0 0 5px; width: 5px; height: 5px; box-shadow: none; }
+html[data-design="studio"] #connection-toggle {
+  width: 28px; min-width: 28px; min-height: 28px; padding: 0;
+  border: 1px solid transparent; background: transparent; color: var(--text-muted);
+}
+html[data-design="studio"] #connection-toggle::after { content: "ⓘ"; font: 16px/1 var(--font-sans); }
+html[data-design="studio"] #connection-toggle :is(.connection-dot, .connection-toggle-label) { display: none; }
+html[data-design="studio"] #connection-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+html[data-design="studio"] .topbar #add-widget-btn { min-height: 30px; padding: 5px 12px; font-size: 11px; }
+
+html[data-design="studio"] #studio-workspace-menu { display: block; position: relative; }
+#studio-workspace-menu-toggle {
+  display: flex; align-items: center; justify-content: center; list-style: none;
+  width: 30px; height: 30px; border-radius: 5px; color: var(--text-secondary); cursor: pointer;
+  font: 24px/1 var(--font-sans);
+}
+#studio-workspace-menu-toggle::-webkit-details-marker { display: none; }
+#studio-workspace-menu-toggle:hover, #studio-workspace-menu[open] > summary { background: var(--bg-hover); color: var(--text-primary); }
+#studio-workspace-menu-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#studio-workspace-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); width: 230px;
+  padding: 6px; border: 1px solid var(--border-strong); border-radius: 9px;
+  background: var(--bg-elev); box-shadow: 0 12px 32px #0002;
+}
+#studio-workspace-menu-panel button {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  padding: 8px 10px; min-height: 34px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-primary); text-align: left; font: 500 12px/18px var(--font-sans);
+}
+#studio-workspace-menu-panel button:hover:not(:disabled) { background: var(--bg-hover); }
+#studio-workspace-menu-panel p { margin: 5px 5px 2px; padding: 10px 5px 5px; border-top: 1px solid var(--border); font-size: 10px; line-height: 1.5; color: var(--text-muted); }
+.appearance-theme { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 14px 0 18px; }
+.appearance-theme h3 { margin: 0; font-size: 12px; font-weight: 600; }
+html[data-design="classic"] .appearance-theme { display: none; }
+#appearance-theme-slot .btn { font-size: 11px; padding: 6px 10px; }
+
+@media (max-width: 1100px) {
+  html[data-design="studio"] .topbar { padding-inline: 16px; }
+  html[data-design="studio"] .topbar .brand { flex-basis: 100%; }
+}
+@media (max-width: 760px) {
+  html[data-design="studio"] .topbar { padding: 8px 12px; gap: 8px; }
+  html[data-design="studio"] .topbar-right { justify-content: flex-end; }
+  html[data-design="studio"] .topbar .picker-account .picker-search { width: 148px; }
+  html[data-design="studio"] .topbar .picker-region .picker-search { width: 98px; }
+}

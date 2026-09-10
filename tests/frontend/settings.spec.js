@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { clickThemeToggle } from "./presentation-controls.mjs";
 
 const defaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1", theme: "dark" };
 const profiles = ["a", "b"].map((suffix, index) => ({ name: `demo-${suffix}`, account_id: String(index + 1).repeat(12),
@@ -130,7 +131,7 @@ test("theme preview and default preferences save without replacing verified evid
   await bootSettings(page, { settings: { default_profile: "demo-a" } });
   await expect(page.locator('[data-widget="cfn-stacks"]')).toContainText("evidence-demo-a");
   const before = await callsFor(page, "aws_set_account");
-  await page.locator("#theme-toggle").click();
+  await clickThemeToggle(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator("#appearance-unsaved")).toBeVisible();
   expect(await callsFor(page, "settings_set")).toEqual([]);
