@@ -142,8 +142,6 @@ html[data-design="studio"][data-theme="dark"] {
 [data-design="studio"][data-density="compact"] .widget-header { padding: 7px 10px; gap: 3px 8px; }
 [data-design="studio"][data-density="compact"] .widget-body { padding: 7px 10px; }
 [data-design="studio"][data-density="compact"] .events-table :is(td, th) { padding-block: 5px; }
-[data-design="studio"][data-density="compact"] .studio-overview { padding-block: 18px; }
-[data-design="studio"][data-density="compact"] .studio-overview h1 { font-size: 40px; }
 [data-design="studio"] .studio-command-panel {
   display: flex; flex-direction: column; position: fixed; z-index: 410; inset: 15vh auto auto 50%;
   transform: translateX(-50%); width: min(590px, calc(100% - 32px)); max-height: 72vh;

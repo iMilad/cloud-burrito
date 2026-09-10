@@ -48,13 +48,15 @@ preferences are independent of the AWS settings Save/Cancel transaction.
 
 ## Widget presentation follow-up
 
-- Studio now starts with **Compact view** enabled and a compact overview banner.
-  **Expand overview** restores the full introduction; **Hide** removes the banner.
-  **Show overview** in the workspace toolbar or **Appearance → Overview banner**
-  brings it back. Banner size and widget density are independent local choices;
-  an explicit opt-out survives restart. The browser demo explains that it uses
-  sample data without an AWS connection. Hiding the banner keeps a small mode
-  indicator in the toolbar; native identity state remains separate and unchanged.
+- Studio starts with **Compact view** enabled; an explicit opt-out survives
+  restart. The introduction stays visible with its artwork and three shortcuts
+  in a slimmer layout, independent of widget density. The previous expand/hide
+  controls are removed and old banner visibility preferences are ignored.
+  A prominent **Demo active** badge identifies the browser preview alongside
+  **Sample data · no AWS connection**. Demo selection depends on the browser
+  runtime, not failed AWS authentication: the desktop app keeps its identity
+  checks and does not substitute sample data when disconnected. There is no
+  sample-data toggle; live AWS data requires the desktop app.
 - **Configure widget → Header color** offers the existing soft tint, an accent
   line and a soft gradient. The miniature preview changes immediately; **Save**
   applies it and **Cancel** discards the draft. Pink and purple remain distinct.

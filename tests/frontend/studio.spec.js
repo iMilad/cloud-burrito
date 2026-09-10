@@ -26,7 +26,7 @@ test.afterEach(async ({ page }) => {
 async function boot(page, url = "/") {
   await page.goto(url);
   await expect(page.locator(".brand-tag")).toHaveText("browser mode");
-  await expect(page.locator("#studio-mode-label")).toHaveText("Demo · sample data");
+  await expect(page.locator("#studio-mode-label")).toHaveText("Demo active");
 }
 
 test("defaults to Studio with honest counts and a reversible, allowlisted URL preview", async ({ page }) => {

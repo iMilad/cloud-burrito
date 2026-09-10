@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-design="studio" data-appearance="paper" data-density="compact" data-overview="compact">
+<html lang="en" data-theme="dark" data-design="studio" data-appearance="paper" data-density="compact">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -120,16 +120,14 @@
 
   <main class="dashboard">
     <section class="studio-overview studio-only" id="studio-overview" aria-labelledby="studio-heading">
-      <div class="studio-overview-controls">
-        <button type="button" id="studio-overview-toggle" aria-expanded="false" aria-controls="studio-overview-route">Expand overview</button>
-        <button type="button" id="studio-overview-hide" aria-label="Hide overview" title="Hide overview">Hide <span aria-hidden="true">×</span></button>
-      </div>
       <div class="studio-hero-copy">
         <div class="studio-eyebrow"><span aria-hidden="true"></span> THE INVESTIGATION WORKSPACE</div>
         <h1 id="studio-heading">Less noise.<br /> <span>More signal.</span></h1>
         <p class="studio-hero-intro">From a failed run to the line that explains it.<br />Your tools. Your context. One workspace.</p>
-        <span id="studio-mode-label" class="studio-mode">Checking workspace mode…</span>
-        <p id="studio-demo-description">Sample data only. No AWS connection.</p>
+        <div class="studio-mode-row">
+          <span id="studio-mode-label" class="studio-mode" role="status">Checking workspace mode…</span>
+          <span id="studio-demo-description" hidden>Sample data · no AWS connection</span>
+        </div>
       </div>
       <div class="studio-route" id="studio-overview-route" aria-label="Investigation shortcuts">
         <svg class="studio-route-art" viewBox="0 0 360 270" fill="none" aria-hidden="true"><circle cx="258" cy="150" r="113" stroke="currentColor" stroke-width="1"/><circle cx="258" cy="150" r="87" stroke="currentColor" stroke-width="1"/><path d="M70 243 300 13M194 257 337 114" stroke="currentColor"/><circle cx="329" cy="63" r="8" fill="currentColor"/></svg>
@@ -140,9 +138,8 @@
       </div>
     </section>
     <section class="studio-workspace-bar studio-only" aria-label="Workspace controls">
-      <div><span class="studio-section-index">01 /</span><h2 id="studio-workspace-heading">Your workspace</h2><span id="studio-summary">Open tools</span><span id="studio-workspace-mode" class="studio-mode" hidden></span></div>
+      <div><span class="studio-section-index">01 /</span><h2 id="studio-workspace-heading">Your workspace</h2><span id="studio-summary">Open tools</span></div>
       <div class="studio-workspace-actions">
-        <button type="button" id="studio-overview-show" aria-controls="studio-overview" hidden>Show overview</button>
         <button type="button" id="studio-classic-switch" title="Return to the original design"><span aria-hidden="true">↶</span> Classic view</button>
         <button type="button" id="studio-density" aria-pressed="true"><svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="2" y="3" width="14" height="4" rx="1"/><rect x="2" y="11" width="14" height="4" rx="1"/></svg> Compact view</button>
         <button type="button" id="studio-launcher" aria-label="Search commands" aria-haspopup="dialog" aria-controls="command-panel"><span aria-hidden="true">⌕</span> Search commands <kbd>⌘ / Ctrl K</kbd></button>
@@ -379,12 +376,7 @@
       <p id="appearance-status" class="appearance-status" role="status">Paper is active.</p>
       <section class="workspace-preferences" aria-labelledby="workspace-preferences-title">
         <h3 id="workspace-preferences-title">Workspace</h3>
-        <label for="appearance-overview">Overview banner</label>
-        <select id="appearance-overview">
-          <option value="compact">Compact banner</option>
-          <option value="expanded">Full banner</option>
-          <option value="hidden">Hidden</option>
-        </select>
+        <p class="muted small">Compact view is on by default. Use the workspace toolbar to adjust widget spacing.</p>
         <p id="workspace-preferences-status" class="muted small" role="status">Workspace choices are saved on this device.</p>
       </section>
       <section class="appearance-contrast" aria-labelledby="contrast-label">
