@@ -579,9 +579,29 @@ fn dashboard_config(value: &Value) -> Check {
     let config = object(value)?;
     keys(
         config,
-        &["context", "account_override", "header_color", "inputs"],
+        &[
+            "context",
+            "account_override",
+            "header_color",
+            "header_style",
+            "collapsed",
+            "expanded_height",
+            "inputs",
+        ],
     )?;
     request_context(config)?;
+    if let Some(style) = config.get("header_style") {
+        if !["tint", "line", "gradient"].contains(&text(style, 16, false, false)?) {
+            return Err("Unknown header style");
+        }
+    }
+    if config
+        .get("collapsed")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err("Collapsed must be a boolean");
+    }
+    integer(config, "expanded_height", 1, 1000)?;
     if let Some(color) = config.get("header_color").filter(|v| !v.is_null()) {
         let color = text(color, 16, false, false)?;
         if !["blue", "green", "amber", "pink", "purple", "red"].contains(&color) {
@@ -924,6 +944,20 @@ mod tests {
         bad["inputs"]["pinned_cli_commands"][0]["region"] = Value::Null;
         assert!(dashboard_config(&bad).is_err());
         assert!(dashboard_config(&json!({"header_color":"unreviewed-fixture"})).is_err());
+        assert!(dashboard_config(
+            &json!({"header_style":"gradient", "collapsed":true, "expanded_height":4})
+        )
+        .is_ok());
+        for config in [
+            json!({"header_style":"unreviewed-fixture"}),
+            json!({"header_style":null}),
+            json!({"collapsed":"true"}),
+            json!({"expanded_height":0}),
+            json!({"expanded_height":1001}),
+            json!({"expanded_height":3.5}),
+        ] {
+            assert!(dashboard_config(&config).is_err());
+        }
         assert!(validate("dashboard_set", &json!({"tiles":"not-an-array"})).is_err());
         let too_many: Vec<_> = (0..201)
             .map(|i| json!({"id":format!("tile-fixture-{i}")}))

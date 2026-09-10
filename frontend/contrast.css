@@ -1,0 +1,14 @@
+/* Contrast zero leaves the existing palette untouched. These rules style only
+   its controls; foreground/border adjustments are owned by contrast.js. */
+html[data-design="classic"] #appearance-btn { display: inline-flex; }
+.appearance-contrast { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+.contrast-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.contrast-heading label { color: var(--text-primary); font-size: 13px; font-weight: 650; }
+#contrast-value { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
+.contrast-help { margin: 8px 0 14px; color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
+#appearance-contrast { display: block; width: 100%; min-height: 30px; margin: 0; padding: 0; accent-color: var(--accent); cursor: pointer; }
+#appearance-contrast:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.contrast-scale { display: flex; justify-content: space-between; gap: 12px; color: var(--text-muted); font-size: 10px; }
+.contrast-footer { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; margin-top: 14px; }
+.contrast-footer .btn { flex: 0 0 auto; }
+#contrast-status { flex: 1 1 170px; margin: 2px 0 0; color: var(--text-secondary); font-size: 10px; line-height: 1.6; }

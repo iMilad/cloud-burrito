@@ -1,0 +1,42 @@
+/* Optional header treatments. Unconfigured headers retain the current design. */
+:is(.widget, .header-preview)[data-header-color="blue"] { --header-ink: var(--instrument-blue); }
+:is(.widget, .header-preview)[data-header-color="green"] { --header-ink: var(--success); }
+:is(.widget, .header-preview)[data-header-color="amber"] { --header-ink: var(--warning); }
+:is(.widget, .header-preview)[data-header-color="pink"] { --header-ink: #d65b97; }
+:is(.widget, .header-preview)[data-header-color="purple"] { --header-ink: #9873dc; }
+:is(.widget, .header-preview)[data-header-color="red"] { --header-ink: var(--error); }
+
+/* Match the existing tint in the miniature; separate pink and purple hues. */
+.header-preview[data-header-color] > .widget-header,
+.widget:is([data-header-color="pink"], [data-header-color="purple"])[data-header-style="tint"] > .widget-header {
+  background: color-mix(in srgb, var(--header-ink) 12%, var(--bg-elev));
+  border-bottom-color: color-mix(in srgb, var(--header-ink) 40%, var(--border));
+}
+:is(.widget, .header-preview)[data-header-color][data-header-style="line"] > .widget-header {
+  background: var(--bg-elev);
+  border-bottom-color: var(--border);
+  box-shadow: inset 3px 0 var(--header-ink);
+}
+:is(.widget, .header-preview)[data-header-color][data-header-style="gradient"] > .widget-header {
+  background: linear-gradient(110deg, color-mix(in srgb, var(--header-ink) 22%, var(--bg-elev)), color-mix(in srgb, var(--header-ink) 4%, var(--bg-elev)) 85%);
+  border-bottom-color: color-mix(in srgb, var(--header-ink) 36%, var(--border));
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--header-ink) 80%, var(--border));
+}
+
+.header-selection { margin: 12px 0; }
+.header-style-choices { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+.header-style-choice {
+  flex: 1 1 80px; padding: 9px 8px; border: 1px solid var(--border);
+  border-radius: 7px; background: var(--bg-elev); color: var(--text-secondary);
+  font: 500 11px var(--font-sans); cursor: pointer;
+}
+.header-style-choice:hover { background: var(--bg-hover); }
+.header-style-choice[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); color: var(--text-primary); }
+.header-style-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.header-preview { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-elev); }
+.header-preview > .widget-header { display: flex; justify-content: space-between; padding: 14px; min-height: 48px; border-bottom: 1px solid var(--border); }
+.header-preview-symbol { color: var(--text-secondary); font-size: 17px; }
+.header-preview-body { display: grid; gap: 8px; padding: 14px; }
+.header-preview-body span { width: 80%; height: 4px; border-radius: 8px; background: var(--border); }
+.header-preview-body span:nth-child(2) { width: 58%; }
+.header-preview-body span:nth-child(3) { width: 69%; }

@@ -124,7 +124,7 @@ mod tests {
         cli["command"] = json!("aws cloudformation list-stacks");
         let tiles = json!([
             {"id":"pipeline", "widget":"pipeline-runs", "x":0,"y":0,"w":6,"h":4,
-                "config":{"context":identity, "header_color":"purple", "inputs":{"pinned_pipelines":[pipeline]}}},
+                "config":{"context":identity, "header_color":"purple", "header_style":"gradient", "collapsed":true, "expanded_height":4, "inputs":{"pinned_pipelines":[pipeline]}}},
             {"id":"cli", "widget":"aws-cli", "x":6,"y":0,"w":6,"h":4,
                 "config":{"inputs":{"command":"aws cloudformation list-stacks", "pinned_cli_commands":[cli]}}}
         ]);

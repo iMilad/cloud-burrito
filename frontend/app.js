@@ -291,14 +291,17 @@
   //   { context:     {mode: "inherit"} |
   //                  {mode: "pinned", profile, account_id, region},
   //     header_color: null | "blue" | "green" | "amber" | "pink" | "purple" | "red",
+  //     collapsed:    boolean, expanded_height: null | grid rows (1..1000),
   //     inputs:       { <name>: <value>, ... } }
   // The backend is opaque about this — frontend owns the shape.
   const ALLOWED_HEADER_COLORS = ["blue", "green", "amber", "pink", "purple", "red"];
+  const HEADER_STYLES = { tint: "Soft tint", line: "Accent line", gradient: "Soft gradient" };
   const INHERIT_CONTEXT = { mode: "inherit", profile: null, account_id: null, region: null };
   const PIPELINE_PINS_KEY = "pinned_pipelines";
 
   function emptyConfig() {
-    return { context: { ...INHERIT_CONTEXT }, header_color: null, inputs: {} };
+    return { context: { ...INHERIT_CONTEXT }, header_color: null, header_style: "tint",
+      collapsed: false, expanded_height: null, inputs: {} };
   }
 
   function tileItemFor(el) {
@@ -326,7 +329,11 @@
     const cfg = emptyConfig();
     cfg.context = normalizeContext(raw.context, raw.account_override);
     cfg.header_color = ALLOWED_HEADER_COLORS.includes(raw.header_color) ? raw.header_color : null;
+    cfg.header_style = Object.hasOwn(HEADER_STYLES, raw.header_style) ? raw.header_style : "tint";
     cfg.inputs = raw.inputs && typeof raw.inputs === "object" ? { ...raw.inputs } : {};
+    cfg.collapsed = raw.collapsed === true;
+    cfg.expanded_height = Number.isInteger(raw.expanded_height) && raw.expanded_height >= 1 && raw.expanded_height <= 1000
+      ? raw.expanded_height : null;
     const pins = normalizePipelinePins(cfg.inputs[PIPELINE_PINS_KEY]);
     if (pins.length) cfg.inputs[PIPELINE_PINS_KEY] = pins;
     else delete cfg.inputs[PIPELINE_PINS_KEY];
@@ -385,6 +392,7 @@
   function writeTileConfig(item, cfg) {
     item._config = normalizeConfig(cfg);
     item.dataset.config = JSON.stringify(item._config);
+    applyWidgetCollapse(item);
   }
 
   function widgetTypeForItem(item) {
@@ -420,6 +428,7 @@
     } else {
       delete widget.dataset.headerColor;
     }
+    widget.dataset.headerStyle = cfg.header_style || "tint";
   }
 
   function applyAllTileColors() {
@@ -6820,6 +6829,7 @@
     grid.makeWidget(tile);
     // Re-wire interactions for the new tile.
     wireFullscreenButtons();
+    wireCollapseButtons();
     wireRefreshButtons();
     wireRemoveButtons();
     wireConfigButtons();
@@ -6993,6 +7003,7 @@
       renderAwsCli(widget);
     }
     updateWidgetContextChip(tile);
+    applyWidgetCollapse(tile);
   }
 
   function ensureSavedTileElement(savedTile) {
@@ -7003,6 +7014,7 @@
     grid.el.appendChild(tile);
     grid.makeWidget(tile);
     wireFullscreenButtons();
+    wireCollapseButtons();
     wireRefreshButtons();
     wireRemoveButtons();
     wireConfigButtons();
@@ -7034,7 +7046,10 @@
         const persisted = {};
         if (cfg.context && cfg.context.mode === "pinned") persisted.context = cfg.context;
         if (cfg.header_color)     persisted.header_color = cfg.header_color;
+        if (cfg.header_style && cfg.header_style !== "tint") persisted.header_style = cfg.header_style;
         if (cfg.inputs && Object.keys(cfg.inputs).length > 0) persisted.inputs = cfg.inputs;
+        if (cfg.collapsed) persisted.collapsed = true;
+        if (cfg.expanded_height !== null) persisted.expanded_height = cfg.expanded_height;
         if (Object.keys(persisted).length > 0) out.config = persisted;
       }
     }
@@ -7058,6 +7073,7 @@
       animate: true,
       disableOneColumnMode: false,
     }, "#grid-stack");
+    wireCollapseButtons();
     starterLayout = grid.save(false).map(pickTileFields).filter(tile => tile.id);
 
     // Restore saved layout if present. In Tauri mode the source of truth is
@@ -7090,6 +7106,7 @@
         }
       });
       document.querySelectorAll(".grid-stack-item").forEach(renderWidgetTile);
+      wireCollapseButtons();
     } catch (_) {
       dashboardStorageReady = false;
       showStorageLoadWarning("dashboard", retryLayoutLoad, resetLayout);
@@ -7234,12 +7251,140 @@
   }
   $("#reset-layout-btn").addEventListener("click", resetLayout);
 
+  // ===== Whole-widget collapse =====
+  let collapseBodySerial = 0;
+  let collapseHeaderObserver = null;
+
+  function collapseGridHeight(item) {
+    const widget = item.querySelector(".widget");
+    const header = widget?.querySelector(":scope > .widget-header");
+    if (!grid || !header) return 1;
+    const style = getComputedStyle(widget);
+    const px = value => Number.parseFloat(value) || 0;
+    const borderAndPadding = px(style.borderTopWidth) + px(style.borderBottomWidth)
+      + px(style.paddingTop) + px(style.paddingBottom);
+    const margin = px(grid.opts.marginTop ?? grid.getMargin()) + px(grid.opts.marginBottom ?? grid.getMargin());
+    // A narrow or wrapped header can need multiple rows. One row is only 66px
+    // of content at the normal 90px cell height and 12px grid margins.
+    return Math.max(1, Math.min(1000, Math.ceil((header.getBoundingClientRect().height + borderAndPadding + margin)
+      / (grid.getCellHeight(true) || 90))));
+  }
+
+  function sizeCollapsedWidget(item) {
+    const node = item.gridstackNode;
+    if (!grid || !node || !tileConfig(item).collapsed || !item.isConnected) return;
+    const height = collapseGridHeight(item);
+    if (node.h !== height || node.minH !== height || node.maxH !== height || !node.noResize) {
+      grid.update(item, { h: height, minH: height, maxH: height, noResize: true });
+    }
+  }
+
+  function applyWidgetCollapse(item) {
+    const widget = item?.querySelector?.(".widget");
+    if (!widget) return;
+    const cfg = tileConfig(item), collapsed = cfg.collapsed;
+    const previouslyCollapsed = widget.classList.contains("is-collapsed");
+    const button = widget.querySelector(":scope > .widget-header .collapse-btn");
+    const node = item.gridstackNode;
+    if (node && !item._expandedGridConstraints) {
+      item._expandedGridConstraints = { minH: node.minH || 0, maxH: node.maxH || 0, noResize: !!node.noResize };
+      item._collapseExpandedHeight = cfg.expanded_height || node.h || 3;
+    }
+    if (collapsed && fullscreenWidget === widget) exitFullscreen({ restoreFocus: false });
+    const hiddenChildren = Array.from(widget.children).filter(child => !child.classList.contains("widget-header"));
+    const moveFocus = collapsed && hiddenChildren.some(child => child.contains(document.activeElement));
+    if (collapsed && comboOwnerInput && widget.contains(comboOwnerInput)) closePipelineCombo();
+    widget.classList.toggle("is-collapsed", collapsed);
+    item.classList.toggle("is-collapsed", collapsed);
+    if (button) {
+      button.title = collapsed ? "Expand widget" : "Collapse widget";
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-expanded", String(!collapsed));
+    }
+    // CSS hides the whole body even when a late response changes its hidden
+    // attribute. Inert also removes every current/future child from keyboard
+    // navigation without overwriting each renderer's own visibility state.
+    if (collapsed) {
+      widget._collapseInert ??= new Map();
+      for (const child of hiddenChildren) {
+        if (!widget._collapseInert.has(child)) widget._collapseInert.set(child, child.inert);
+        child.inert = true;
+      }
+      if (cfg.expanded_height) item._collapseExpandedHeight = cfg.expanded_height;
+      sizeCollapsedWidget(item);
+    } else {
+      for (const [child, inert] of widget._collapseInert || []) child.inert = inert;
+      delete widget._collapseInert;
+      if (previouslyCollapsed && grid && node) {
+        const constraints = item._expandedGridConstraints || { minH: 0, maxH: 0, noResize: false };
+        const height = cfg.expanded_height || item._collapseExpandedHeight || Math.max(constraints.minH, 3);
+        grid.update(item, { ...constraints, h: height });
+      }
+    }
+    if (moveFocus) focusSafely(button);
+  }
+
+  function setWidgetCollapsed(widget, collapsed) {
+    const item = tileItemFor(widget);
+    if (!item) return;
+    const cfg = tileConfig(item);
+    if (cfg.collapsed === collapsed) return applyWidgetCollapse(item);
+    if (collapsed && fullscreenWidget === widget) exitFullscreen({ restoreFocus: false });
+    const currentHeight = item.gridstackNode?.h || Number(item.getAttribute("gs-h")) || 3;
+    writeTileConfig(item, { ...cfg, collapsed,
+      expanded_height: collapsed ? Math.max(1, Math.min(1000, currentHeight)) : cfg.expanded_height });
+    scheduleSaveLayout();
+  }
+
+  function wireCollapseButtons() {
+    collapseHeaderObserver ??= new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const item = tileItemFor(entry.target);
+        if (item) sizeCollapsedWidget(item);
+      }
+    });
+    document.querySelectorAll(".grid-stack-item > .grid-stack-item-content > .widget").forEach(widget => {
+      const header = widget.querySelector(":scope > .widget-header");
+      const actions = header?.querySelector(".widget-actions");
+      if (!actions) return;
+      let button = actions.querySelector(".collapse-btn");
+      if (!button) {
+        button = el("button", { type: "button", class: "icon-btn collapse-btn", title: "Collapse widget",
+          "aria-label": "Collapse widget", "aria-expanded": "true" },
+          el("span", { "aria-hidden": "true" }, "⌃"));
+        actions.insertBefore(button, actions.querySelector(".fs-btn"));
+        button.addEventListener("click", event => {
+          event.stopPropagation();
+          setWidgetCollapsed(widget, !tileConfig(widget).collapsed);
+        });
+      }
+      const children = Array.from(widget.children).filter(child => child !== header);
+      children.forEach(child => { child.id ||= `widget-collapse-body-${++collapseBodySerial}`; });
+      button.setAttribute("aria-controls", children.map(child => child.id).join(" "));
+      if (!header._collapseObserved) {
+        collapseHeaderObserver.observe(header);
+        header._collapseObserved = true;
+      }
+      applyWidgetCollapse(tileItemFor(widget));
+    });
+  }
+
+  function disposeWidgetCollapse(node) {
+    const headers = node?.matches?.(".widget-header") ? [node] : [];
+    headers.push(...node?.querySelectorAll?.(".widget-header") || []);
+    for (const header of headers) {
+      if (header._collapseObserved) collapseHeaderObserver?.unobserve(header);
+      delete header._collapseObserved;
+    }
+  }
+
   // ===== Fullscreen widget toggle (Jira-style) =====
   let fullscreenWidget = null;
   let fullscreenGridState = null;
 
   function enterFullscreen(widget) {
     if (fullscreenWidget) exitFullscreen({ restoreFocus: false });
+    if (tileConfig(widget).collapsed) setWidgetCollapsed(widget, false);
     widget.classList.add("fullscreen");
     document.body.classList.add("has-fullscreen-widget");
     fullscreenWidget = widget;
@@ -7423,8 +7568,10 @@
     // Start from a deep-ish copy so Cancel really discards changes.
     const existing = tileConfig(widget || tileItem);
     currentCfgDraft = {
+      ...existing,
       context: existing.context ? { ...existing.context } : { ...INHERIT_CONTEXT },
       header_color: existing.header_color || null,
+      header_style: existing.header_style || "tint",
       inputs: { ...(existing.inputs || {}) },
     };
 
@@ -7557,6 +7704,32 @@
       wrap.appendChild(btn);
     });
     restoreKeyedFocus(wrap, focusKey);
+    renderHeaderStylePreview();
+  }
+
+  function renderHeaderStylePreview() {
+    if (!currentCfgDraft) return;
+    const style = currentCfgDraft.header_style || "tint";
+    const color = currentCfgDraft.header_color;
+    const preview = $("#cfg-header-preview");
+    preview.dataset.headerStyle = style;
+    if (color) preview.dataset.headerColor = color;
+    else delete preview.dataset.headerColor;
+    $("#cfg-header-preview-title").textContent = currentCfgTile?.querySelector(".widget-title")?.textContent || "Widget header";
+    $("#cfg-header-selection").textContent = `${color ? displayName(color) : "Default color"} · ${HEADER_STYLES[style]}`;
+    const choices = $("#cfg-header-styles");
+    const focusKey = focusedKey(choices);
+    clear(choices);
+    Object.entries(HEADER_STYLES).forEach(([key, label]) => {
+      const button = el("button", { type: "button", class: "header-style-choice",
+        "aria-pressed": String(key === style), "data-focus-key": key }, label);
+      button.addEventListener("click", () => {
+        currentCfgDraft.header_style = key;
+        renderHeaderStylePreview();
+      });
+      choices.appendChild(button);
+    });
+    restoreKeyedFocus(choices, focusKey);
   }
 
   async function loadSourceIntoPanel(widgetName) {
@@ -7630,15 +7803,20 @@
     } else {
       currentCfgDraft.context = { ...INHERIT_CONTEXT };
     }
-    invalidateRequests(currentCfgTile);
-    clearWidgetResults($(".widget", currentCfgTile));
-    // Explicit reconfiguration also invalidates/removes the old pin surfaces.
-    currentCfgTile.querySelectorAll(".pipeline-pin-card").forEach(card => card.remove());
+    const previousConfig = tileConfig(currentCfgTile);
+    const dataChanged = JSON.stringify(previousConfig.context) !== JSON.stringify(currentCfgDraft.context)
+      || JSON.stringify(previousConfig.inputs) !== JSON.stringify(currentCfgDraft.inputs);
+    // Display-only choices retain loaded results, in-flight work and draft inputs.
+    if (dataChanged) {
+      invalidateRequests(currentCfgTile);
+      clearWidgetResults($(".widget", currentCfgTile));
+      currentCfgTile.querySelectorAll(".pipeline-pin-card").forEach(card => card.remove());
+    }
     writeTileConfig(currentCfgTile, currentCfgDraft);
     applyTileHeaderColor(currentCfgTile);
     updateWidgetContextChip(currentCfgTile);
     scheduleSaveLayout();
-    renderWidgetTile(currentCfgTile);
+    if (dataChanged) renderWidgetTile(currentCfgTile);
     closeWidgetConfigPanel();
   }
 
@@ -7695,7 +7873,10 @@
     // removals performed by GridStack or a detail's own controls.
     new MutationObserver(records => {
       for (const record of records) for (const node of record.removedNodes) {
-        if (!node.isConnected) disposeRenderTree(node);
+        if (!node.isConnected) {
+          disposeRenderTree(node);
+          disposeWidgetCollapse(node);
+        }
       }
       if (comboOwnerInput && !comboOwnerInput.isConnected) closePipelineCombo();
       // Layout recovery and GridStack can remove a tile without its own button.
@@ -7728,6 +7909,7 @@
     wireRemoveButtons();
     wireConfigButtons();
     wireFullscreenButtons();
+    wireCollapseButtons();
     updateAllWidgetContextChips();
     bootComplete = true;
     if (isTauri) startDesktopPickers();

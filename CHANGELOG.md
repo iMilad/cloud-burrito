@@ -14,6 +14,8 @@ tag has been published for these changes.
 
 - Studio with four selectable appearances: Original, Precision, Paper and
   Night Shift. Paper is the default; Classic remains available.
+- Per-widget header treatments with a preview, a collapse/expand action that
+  remembers widget height, and local contrast adjustment in Appearance.
 - Investigation workspaces, bounded table rendering and explicit partial,
   unavailable and stale result states.
 - Native candidate build paths and inspection receipts for macOS ARM64/Intel,
@@ -33,6 +35,7 @@ tag has been published for these changes.
   preferences for tips and expanded results. Limited, stale and failed results
   retain visible status and recovery information.
 - Preserve an unavailable pinned account when saving unrelated widget settings.
+- Preserve results and unfinished inputs when saving header-only changes.
 - Keep newer policy drafts when asynchronous reads or saves finish, and report
   rejected saves without claiming success.
 - Restore scrolling, grid controls and keyboard focus after a fullscreen widget

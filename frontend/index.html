@@ -10,6 +10,10 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="studio.css" />
   <link rel="stylesheet" href="studio-appearances.css" />
+  <link rel="stylesheet" href="widget-collapse.css" />
+  <link rel="stylesheet" href="contrast.css" />
+  <script src="contrast.js" defer></script>
+  <link rel="stylesheet" href="widget-headers.css" />
 </head>
 <body>
   <aside class="studio-rail studio-only" aria-label="Workspace navigation">
@@ -366,6 +370,19 @@
         </button>
       </div>
       <p id="appearance-status" class="appearance-status" role="status">Paper is active.</p>
+      <section class="appearance-contrast" aria-labelledby="contrast-label">
+        <div class="contrast-heading">
+          <label id="contrast-label" for="appearance-contrast">Contrast</label>
+          <output id="contrast-value" for="appearance-contrast" aria-live="off">Original (0)</output>
+        </div>
+        <p class="contrast-help" id="contrast-help">Adjust text readability and border strength. Original keeps the current design. Works in every style, including Classic.</p>
+        <input id="appearance-contrast" type="range" min="-20" max="50" step="5" value="0" aria-describedby="contrast-help" aria-valuetext="Original (0)" />
+        <div class="contrast-scale" aria-hidden="true"><span>Softer</span><span>Stronger</span></div>
+        <div class="contrast-footer">
+          <button id="contrast-reset" class="btn btn-ghost" type="button">Reset contrast</button>
+          <p id="contrast-status" role="status">Original contrast. Changes save on this device.</p>
+        </div>
+      </section>
       <p class="muted small ui-hint">Changes are saved locally on this device when storage is available. Light and dark color themes remain separate.</p>
     </div>
   </aside>
@@ -538,6 +555,13 @@
       <section class="panel-section">
         <h3 class="panel-section-title">Header color</h3>
         <div class="color-swatches" id="cfg-color-swatches"></div>
+        <p class="header-selection muted small" id="cfg-header-selection" role="status"></p>
+        <div class="header-style-choices" id="cfg-header-styles" role="group" aria-label="Header treatment"></div>
+        <div class="header-preview" id="cfg-header-preview" aria-label="Header preview">
+          <div class="widget-header"><span class="widget-title" id="cfg-header-preview-title">Widget header</span><span class="header-preview-symbol" aria-hidden="true">⌄</span></div>
+          <div class="header-preview-body"><span></span><span></span><span></span></div>
+        </div>
+        <p class="muted small">Preview only. Save to apply to this widget.</p>
       </section>
 
       <section class="panel-section">

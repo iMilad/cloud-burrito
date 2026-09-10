@@ -1,0 +1,28 @@
+/* A collapsed tile keeps its existing header and releases unused grid space. */
+.grid-stack-item.is-collapsed > .grid-stack-item-content {
+  bottom: auto;
+  height: auto;
+}
+.grid-stack-item-content > .widget.is-collapsed {
+  height: auto;
+  min-height: 0;
+}
+.widget.is-collapsed > :not(.widget-header) { display: none !important; }
+.widget.is-collapsed > .widget-header {
+  flex-shrink: 0;
+  align-items: center;
+  padding: 6px 10px;
+  gap: 4px 8px;
+}
+.widget.is-collapsed > .widget-header .widget-sub { display: none; }
+[data-design="studio"] .widget.is-collapsed > .widget-header .widget-actions {
+  grid-column: 2;
+  grid-row: 1;
+}
+[data-design="studio"] .widget.is-collapsed > .widget-header .widget-context {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.collapse-btn > span { display: block; line-height: 1; transform: translateY(2px); }
+.collapse-btn[aria-expanded="false"] > span { transform: rotate(180deg) translateY(1px); }
+.grid-stack-item.is-collapsed > .ui-resizable-handle { display: none !important; }

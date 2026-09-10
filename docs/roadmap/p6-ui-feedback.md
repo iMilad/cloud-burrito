@@ -46,6 +46,32 @@ Optional tips are hidden by default. Operation permissions, query cost,
 retention and recovery guidance are not treated as optional tips. Display
 preferences are independent of the AWS settings Save/Cancel transaction.
 
+## Widget presentation follow-up
+
+- **Configure widget → Header color** offers the existing soft tint, an accent
+  line and a soft gradient. The miniature preview changes immediately; **Save**
+  applies it and **Cancel** discards the draft. Pink and purple remain distinct.
+  Appearance-only saves preserve loaded results, unfinished input and in-flight
+  requests. Changing the widget's account or saved execution inputs still
+  invalidates the old context as before.
+- **Collapse widget** in the header hides the entire body and releases its grid
+  space. **Expand widget** restores the previous height. Color, treatment and
+  collapsed state survive dashboard reload. Fullscreen expands a collapsed
+  widget; collapsing a fullscreen widget returns it to the grid. Hidden bodies
+  are excluded from keyboard navigation. Collapsing is a display choice, not a
+  pause or cancellation of background work.
+- **Appearance → Contrast** adjusts neutral text and borders from softer
+  (**−20**) to stronger (**+50**). **Original (0)** and **Reset contrast** restore
+  the source palette exactly. The choice is local and works with all four
+  Studio appearances, both color themes and Classic. A storage failure is
+  reported as a session-only choice. Backgrounds, accent and status colors keep
+  the selected design. This control does not claim an accessibility certification.
+
+Synthetic regressions exercise save/cancel/reload, preserved live data and
+draft input, collapse geometry and focus, fullscreen, contrast reset and
+palette switching. Backend dashboard tests cover native round-trip storage and
+reject unrecognized treatments, invalid collapse flags and out-of-range heights.
+
 ## Verification and next test
 
 Regression coverage includes independent token and account-credential lifetimes,
