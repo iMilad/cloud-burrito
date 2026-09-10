@@ -26,7 +26,7 @@ test.afterEach(async ({ page }) => {
 async function boot(page, url = "/") {
   await page.goto(url);
   await expect(page.locator(".brand-tag")).toHaveText("browser mode");
-  await expect(page.locator("#studio-mode-label")).toHaveText("Demo · synthetic data");
+  await expect(page.locator("#studio-mode-label")).toHaveText("Demo · sample data");
 }
 
 test("defaults to Studio with honest counts and a reversible, allowlisted URL preview", async ({ page }) => {
@@ -227,7 +227,6 @@ test("compact mode and reduced-motion navigation remain usable at a narrow deskt
     };
   });
   await boot(page);
-  await page.locator("#studio-density").click();
   await expect(page.locator("#studio-density")).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);

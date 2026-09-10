@@ -16,6 +16,8 @@ tag has been published for these changes.
   Night Shift. Paper is the default; Classic remains available.
 - Per-widget header treatments with a preview, a collapse/expand action that
   remembers widget height, and local contrast adjustment in Appearance.
+- A compact overview banner with expand/hide controls and recovery from
+  Appearance. Studio starts in compact view and remembers a user's opt-out.
 - Investigation workspaces, bounded table rendering and explicit partial,
   unavailable and stale result states.
 - Native candidate build paths and inspection receipts for macOS ARM64/Intel,

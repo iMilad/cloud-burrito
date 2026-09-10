@@ -22,7 +22,7 @@ test.afterEach(async ({ page }) => {
 async function boot(page, url = "/") {
   await page.goto(url);
   await expect(page.locator("html")).toHaveAttribute("data-design", "studio");
-  await expect(page.locator("#studio-mode-label")).toHaveText("Demo · synthetic data");
+  await expect(page.locator("#studio-mode-label")).toHaveText("Demo · sample data");
 }
 
 async function openAppearance(page) {

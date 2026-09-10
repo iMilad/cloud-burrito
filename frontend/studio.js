@@ -6,6 +6,18 @@
   const preferenceKey = "cb.presentation.v1";
   const appearancePreferenceKey = "cb.studio.appearance.v1";
   const validDesign = value => value === "studio" || value === "classic";
+  const validDensity = value => value === "compact" || value === "comfortable";
+  const validOverview = value => ["compact", "expanded", "hidden"].includes(value);
+  const workspaceStorageFailures = new Set();
+  function readWorkspacePreference(key, validate, fallback) {
+    try {
+      const saved = localStorage.getItem(key);
+      return validate(saved) ? saved : fallback;
+    } catch (_) {
+      workspaceStorageFailures.add(key);
+      return fallback;
+    }
+  }
   const appearances = {
     original: { label: "Studio Original", asset: "assets/cloud-burrito-style-current.svg" },
     precision: { label: "Precision", asset: "assets/cloud-burrito-style-precision.svg" },
@@ -34,7 +46,8 @@
   const queryAppearance = query.get("appearance");
   root.dataset.design = validDesign(queryDesign) ? queryDesign : preferred;
   root.dataset.appearance = validAppearance(queryAppearance) ? queryAppearance : preferredAppearance;
-  root.dataset.density = "comfortable";
+  root.dataset.density = readWorkspacePreference("ui.density", validDensity, "compact");
+  root.dataset.overview = readWorkspacePreference("ui.overview", validOverview, "compact");
 
   let modal = null;
   let panel = null;
@@ -48,6 +61,46 @@
     .filter(item => item.classList.contains("grid-stack-item") && item.querySelector(".widget"));
   const isOpen = () => panel?.getAttribute("aria-hidden") === "false";
   const available = button => !!button && !button.disabled && !button.closest("[hidden], [inert]");
+
+  function syncWorkspacePreferences() {
+    const hidden = root.dataset.overview === "hidden";
+    const expanded = root.dataset.overview === "expanded";
+    const hero = $("#studio-overview");
+    if (hero) { hero.hidden = hidden; hero.inert = hidden; }
+    const toggle = $("#studio-overview-toggle");
+    if (toggle) {
+      toggle.textContent = expanded ? "Compact overview" : "Expand overview";
+      toggle.setAttribute("aria-expanded", String(expanded));
+    }
+    const show = $("#studio-overview-show");
+    if (show) show.hidden = !hidden;
+    const mode = $("#studio-workspace-mode");
+    if (mode) mode.hidden = !hidden;
+    $("#studio-density")?.setAttribute("aria-pressed", String(root.dataset.density === "compact"));
+    const choice = $("#appearance-overview");
+    if (choice) choice.value = root.dataset.overview;
+    const status = $("#workspace-preferences-status");
+    if (status) status.textContent = workspaceStorageFailures.size
+      ? "Some workspace choices apply for this session only. Local storage is unavailable."
+      : "Workspace choices are saved on this device.";
+  }
+
+  function persistWorkspacePreference(key, value) {
+    try { localStorage.setItem(key, value); workspaceStorageFailures.delete(key); }
+    catch (_) { workspaceStorageFailures.add(key); }
+    syncWorkspacePreferences();
+  }
+
+  function chooseOverview(value) {
+    if (!validOverview(value)) return;
+    const focus = document.activeElement;
+    const wasInside = $("#studio-overview")?.contains(focus);
+    const wasShow = focus === $("#studio-overview-show");
+    root.dataset.overview = value;
+    persistWorkspacePreference("ui.overview", value);
+    if (value === "hidden" && wasInside) $("#studio-overview-show")?.focus({ preventScroll: true });
+    else if (value !== "hidden" && wasShow) $("#studio-overview-toggle")?.focus({ preventScroll: true });
+  }
 
   function close(options = {}) {
     if (modal && panel) modal.hidePanel(panel, options);
@@ -146,9 +199,9 @@
     close();
     exitWidgetFullscreen();
     markNavigation("overview");
-    const heading = $(".studio-overview h1") || $("#studio-launcher");
+    const heading = root.dataset.overview === "hidden" ? $("#studio-workspace-heading") : $(".studio-overview h1");
     if (heading) {
-      if (heading.tagName === "H1") heading.setAttribute("tabindex", "-1");
+      heading.setAttribute("tabindex", "-1");
       heading.focus({ preventScroll: true });
     }
     window.scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" });
@@ -259,10 +312,16 @@
     const connection = $("#connection-status");
     // Disclosure visibility is a user preference, not an identity signal.
     const verified = native && connection?.dataset.state === "verified";
-    const label = $("#studio-mode-label");
-    label.textContent = !native ? "Demo · synthetic data"
-      : verified ? "Desktop · identity verified" : "Desktop · identity required";
-    label.dataset.state = !native ? "demo" : verified ? "verified" : "unverified";
+    for (const label of [$("#studio-mode-label"), $("#studio-workspace-mode")]) {
+      if (!label) continue;
+      label.textContent = !native ? "Demo · sample data"
+        : verified ? "Desktop · identity verified" : "Desktop · identity required";
+      label.dataset.state = !native ? "demo" : verified ? "verified" : "unverified";
+      label.title = !native ? "Sample data only. No AWS connection."
+        : verified ? "Your selected AWS identity has been verified." : "Select and verify an AWS identity to load resources.";
+    }
+    const description = $("#studio-demo-description");
+    if (description) description.hidden = native;
   }
 
   function init(api) {
@@ -290,11 +349,6 @@
           : (current + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + keys.length) % keys.length;
         chooseAppearance(keys[next]);
       });
-    });
-    $("#studio-density")?.addEventListener("click", event => {
-      const compact = root.dataset.density !== "compact";
-      root.dataset.density = compact ? "compact" : "comfortable";
-      event.currentTarget.setAttribute("aria-pressed", String(compact));
     });
     document.addEventListener("click", event => {
       if (root.dataset.design !== "studio" || !(event.target instanceof Element)) return;
@@ -340,6 +394,16 @@
     // View navigation must remain usable while native settings are still loading.
     $("#studio-classic-switch")?.addEventListener("click", () => chooseDesign("classic"));
     $("#studio-return")?.addEventListener("click", () => chooseDesign("studio"));
+    $("#studio-density")?.addEventListener("click", () => {
+      root.dataset.density = root.dataset.density === "compact" ? "comfortable" : "compact";
+      persistWorkspacePreference("ui.density", root.dataset.density);
+    });
+    $("#studio-overview-toggle")?.addEventListener("click", () => chooseOverview(root.dataset.overview === "expanded" ? "compact" : "expanded"));
+    $("#studio-overview-hide")?.addEventListener("click", () => chooseOverview("hidden"));
+    $("#studio-overview-show")?.addEventListener("click", () => chooseOverview("compact"));
+    $("#appearance-overview")?.addEventListener("change", event => chooseOverview(event.target.value));
+    syncWorkspacePreferences();
+    updateMode();
     syncAppearance();
   }
 

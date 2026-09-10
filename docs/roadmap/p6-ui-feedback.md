@@ -48,6 +48,13 @@ preferences are independent of the AWS settings Save/Cancel transaction.
 
 ## Widget presentation follow-up
 
+- Studio now starts with **Compact view** enabled and a compact overview banner.
+  **Expand overview** restores the full introduction; **Hide** removes the banner.
+  **Show overview** in the workspace toolbar or **Appearance → Overview banner**
+  brings it back. Banner size and widget density are independent local choices;
+  an explicit opt-out survives restart. The browser demo explains that it uses
+  sample data without an AWS connection. Hiding the banner keeps a small mode
+  indicator in the toolbar; native identity state remains separate and unchanged.
 - **Configure widget → Header color** offers the existing soft tint, an accent
   line and a soft gradient. The miniature preview changes immediately; **Save**
   applies it and **Cancel** discards the draft. Pink and purple remain distinct.
