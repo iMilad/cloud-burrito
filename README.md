@@ -180,6 +180,10 @@ unreviewed structured inputs, and context/endpoint/output overrides are rejected
 before process execution. A recognized request still needs a policy allow and a
 verified connection with unexpired temporary credentials.
 
+`--starting-token` accepts only base64-encoded AWS CLI pagination tokens with
+the selected operation's cursor and optional nonnegative truncation offset.
+Hidden request parameters, malformed tokens and legacy raw cursors are rejected.
+
 Examples:
 
 ```text
@@ -343,6 +347,11 @@ State lives in your home directory:
 | `~/.cloud_burrito/dashboard.json` | Saved dashboard layout and per-tile config |
 | `~/.cloud_burrito/audit.log` | Structured application outcomes and capability preflights; write failures are visible |
 
+On macOS and Linux, app files use `0600` and app/archive directories use `0700`.
+Startup repairs permissions on existing settings, policy, dashboard, audit files
+and preserved audit archives without rewriting their contents. Links are rejected
+and startup stops if this repair fails. Windows retains inherited filesystem ACLs.
+
 Authentication supports inline SSO profiles and profiles referencing an
 `[sso-session]` section. Static keys, credential processes, role chains and
 endpoint overrides are rejected in the selected profile. The app reads the
@@ -471,7 +480,7 @@ The pipeline has two workflows:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `CI` | PRs and pushes to `dev`/`main` | Runs browser tests and dependency audits, validates metadata/privacy/syntax/formatting, tests and lints Rust, and checks whitespace |
+| `CI` | PRs and pushes to `dev`/`main` | Requires a full-history Gitleaks scan, runs browser tests and dependency audits, validates metadata/privacy/syntax/formatting, tests and lints Rust, and checks whitespace |
 | `Release` | `app-v*` tags or a manual dispatch on that tag ref | Re-runs the gates, builds explicitly unsigned bundles for both macOS architectures, rejects publisher identities, validates and privacy-scans the app, verifies checksums, then creates a draft GitHub release |
 
 Release privacy is a hard gate. `scripts/check-release-privacy.py` scans tracked
@@ -483,6 +492,10 @@ environment variables are empty before any job runs.
 All external Actions are pinned to immutable commit SHAs and updated by
 Dependabot. Rust build caches reduce repeated compilation without containing
 credentials.
+
+The separate `Secret scan` CI job installs the pinned Gitleaks version from
+`scripts/tool-versions.env` and scans full Git history with redacted output.
+Installation errors and detected secrets fail the job; scanning is not optional.
 
 The workflow always builds the immutable commit that triggered the tag run and
 refuses to continue if the tag moves. A rerun may update an existing draft, but

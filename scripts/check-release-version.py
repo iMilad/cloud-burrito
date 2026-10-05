@@ -148,7 +148,7 @@ def main() -> int:
         )
 
     tool_versions = load_tool_versions()
-    required_tools = {"TAURI_CLI_VERSION", "CARGO_AUDIT_VERSION"}
+    required_tools = {"TAURI_CLI_VERSION", "CARGO_AUDIT_VERSION", "GITLEAKS_VERSION"}
     if set(tool_versions) != required_tools:
         raise SystemExit(
             "tool version keys differ: "

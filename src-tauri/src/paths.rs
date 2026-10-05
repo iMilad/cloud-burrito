@@ -1,6 +1,6 @@
 //! App-local filesystem paths.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const APP_DATA_DIR: &str = ".cloud_burrito";
 
@@ -34,6 +34,10 @@ impl AppPaths {
 
     pub fn data_file(&self, name: &str) -> PathBuf {
         self.data_dir.join(name)
+    }
+
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 }
 

@@ -319,6 +319,7 @@ pub fn parse_cli_command(command: &str) -> Result<ParsedCli, String> {
 enum ValueType {
     Scalar(usize, usize),
     Opaque(usize),
+    StartingToken(&'static str),
     Expression(usize, usize),
     Number(u64, u64),
     Enum(&'static [&'static str]),
@@ -563,8 +564,16 @@ fn argument_schema(service: &str, operation: &str) -> Option<ArgumentSchema> {
         ]);
     }
     if !matches!(pagination, Pagination::None) {
+        // These are botocore paginator input names, not CLI switch names.
+        let token_key = match service {
+            "cloudformation" => "NextToken",
+            "logs" | "codepipeline" | "codeartifact" => "nextToken",
+            "lambda" => "Marker",
+            "resourcegroupstaggingapi" => "PaginationToken",
+            _ => return None,
+        };
         arguments.extend([
-            optional("--starting-token", One(Opaque(4096))),
+            optional("--starting-token", One(ValueType::StartingToken(token_key))),
             optional("--max-items", One(Number(1, 1000))),
             optional("--no-paginate", Flag),
         ]);
@@ -585,6 +594,7 @@ fn validate_value(name: &str, value: &str, kind: ValueType) -> Result<(), String
                 && !value.contains('=')
         }
         ValueType::Opaque(max) => !value.trim().is_empty() && value.len() <= max,
+        ValueType::StartingToken(key) => valid_starting_token(value, key),
         ValueType::Expression(min, max) => (min..=max).contains(&value.len()),
         ValueType::Number(min, max) => {
             !value.is_empty()
@@ -605,6 +615,33 @@ fn validate_value(name: &str, value: &str, kind: ValueType) -> Result<(), String
         return Err(format!("invalid or unsupported value for {name}"));
     }
     Ok(())
+}
+
+/// Botocore merges decoded starting-token fields into request parameters.
+/// Accept only the reviewed string/null cursor and its optional local offset;
+/// legacy raw tokens, binary metadata and operation parameters are unsupported.
+fn valid_starting_token(value: &str, token_key: &str) -> bool {
+    if value.is_empty() || value.len() > 4096 {
+        return false;
+    }
+    let Ok(bytes) = aws_smithy_types::base64::decode(value) else {
+        return false;
+    };
+    if aws_smithy_types::base64::encode(&bytes) != value {
+        return false;
+    }
+    let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    fields.get(token_key).is_some_and(|token| {
+        token.is_null()
+            || token
+                .as_str()
+                .is_some_and(|s| !s.is_empty() && !s.chars().any(char::is_control))
+    }) && fields.iter().all(|(key, value)| {
+        key == token_key
+            || key == "boto_truncate_amount" && value.as_u64().is_some_and(|n| n <= i64::MAX as u64)
+    })
 }
 
 fn validate_list_value(name: &str, value: &str, kind: ValueType) -> Result<(), String> {
@@ -1337,11 +1374,144 @@ mod tests {
         );
     }
 
+    fn starting_token(value: Value) -> String {
+        aws_smithy_types::base64::encode(serde_json::to_vec(&value).unwrap())
+    }
+
+    #[test]
+    fn pagination_accepts_service_cursors_and_cli_truncation_offsets() {
+        for (command, key) in [
+            ("cloudformation list-stacks", "NextToken"),
+            (
+                "cloudformation describe-stack-events --stack-name demo",
+                "NextToken",
+            ),
+            ("logs describe-log-groups", "nextToken"),
+            ("logs filter-log-events --log-group-name demo", "nextToken"),
+            (
+                "logs describe-log-streams --log-group-name demo",
+                "nextToken",
+            ),
+            ("codepipeline list-pipelines", "nextToken"),
+            (
+                "codeartifact list-packages --domain demo --repository demo",
+                "nextToken",
+            ),
+            ("lambda list-functions", "Marker"),
+            ("resourcegroupstaggingapi get-resources", "PaginationToken"),
+        ] {
+            for cursor in [Value::Null, json!("synthetic-cursor==")] {
+                for offset in [None, Some(0), Some(20)] {
+                    let mut token = json!({key:cursor});
+                    if let Some(offset) = offset {
+                        token["boto_truncate_amount"] = json!(offset);
+                    }
+                    let token = starting_token(token);
+                    let parsed = parse_cli_command(&format!(
+                        "aws {command} --starting-token {token} --max-items 25"
+                    ))
+                    .unwrap();
+                    assert!(parsed
+                        .argv
+                        .windows(2)
+                        .any(|pair| pair[0] == "--starting-token" && pair[1] == token));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn pagination_cannot_inject_request_parameters_even_with_wildcard_policy() {
+        for (command, payload) in [
+            (
+                "logs filter-log-events --log-group-name demo",
+                json!({"nextToken":null,"unmask":true}),
+            ),
+            (
+                "logs describe-log-groups",
+                json!({"nextToken":null,"includeLinkedAccounts":true}),
+            ),
+            (
+                "logs describe-log-groups",
+                json!({"nextToken":null,"accountIdentifiers":["synthetic-account"]}),
+            ),
+            (
+                "cloudformation list-stacks",
+                json!({"NextToken":null,"StackStatusFilter":["DELETE_COMPLETE"]}),
+            ),
+            (
+                "codepipeline list-action-executions --pipeline-name demo",
+                json!({"nextToken":null,"filter":{"pipelineExecutionId":"synthetic-execution"}}),
+            ),
+            (
+                "logs filter-log-events --log-group-name demo",
+                json!({"nextToken":null,"logGroupName":null}),
+            ),
+            (
+                "logs describe-log-groups",
+                json!({"nextToken":null,"boto_encoded_keys":[]}),
+            ),
+        ] {
+            let dir = TestDir::new();
+            let process = FakeProcessRunner::with_response(Ok(ProcessOutput {
+                stdout: b"[]".to_vec(),
+                stderr: Vec::new(),
+                success: true,
+            }));
+            let policy = Policy::parse("statements:\n  - effect: Allow\n    action: ['*']\n")
+                .map_err(|error| error.message);
+            let mut ctx = fetch_context(&dir, process.clone(), policy);
+            ctx.inputs = json!({"command":format!("aws {command} --starting-token {}", starting_token(payload))});
+            let result = fetch(&ctx).await;
+            assert_eq!(result["ok"], false, "{command}: {result}");
+            assert_eq!(process.calls.load(Ordering::SeqCst), 0);
+            assert!(process.requests.lock().is_empty());
+        }
+    }
+
+    #[test]
+    fn pagination_rejects_malformed_tokens_and_wrong_cursor_shapes() {
+        let mut tokens = vec!["opaque".into(), "e30".into(), "{}".into(), "[1]".into()];
+        for payload in [
+            json!([]),
+            json!({}),
+            json!({"NextToken":"wrong-service"}),
+            json!({"nextToken":{}}),
+            json!({"nextToken":[]}),
+            json!({"nextToken":42}),
+            json!({"nextToken":""}),
+            json!({"nextToken":"line\nbreak"}),
+            json!({"nextToken":null,"boto_truncate_amount":-1}),
+            json!({"nextToken":null,"boto_truncate_amount":1.5}),
+            json!({"nextToken":null,"boto_truncate_amount":"1"}),
+            json!({"nextToken":null,"boto_truncate_amount":null}),
+            json!({"nextToken":null,"boto_truncate_amount":u64::MAX}),
+            json!({"nextToken":"x".repeat(4096)}),
+        ] {
+            tokens.push(starting_token(payload));
+        }
+        tokens.push(aws_smithy_types::base64::encode([0xff]));
+        for token in tokens {
+            assert!(parse_cli_command(&format!(
+                "aws logs describe-log-groups --starting-token '{token}'"
+            ))
+            .is_err());
+        }
+    }
+
     #[tokio::test]
     async fn every_reviewed_schema_reaches_fake_process_with_default_policy() {
+        let cfn_resume = format!(
+            "aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --max-items 20 --starting-token {}",
+            starting_token(json!({"NextToken":"synthetic-cursor"}))
+        );
+        let pipeline_resume = format!(
+            "aws codepipeline list-pipeline-executions --pipeline-name demo.pipeline --max-items 20 --starting-token {}",
+            starting_token(json!({"nextToken":null,"boto_truncate_amount":20}))
+        );
         let cases = [
             ("aws sts get-caller-identity --query Account", "sts", "GetCallerIdentity"),
-            ("aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --max-items 20 --starting-token opaque==", "cloudformation", "ListStacks"),
+            (cfn_resume.as_str(), "cloudformation", "ListStacks"),
             ("aws cloudformation describe-stack-resources --stack-name demo-stack --logical-resource-id DemoFunction", "cloudformation", "DescribeStackResources"),
             ("aws cloudformation describe-stack-events --stack-name demo-stack --no-paginate", "cloudformation", "DescribeStackEvents"),
             ("aws logs describe-log-groups --log-group-name-prefix /aws/lambda/ --log-group-class STANDARD --page-size 10 --max-items 20", "logs", "DescribeLogGroups"),
@@ -1350,7 +1520,7 @@ mod tests {
             ("aws logs get-log-events --log-group-name /aws/lambda/demo --log-stream-name demo-stream --limit 100 --start-from-head --next-token forward-fixture", "logs", "GetLogEvents"),
             ("aws logs describe-log-streams --log-group-name /aws/lambda/demo --order-by LastEventTime --descending --page-size 10", "logs", "DescribeLogStreams"),
             ("aws codepipeline list-pipelines --page-size 100 --max-items 20", "codepipeline", "ListPipelines"),
-            ("aws codepipeline list-pipeline-executions --pipeline-name demo.pipeline --starting-token opaque --max-items 20", "codepipeline", "ListPipelineExecutions"),
+            (pipeline_resume.as_str(), "codepipeline", "ListPipelineExecutions"),
             ("aws codepipeline list-action-executions --pipeline-name demo --no-paginate", "codepipeline", "ListActionExecutions"),
             ("aws codebuild batch-get-builds --ids demo:fixture-a demo:fixture-b", "codebuild", "BatchGetBuilds"),
             ("aws codeartifact list-packages --domain demo-domain --repository demo-repository --format pypi --package-prefix demo --publish ALLOW --upstream BLOCK --page-size 10", "codeartifact", "ListPackages"),

@@ -12,6 +12,7 @@ tag has been published for these changes.
 
 ### Added
 
+- Mandatory, version-pinned Gitleaks scanning of full Git history in CI.
 - Studio with four selectable appearances: Original, Precision, Paper and
   Night Shift. Paper is the default; Classic remains available.
 - Per-widget header treatments with a preview, a collapse/expand action that
@@ -29,6 +30,10 @@ tag has been published for these changes.
 
 ### Fixed
 
+- Reject hidden AWS request parameters in CLI pagination tokens while retaining
+  supported service cursors and CLI truncation offsets.
+- Create private app storage on macOS/Linux and repair permissions on existing
+  app files and preserved audit archives at startup without changing contents.
 - Use the selected Cloud Fold mark in Classic and keep the Studio return control
   reachable from the topbar, including fullscreen widgets and pending startup.
 - Allow connection details to close and reopen without reconnecting, preserving

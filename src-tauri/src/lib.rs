@@ -14,6 +14,7 @@ mod audit_writer;
 mod aws;
 mod commands;
 mod dashboard;
+mod file_privacy;
 mod paths;
 mod process;
 mod request;
@@ -49,6 +50,10 @@ pub fn run() {
             std::process::exit(1);
         }
     };
+    if file_privacy::secure_app_storage(&paths).is_err() {
+        eprintln!("Cloud Burrito could not secure its local files; startup was stopped.");
+        std::process::exit(1);
+    }
     tauri::Builder::default()
         // Only deliberate application diagnostics reach stdout/platform logs.
         // SDK/dependency transport logs are not a reviewed redacted surface.

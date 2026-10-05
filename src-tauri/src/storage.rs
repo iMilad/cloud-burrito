@@ -93,7 +93,7 @@ impl FileSystem for NativeFileSystem {
     }
 
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
-        fs::create_dir_all(path)
+        crate::file_privacy::ensure_directory(path)
     }
 
     fn create_new(&self, path: &Path) -> io::Result<Box<dyn WritableFile>> {

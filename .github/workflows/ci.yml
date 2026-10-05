@@ -16,6 +16,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned Gitleaks
+        shell: bash
+        env:
+          GOBIN: ${{ runner.temp }}/cloud-burrito-security-tools
+        run: |
+          source scripts/tool-versions.env
+          go install "github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION}"
+
+      - name: Scan repository history
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/cloud-burrito-security-tools/gitleaks" git . \
+            --config .gitleaks.toml --redact --no-banner --log-opts="--all"
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

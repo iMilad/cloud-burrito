@@ -29,29 +29,7 @@ pub(crate) fn log_path(paths: &AppPaths) -> PathBuf {
 /// Final-component protection only: AppPaths parents are trusted. These
 /// platform OpenOptions flags introduce no native dependency.
 pub(crate) fn no_follow_options() -> OpenOptions {
-    let mut options = OpenOptions::new();
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        const O_NOFOLLOW: i32 = 0x0000_0100;
-        options.custom_flags(O_NOFOLLOW);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")
-    ))]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        const O_NOFOLLOW: i32 = 0x0002_0000;
-        options.custom_flags(O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    options
+    crate::file_privacy::no_follow_options()
 }
 
 pub(crate) fn file_identity(metadata: &Metadata) -> u64 {
@@ -252,7 +230,7 @@ pub(crate) fn append_record(
     }
     let _guard = WRITE_LOCK.lock();
     let path = log_path(paths);
-    fs::create_dir_all(path.parent().ok_or(())?).map_err(|_| ())?;
+    crate::file_privacy::ensure_directory(path.parent().ok_or(())?).map_err(|_| ())?;
     let sizes = history_sizes(paths)?;
     if retention.load(Ordering::SeqCst) {
         if sizes.iter().any(|(_, size)| *size > RETENTION_FILE_BYTES) {
@@ -273,6 +251,7 @@ pub(crate) fn append_record(
         options.create_new(true);
     }
     let (mut file, opened) = checked_open(&path, inspected.as_ref(), &options)?;
+    crate::file_privacy::secure_file(&file).map_err(|_| ())?;
     if retention.load(Ordering::SeqCst)
         && opened.len().saturating_add(line.len() as u64) > RETENTION_FILE_BYTES
     {
@@ -410,6 +389,10 @@ pub(crate) fn preserve_history(paths: &AppPaths) -> Result<Value, ()> {
     if sizes.is_empty() {
         return Ok(json!({"ok":true,"preserved_files":0,"preserved_bytes":0}));
     }
+    crate::file_privacy::ensure_directory(paths.data_dir()).map_err(|_| ())?;
+    for (name, _) in &sizes {
+        crate::file_privacy::secure_existing_file(&paths.data_file(name)).map_err(|_| ())?;
+    }
     let epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -418,7 +401,7 @@ pub(crate) fn preserve_history(paths: &AppPaths) -> Result<Value, ()> {
     for _ in 0..16 {
         let count = NEXT_PRESERVATION.fetch_add(1, Ordering::Relaxed);
         let candidate = paths.data_file(&format!("audit-preserved-{epoch:x}-{count:x}"));
-        match fs::create_dir(&candidate) {
+        match crate::file_privacy::create_directory(&candidate) {
             Ok(()) => {
                 destination = Some(candidate);
                 break;

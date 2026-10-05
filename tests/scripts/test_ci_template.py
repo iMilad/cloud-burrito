@@ -19,6 +19,20 @@ def jobs_in(path):
 
 
 class ActiveReleaseContractTests(unittest.TestCase):
+    def test_secret_scan_cannot_skip_installation_history_or_failure(self):
+        source = jobs_in(ROOT / '.github/workflows/ci.yml')['secrets']
+        self.assertIn('fetch-depth: 0', source)
+        self.assertIn('persist-credentials: false', source)
+        self.assertIn('source scripts/tool-versions.env', source)
+        self.assertIn('go install "github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION}"', source)
+        self.assertIn('gitleaks" git .', source)
+        self.assertIn('--config .gitleaks.toml --redact --no-banner --log-opts="--all"', source)
+        self.assertLess(source.index('go install'), source.index('gitleaks" git .'))
+        self.assertNotRegex(source, r'(?m)^\s*(?:if|continue-on-error):')
+        self.assertNotIn('||', source)
+        self.assertRegex((ROOT / 'scripts/tool-versions.env').read_text(),
+                         r'(?m)^GITLEAKS_VERSION=\d+\.\d+\.\d+$')
+
     def test_active_gates_run_node_units_before_browser_tests(self):
         for filename, job in [('ci.yml', 'frontend'), ('release.yml', 'validate')]:
             with self.subTest(workflow=filename):
