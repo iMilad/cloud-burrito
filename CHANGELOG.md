@@ -30,6 +30,8 @@ tag has been published for these changes.
 
 ### Fixed
 
+- Patch locked HTTP/2 and TLS dependencies and remove the old transitive `rkyv`
+  dependency to resolve the three vulnerabilities found by the fresh RustSec audit.
 - Reject hidden AWS request parameters in CLI pagination tokens while retaining
   supported service cursors and CLI truncation offsets.
 - Create private app storage on macOS/Linux and repair permissions on existing
