@@ -455,6 +455,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn security_extreme_hours_are_clamped_to_the_seven_day_query_budget() {
+        // Security Cloud: csf_b4f1dfa21c0bace5bfb5b767.
+        for (hours, expected) in [
+            (i64::MIN, 1),
+            (0, 1),
+            (1, 1),
+            (168, 168),
+            (169, 168),
+            (i64::MAX, 168),
+        ] {
+            let dir = TestDir::new();
+            let script = ScriptedHttp::new(vec![ExpectedRequest::json(
+                "Logs_20140328.DescribeLogGroups",
+                json!({}),
+                json!({"logGroups": []}),
+            )]);
+            let result =
+                fetch(&script.context(&dir, "errors-by-stack", json!({"hours": hours}))).await;
+            script.assert_finished();
+            assert_eq!(result["hours"], expected, "unbounded input: {hours}");
+            assert_eq!(result["counts"]["queried"], 0);
+            assert_eq!(script.calls(), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn actual_discovery_page_limit_does_not_present_account_wide_totals() {
         let dir = TestDir::new();
         let script = ScriptedHttp::new(vec![

@@ -1389,6 +1389,97 @@ async fn cli_operation_argument_and_policy_denials_do_no_provider_or_process_wor
 }
 
 #[tokio::test]
+async fn security_credential_issuance_commands_are_rejected_before_any_aws_work() {
+    // Security Cloud: csf_d1fadcf62a863befa5814eb2.
+    for command in [
+        "aws sts assume-role --role-arn synthetic-role --role-session-name synthetic-session",
+        "aws sts assume-role-with-saml --role-arn synthetic-role --principal-arn synthetic-principal --saml-assertion synthetic-assertion",
+        "aws sts assume-role-with-web-identity --role-arn synthetic-role --role-session-name synthetic-session --web-identity-token synthetic-token",
+        "aws sts get-session-token",
+        "aws sts get-federation-token --name synthetic-session",
+        "aws sts get-role-credentials",
+        "aws sso get-role-credentials --role-name synthetic-role --account-id synthetic-account --access-token synthetic-token",
+    ] {
+        let fixture = Fixture::new();
+        aws::policy::write_text(
+            &fixture.state.runtime.paths,
+            "statements:\n  - effect: Allow\n    action: ['*']\n",
+        )
+        .unwrap();
+        let mut params = pinned_cli("demo-a", ACCOUNT_A);
+        params["inputs"]["command"] = json!(command);
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert_eq!(result["error_type"], "UnsupportedCommand", "{command}");
+        fixture.aws.assert_no_resolution();
+        assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+        fixture.no_process();
+    }
+}
+
+#[tokio::test]
+async fn security_get_object_outfiles_are_rejected_without_touching_local_files() {
+    // Security Cloud: csf_1d51994face706c2a261d360.
+    let outside = TestDir::new();
+    let existing = outside.path().join("synthetic-existing-output");
+    let missing = outside.path().join("synthetic-new-output");
+    let sentinel = b"SYNTHETIC_CONTENT_MUST_SURVIVE";
+    std::fs::write(&existing, sentinel).unwrap();
+    for destination in [
+        existing.to_string_lossy().into_owned(),
+        missing.to_string_lossy().into_owned(),
+        "../synthetic-traversal-output".into(),
+    ] {
+        let fixture = Fixture::new();
+        aws::policy::write_text(
+            &fixture.state.runtime.paths,
+            "statements:\n  - effect: Allow\n    action: ['*']\n",
+        )
+        .unwrap();
+        let mut params = pinned_cli("demo-a", ACCOUNT_A);
+        params["inputs"]["command"] = json!(format!(
+            "aws s3api get-object --bucket synthetic-bucket --key synthetic-key '{destination}'"
+        ));
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert_eq!(result["error_type"], "UnsupportedCommand");
+        fixture.aws.assert_no_resolution();
+        assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+        fixture.no_process();
+        assert_eq!(std::fs::read(&existing).unwrap(), sentinel);
+        assert!(!missing.exists());
+    }
+}
+
+#[tokio::test]
+async fn security_batch_mutators_are_rejected_even_under_wildcard_policy() {
+    // Security Cloud: csf_e0611bc8bd5e151a5aa5e16a.
+    for (service, operation, command) in [
+        ("ecr", "BatchDeleteImage", "aws ecr batch-delete-image --repository-name synthetic-repository --image-ids imageTag=synthetic-tag"),
+        ("codebuild", "BatchDeleteBuilds", "aws codebuild batch-delete-builds --ids synthetic-build"),
+        ("glue", "BatchDeleteTable", "aws glue batch-delete-table --database-name synthetic-database --tables-to-delete synthetic-table"),
+        ("glue", "BatchStopJobRun", "aws glue batch-stop-job-run --job-name synthetic-job --job-run-ids synthetic-run"),
+    ] {
+        let fixture = Fixture::new();
+        let policy = Ok(aws::policy::write_text(
+            &fixture.state.runtime.paths,
+            "statements:\n  - effect: Allow\n    action: ['*']\n",
+        )
+        .unwrap());
+        assert!(aws::policy::gate(&policy, service, operation).is_err());
+        assert!(aws::policy::gate_cli(&policy, service, operation).is_err());
+        let mut params = pinned_cli("demo-a", ACCOUNT_A);
+        params["inputs"]["command"] = json!(command);
+        let result = widget_fetch_impl(&fixture.state, params).await.unwrap();
+        assert_eq!(result["error_type"], "UnsupportedCommand", "{command}");
+        fixture.aws.assert_no_resolution();
+        assert_eq!(fixture.aws.snapshot_calls.load(Ordering::SeqCst), 0);
+        fixture.no_process();
+        assert!(aws::policy::gate_cli(&policy, "codebuild", "BatchGetBuilds").is_ok());
+        assert!(widgets::parse_cli_command("aws codebuild batch-get-builds --ids synthetic-build")
+            .is_ok());
+    }
+}
+
+#[tokio::test]
 async fn cli_cannot_use_absent_or_invalid_context_as_an_ambient_credentials_fallback() {
     let fixture = Fixture::new();
     let missing = widget_fetch_impl(&fixture.state, cli_params())
