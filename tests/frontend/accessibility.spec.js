@@ -357,7 +357,7 @@ test("selection, refresh and local filters preserve focus without repeating long
 });
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme} theme keeps desktop actions readable at compact sizes, zoom and doubled text`, async ({ page }) => {
+  test(`${theme} theme keeps desktop actions readable at compact sizes, zoom and doubled text`, async ({ page }, testInfo) => {
     test.setTimeout(60_000);
     await boot(page, { theme, compact: true });
     const sizes = [
@@ -405,13 +405,13 @@ for (const theme of ["light", "dark"]) {
       await expect.poll(() => page.evaluate(() => window.__accessibility.calls.filter(call => call.command === "settings_set").length)).toBe(before + 1);
       await expect(page.locator("#settings-status")).toContainText("Saved");
       await noOuterOverflow(page);
-      if (size.zoom === 2) await page.screenshot({ path: `/private/tmp/cloud-burrito-p207-${theme}-zoom-settings.png` });
+      if (size.zoom === 2) await page.screenshot({ path: testInfo.outputPath(`${theme}-zoom-settings.png`) });
       await page.keyboard.press("Escape");
       await page.locator("#connection-retry").focus();
       await insideViewport(page.locator("#connection-retry"));
       await page.keyboard.press("Enter");
       await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
-      if (size.width === 1024 && size.zoom === 1) await page.screenshot({ path: `/private/tmp/cloud-burrito-p207-${theme}-compact.png` });
+      if (size.width === 1024 && size.zoom === 1) await page.screenshot({ path: testInfo.outputPath(`${theme}-compact.png`) });
     }
 
     // Contrast is checked against actual computed foreground/opaque backgrounds,
