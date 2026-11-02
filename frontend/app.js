@@ -918,7 +918,7 @@
         showQueryRecovery(widget);
         try {
           if (form) await runLogsInsightsQuery(form, $(".logs-insights-rows", widget), $(".logs-insights-error", widget), { acknowledgeUnknown: true, acknowledgeQuery: acknowledgement });
-          else await renderErrorsFromSidecar(widget, { acknowledgeUnknown: true, acknowledgeQuery: acknowledgement });
+          else await renderErrorsFromBackend(widget, { acknowledgeUnknown: true, acknowledgeQuery: acknowledgement });
         } finally {
           widget._queryRecoveryBusy = false;
           if (widget.isConnected) showQueryRecovery(widget);
@@ -4531,12 +4531,12 @@
   // ===== Lambda logs =====
   function renderLogTail(target) {
     if (isTauri) {
-      return renderLogTailFromSidecar(target);
+      return renderLogTailFromBackend(target);
     }
     return renderLogTailMock(target);
   }
 
-  function renderLogTailFromSidecar(target) {
+  function renderLogTailFromBackend(target) {
     return withWidgets("log-tail", target, (widget) => {
       const body = $(".log-tail-body", widget);
       if (!body) return;
@@ -5166,11 +5166,11 @@
 
   // ===== CFN stacks =====
   async function renderCfnStacks(target) {
-    if (isTauri) return renderCfnStacksFromSidecar(target);
+    if (isTauri) return renderCfnStacksFromBackend(target);
     return renderCfnStacksMock(target);
   }
 
-  async function renderCfnStacksFromSidecar(target) {
+  async function renderCfnStacksFromBackend(target) {
     return withWidgets("cfn-stacks", target, async (widget) => {
       const body = $(".cfn-stacks-body", widget);
       if (!body) return;
@@ -5331,11 +5331,11 @@
 
   // ===== Errors by stack (bars) =====
   async function renderErrors(target) {
-    if (isTauri) return renderErrorsFromSidecar(target);
+    if (isTauri) return renderErrorsFromBackend(target);
     return renderErrorsMock(target);
   }
 
-  async function renderErrorsFromSidecar(target, options = {}) {
+  async function renderErrorsFromBackend(target, options = {}) {
     return withWidgets("errors-by-stack", target, async (widget) => {
       const body = $(".errors-body", widget);
       if (!body) return;

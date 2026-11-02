@@ -1,7 +1,6 @@
 # Build artifacts
 target/
 src-tauri/target/
-src-tauri/binaries/
 node_modules/
 dist/
 build/
@@ -11,18 +10,11 @@ test-results/
 htmlcov/
 .coverage
 .nyc_output/
-sidecar/.venv/
-sidecar/dist/
-sidecar/build/
-sidecar/*.egg-info/
 .venv/
 venv/
 __pycache__/
 *.pyc
 *.profraw
-
-# uv (not part of our pip install -e flow)
-sidecar/uv.lock
 
 # Tooling caches
 .pytest_cache/

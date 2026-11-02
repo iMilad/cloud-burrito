@@ -398,7 +398,7 @@ src-tauri/   Tauri 2 (Rust) app — all AWS calls happen in-process
   src/widgets/  The compiled-in widgets
 scripts/     Development, release-build, version, privacy, and security checks
 tests/       Browser-mode Playwright tests
-info/        Design spec, architecture notes, status page
+info/        Architecture notes and status page
 docs/        Project docs / specs / plans
 ```
 
