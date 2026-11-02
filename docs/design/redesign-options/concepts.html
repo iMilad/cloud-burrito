@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cloud Burrito concepts: watchlist, command line, card board</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --bg: #1d2733; --panel: #243140; --raise: #2c3a4b; --line: #33445a; --soft: rgba(51,68,90,.6);
+    --ink: #e6edf3; --muted: #8ea0b4; --dim: #66788d;
+    --accent: #3cc6bd; --accent-bg: rgba(60,198,189,.14);
+    --ok: #5bd18b; --fail: #ff6b6b; --run: #6cb6ff; --warn: #f2b84b;
+    --mono: 13px/1.6 Menlo, monospace;
+  }
+  body { width: 1480px; height: 920px; overflow: hidden; background: var(--bg); color: var(--ink); font: 14px/1.45 "Avenir Next", system-ui, sans-serif; }
+  .screen { display: none; height: 920px; flex-direction: column; }
+  .top { flex: none; height: 48px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+  .logo { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; margin-right: 10px; }
+  .logo b { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); color: var(--bg); display: grid; place-items: center; font-size: 11px; }
+  .filter { width: 340px; height: 30px; border: 1px solid var(--line); border-radius: 7px; display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--muted); font-size: 13px; background: var(--panel); }
+  .filter kbd { margin-left: auto; }
+  .meta { font-size: 12.5px; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .grow { flex: 1; }
+  .sso { font-size: 12.5px; color: var(--muted); }
+  .sso b { color: var(--ok); }
+  kbd { font: 600 11.5px Menlo, monospace; color: var(--ink); background: var(--raise); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; min-width: 20px; text-align: center; display: inline-block; line-height: 18px; }
+  .keys { flex: none; height: 38px; display: flex; align-items: center; gap: 18px; padding: 0 18px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12.5px; color: var(--muted); }
+  .keys span { display: flex; align-items: center; gap: 6px; }
+  .acct { font: 12px Menlo, monospace; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 6px; white-space: nowrap; }
+  .ok { color: var(--ok); } .fail { color: var(--fail); } .run { color: var(--run); } .warn { color: var(--warn); }
+  .mono { font: var(--mono); }
+  .kind { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font: 600 11px Menlo, monospace; color: var(--bg); flex: none; }
+  .k-pipe { background: #9d8cff; } .k-pkg { background: #f2b84b; } .k-log { background: #6cb6ff; } .k-stack { background: #5bd18b; } .k-q { background: #ff9ec4; }
+
+  /* A: watchlist */
+  .a-body { flex: 1; display: grid; grid-template-columns: 600px 1fr; min-height: 0; }
+  .list { border-right: 1px solid var(--line); overflow: hidden; padding: 6px 0; }
+  .grp { display: flex; align-items: baseline; gap: 8px; padding: 10px 18px 4px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+  .grp span { font-weight: 400; color: var(--dim); }
+  .item { display: grid; grid-template-columns: 22px 1fr auto 168px; gap: 10px; align-items: center; height: 38px; padding: 0 18px; }
+  .item .nm { font: 13.5px Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .state { font-size: 12.5px; text-align: right; white-space: nowrap; }
+  .item .state small { color: var(--dim); margin-left: 6px; font-size: 12px; }
+  .item.sel { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+  .insp { display: flex; flex-direction: column; min-height: 0; }
+  .crumb { flex: none; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 20px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .crumb b { color: var(--ink); font-weight: 600; }
+  .crumb .sep { color: var(--dim); }
+  .crumb .acct { margin-left: auto; }
+  .summary { flex: none; padding: 14px 20px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 6px 20px; }
+  .summary h2 { font-size: 18px; font-weight: 600; }
+  .stages { display: flex; gap: 6px; margin-top: 8px; }
+  .stg { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; background: var(--raise); font-size: 12.5px; }
+  .stg i { width: 7px; height: 7px; border-radius: 50%; }
+  .stg.f { box-shadow: inset 0 0 0 1px var(--fail); }
+  .actions { flex: none; border-bottom: 1px solid var(--line); }
+  .act { display: grid; grid-template-columns: 90px 1fr auto 70px; gap: 12px; align-items: center; height: 34px; padding: 0 20px; font-size: 13px; }
+  .act .s { color: var(--dim); font-size: 12px; }
+  .act.sel { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+  .logh { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 20px 6px; font-size: 12.5px; color: var(--muted); }
+  .log { padding: 0 20px; font: 12.5px/1.75 Menlo, monospace; overflow: hidden; }
+  .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log .ts { color: var(--dim); margin-right: 12px; }
+  .log .hit { background: rgba(255,107,107,.14); box-shadow: inset 3px 0 0 var(--fail); margin: 0 -20px; padding: 0 20px 0 17px; }
+
+  /* B: command line */
+  .b-body { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+  .saved { border-right: 1px solid var(--line); padding: 10px 0; overflow: hidden; }
+  .saved h3 { font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 6px 16px 8px; }
+  .sv { display: grid; grid-template-columns: 26px 1fr; gap: 8px; align-items: center; padding: 6px 16px; }
+  .sv .cmd { font: 12.5px Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv small { grid-column: 2; font-size: 11.5px; color: var(--dim); margin-top: -2px; }
+  .term { display: flex; flex-direction: column; min-height: 0; }
+  .scroll { flex: 1; overflow: hidden; padding: 14px 22px 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; }
+  .blk .prompt { display: flex; align-items: center; gap: 10px; font: 13.5px Menlo, monospace; }
+  .blk .prompt b { color: var(--accent); }
+  .blk .prompt .t { margin-left: auto; font: 12px "Avenir Next"; color: var(--dim); }
+  .res { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+  .res table { width: 100%; border-collapse: collapse; font: 12.5px Menlo, monospace; }
+  .res td { padding: 6px 12px; border-bottom: 1px solid var(--soft); white-space: nowrap; }
+  .res tr:last-child td { border-bottom: 0; }
+  .res .note { padding: 6px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--soft); display: flex; gap: 14px; }
+  .big { font: 600 26px Menlo, monospace; padding: 10px 12px 2px; }
+  .input { flex: none; margin: 14px 22px 14px; border: 1px solid var(--accent); border-radius: 9px; background: var(--panel); position: relative; }
+  .input .line { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; font: 14px Menlo, monospace; }
+  .input .line b { color: var(--accent); }
+  .caret { width: 8px; height: 18px; background: var(--accent); display: inline-block; }
+  .suggest { flex: none; margin: 10px 22px 0; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; padding: 6px; }
+  .sg { display: grid; grid-template-columns: 22px 1fr auto auto; gap: 10px; align-items: center; padding: 6px 10px; border-radius: 6px; font: 13px Menlo, monospace; }
+  .sg.sel { background: var(--accent-bg); }
+  .sg small { font: 12px "Avenir Next"; color: var(--muted); }
+
+  /* C: card board */
+  .c-body { flex: 1; padding: 16px 18px; display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: 238px; gap: 14px; min-height: 0; overflow: hidden; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
+  .card.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg); }
+  .ch { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+  .ch .nm { font: 600 13.5px Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch .acct { margin-left: auto; }
+  .cb { padding: 4px 12px; flex: 1; font-size: 13px; overflow: hidden; }
+  .cf { padding: 7px 12px; border-top: 1px solid var(--soft); font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; }
+  .vbig { font: 600 30px Menlo, monospace; margin: 8px 0 2px; }
+  .runs div { display: flex; justify-content: space-between; font: 12.5px Menlo, monospace; padding: 3px 0; }
+  .clog { font: 11.5px/1.6 Menlo, monospace; }
+  .clog div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar2 { display: flex; gap: 4px; margin: 10px 0 8px; }
+  .bar2 span { flex: 1; height: 8px; border-radius: 3px; background: var(--ok); }
+  .addcard { border: 1.5px dashed var(--line); border-radius: 10px; display: grid; place-items: center; color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+
+<!-- A: watchlist + inspector -->
+<div class="screen" data-s="watchlist">
+  <div class="top">
+    <div class="logo"><b>cb</b>cloud burrito</div>
+    <div class="filter"><kbd>/</kbd> Filter your things <kbd>⌘K</kbd></div>
+    <span class="meta"><b>11</b> things in 5 accounts, loaded <b>14:19</b></span>
+    <div class="grow"></div>
+    <span class="sso">SSO session <b>7h 24m</b></span>
+    <kbd>,</kbd><span class="meta">Settings</span>
+  </div>
+  <div class="a-body">
+    <div class="list">
+      <div class="grp">Pipelines <span>4</span></div>
+      <div class="item sel"><span class="kind k-pipe">P</span><span class="nm">payments-api</span><span class="acct">prod-payments</span><span class="state fail">Failed at Deploy<small>2m</small></span></div>
+      <div class="item"><span class="kind k-pipe">P</span><span class="nm">web-frontend</span><span class="acct">prod-core</span><span class="state run">Deploying<small>3m</small></span></div>
+      <div class="item"><span class="kind k-pipe">P</span><span class="nm">ledger-worker</span><span class="acct">prod-core</span><span class="state ok">Succeeded<small>32m</small></span></div>
+      <div class="item"><span class="kind k-pipe">P</span><span class="nm">auth-service</span><span class="acct">staging</span><span class="state ok">Succeeded<small>1h</small></span></div>
+      <div class="grp">Packages <span>2</span></div>
+      <div class="item"><span class="kind k-pkg">A</span><span class="nm">acme-core</span><span class="acct">shared-tools</span><span class="state">4.12.0<small>today</small></span></div>
+      <div class="item"><span class="kind k-pkg">A</span><span class="nm">acme-ledger-client</span><span class="acct">shared-tools</span><span class="state">2.3.1<small>yest.</small></span></div>
+      <div class="grp">Logs <span>2</span></div>
+      <div class="item"><span class="kind k-log">L</span><span class="nm">/aws/lambda/payments-handler</span><span class="acct">prod-payments</span><span class="state">last event 14:37</span></div>
+      <div class="item"><span class="kind k-log">L</span><span class="nm">/aws/lambda/ledger-worker</span><span class="acct">prod-core</span><span class="state">last event 14:18</span></div>
+      <div class="grp">Stacks <span>2</span></div>
+      <div class="item"><span class="kind k-stack">S</span><span class="nm">payment-service-prod</span><span class="acct">prod-payments</span><span class="state ok">Update complete</span></div>
+      <div class="item"><span class="kind k-stack">S</span><span class="nm">ledger-db-stg</span><span class="acct">staging</span><span class="state warn">Rollback complete</span></div>
+      <div class="grp">Queries <span>1</span></div>
+      <div class="item"><span class="kind k-q">Q</span><span class="nm">errors in the last hour</span><span class="acct">prod-core</span><span class="state">not run yet</span></div>
+    </div>
+    <div class="insp">
+      <div class="crumb"><b>payments-api</b><span class="sep">›</span>run 0042<span class="sep">›</span>Integration tests<span class="sep">›</span><b>Build log</b><span class="acct">prod-payments, eu-west-1</span></div>
+      <div class="summary">
+        <div><h2>Run exec-9f2a8c1b-0042 failed</h2><div class="meta">main@a1f3e9c by alice, started 14:02, took 6m 10s</div>
+          <div class="stages"><span class="stg"><i style="background:var(--ok)"></i>Source</span><span class="stg"><i style="background:var(--ok)"></i>Build</span><span class="stg f"><i style="background:var(--fail)"></i>Deploy</span></div></div>
+        <div class="meta" style="text-align:right">Previous run<br><span class="ok">Succeeded</span> 1h ago</div>
+      </div>
+      <div class="actions">
+        <div class="act"><span class="s">Deploy</span><span>Deploy to prod</span><span class="ok">Succeeded</span><span class="s">1m 58s</span></div>
+        <div class="act sel"><span class="s">Deploy</span><span>Integration tests</span><span class="fail">Failed</span><span class="s">26s</span></div>
+      </div>
+      <div class="logh">CodeBuild log, 14 events<div class="grow"></div><kbd>n</kbd> next error</div>
+      <div class="log">
+        <div><span class="ts">14:07:31</span>[Container] Entering phase BUILD</div>
+        <div><span class="ts">14:07:31</span>Running command pytest tests/integration -q</div>
+        <div><span class="ts">14:07:44</span>tests/integration/test_charge.py ..F</div>
+        <div class="hit fail"><span class="ts">14:07:45</span>FAILED test_charge_timeout - ProviderTimeout: provider did not answer in 3000ms</div>
+        <div><span class="ts">14:07:45</span>1 failed, 37 passed in 13.82s</div>
+        <div class="fail"><span class="ts">14:07:46</span>[Container] Command did not exit successfully: exit status 1</div>
+        <div class="fail"><span class="ts">14:07:46</span>[Container] Phase complete: BUILD State: FAILED</div>
+        <div><span class="ts">14:07:46</span>[Container] Entering phase POST_BUILD</div>
+        <div><span class="ts">14:07:47</span>Uploading test reports</div>
+        <div><span class="ts">14:07:48</span>[Container] Phase complete: POST_BUILD State: SUCCEEDED</div>
+      </div>
+    </div>
+  </div>
+  <div class="keys">
+    <span><kbd>j</kbd><kbd>k</kbd> Move</span><span><kbd>↵</kbd> Open</span><span><kbd>esc</kbd> Back</span><span><kbd>/</kbd> Filter</span>
+    <span><kbd>r</kbd> Refresh</span><span><kbd>y</kbd> Copy</span><span><kbd>o</kbd> Open in AWS console</span><span><kbd>a</kbd> Add a thing</span><span><kbd>?</kbd> All keys</span>
+  </div>
+</div>
+
+<!-- B: command line -->
+<div class="screen" data-s="command">
+  <div class="top">
+    <div class="logo"><b>cb</b>cloud burrito</div>
+    <span class="meta">Session started 14:01, 4 commands</span>
+    <div class="grow"></div>
+    <span class="sso">SSO session <b>7h 24m</b></span>
+    <kbd>,</kbd><span class="meta">Settings</span>
+  </div>
+  <div class="b-body">
+    <div class="saved">
+      <h3>Saved, press the number</h3>
+      <div class="sv"><kbd>1</kbd><span class="cmd">pipe payments-api</span><small>prod-payments</small></div>
+      <div class="sv"><kbd>2</kbd><span class="cmd">pipe web-frontend</span><small>prod-core</small></div>
+      <div class="sv"><kbd>3</kbd><span class="cmd">pipe ledger-worker</span><small>prod-core</small></div>
+      <div class="sv"><kbd>4</kbd><span class="cmd">pkg acme-core</span><small>shared-tools, pypi</small></div>
+      <div class="sv"><kbd>5</kbd><span class="cmd">pkg acme-ledger-client</span><small>shared-tools, pypi</small></div>
+      <div class="sv"><kbd>6</kbd><span class="cmd">logs payments-handler</span><small>prod-payments</small></div>
+      <div class="sv"><kbd>7</kbd><span class="cmd">stack ledger-db-stg</span><small>staging</small></div>
+      <div class="sv"><kbd>8</kbd><span class="cmd">insights "errors last hour"</span><small>prod-core</small></div>
+      <div class="sv"><kbd>9</kbd><span class="cmd">aws cloudformation list-stacks</span><small>staging</small></div>
+    </div>
+    <div class="term">
+      <div class="scroll">
+        <div class="blk">
+          <div class="prompt"><b>›</b>aws cloudformation list-stacks --stack-status-filter UPDATE_ROLLBACK_COMPLETE <span class="acct">staging</span><span class="t">14:03</span></div>
+          <div class="res"><table>
+            <tr><td style="color:var(--muted)">StackName</td><td style="color:var(--muted)">StackStatus</td><td style="color:var(--muted)">LastUpdatedTime</td></tr>
+            <tr><td>ledger-db-stg</td><td class="warn">UPDATE_ROLLBACK_COMPLETE</td><td>2026-11-02T12:05:11Z</td></tr>
+            <tr><td>search-indexer-stg</td><td class="warn">UPDATE_ROLLBACK_COMPLETE</td><td>2026-10-30T09:41:52Z</td></tr>
+          </table><div class="note"><span>CLI table, read-only command</span><span><kbd>s</kbd> save as 9</span></div></div>
+        </div>
+        <div class="blk">
+          <div class="prompt"><b>›</b>pipe payments-api <span class="acct">prod-payments</span><span class="t">14:19</span></div>
+          <div class="res"><table>
+            <tr><td class="fail">✕ Failed</td><td>exec-9f2a8c1b-0042</td><td>main@a1f3e9c alice</td><td style="color:var(--muted)">Failed at Deploy, Integration tests</td><td style="color:var(--muted)">2m ago</td></tr>
+            <tr><td class="ok">✓ Succeeded</td><td>exec-9f2a8c1b-0041</td><td>main@7c2d8b1 alice</td><td></td><td style="color:var(--muted)">1h ago</td></tr>
+            <tr><td class="ok">✓ Succeeded</td><td>exec-9f2a8c1b-0040</td><td>main@b9e4c0f bob</td><td></td><td style="color:var(--muted)">3h ago</td></tr>
+          </table><div class="note"><span><kbd>↵</kbd> open the failed run</span><span><kbd>s</kbd> save as 1</span></div></div>
+        </div>
+        <div class="blk">
+          <div class="prompt"><b>›</b>log 0042 integration-tests <span class="acct">prod-payments</span><span class="t">14:20</span></div>
+          <div class="res"><div class="log" style="padding:8px 12px">
+            <div><span class="ts">14:07:44</span>tests/integration/test_charge.py ..F</div>
+            <div class="fail"><span class="ts">14:07:45</span>FAILED test_charge_timeout - ProviderTimeout: provider did not answer in 3000ms</div>
+            <div><span class="ts">14:07:45</span>1 failed, 37 passed in 13.82s</div>
+            <div class="fail"><span class="ts">14:07:46</span>[Container] Phase complete: BUILD State: FAILED</div>
+          </div></div>
+        </div>
+        <div class="blk">
+          <div class="prompt"><b>›</b>pkg acme-core <span class="acct">shared-tools</span><span class="t">14:22</span></div>
+          <div class="res"><div class="big">4.12.0</div><div class="note" style="border-top:0"><span>pypi, published today 11:02</span><span class="ok">Copied to clipboard</span><span><kbd>h</kbd> history</span></div></div>
+        </div>
+      </div>
+      <div class="suggest">
+          <div class="sg sel"><span class="kind k-stack">S</span><span>stack ledger-db-stg</span><span class="acct">staging</span><small>saved as 7</small></div>
+          <div class="sg"><span class="kind k-stack">S</span><span>stack ledger-db-prod</span><span class="acct">prod-core</span><small></small></div>
+          <div class="sg"><span class="kind k-log">L</span><span>logs ledger-worker</span><span class="acct">prod-core</span><small></small></div>
+      </div>
+      <div class="input">
+        <div class="line"><b>›</b>stack ledger<span class="caret"></span><div class="grow"></div><span class="meta"><kbd>tab</kbd> complete <kbd>↵</kbd> run <kbd>@</kbd> pick account</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- C: card board -->
+<div class="screen" data-s="board">
+  <div class="top">
+    <div class="logo"><b>cb</b>cloud burrito</div>
+    <div class="filter"><kbd>/</kbd> Filter your things <kbd>⌘K</kbd></div>
+    <span class="meta"><b>11</b> things in 5 accounts, loaded <b>14:19</b></span>
+    <div class="grow"></div>
+    <span class="sso">SSO session <b>7h 24m</b></span>
+    <kbd>,</kbd><span class="meta">Settings</span>
+  </div>
+  <div class="c-body">
+    <div class="card sel"><div class="ch"><span class="kind k-pipe">P</span><span class="nm">payments-api</span><span class="acct">prod-payments</span></div>
+      <div class="cb"><div class="bar2"><span></span><span></span><span style="background:var(--fail)"></span></div><div class="fail" style="font-weight:600">Failed at Deploy, Integration tests</div>
+        <div class="runs" style="margin-top:8px"><div><span>0042</span><span class="fail">failed</span><span style="color:var(--dim)">2m</span></div><div><span>0041</span><span class="ok">passed</span><span style="color:var(--dim)">1h</span></div><div><span>0040</span><span class="ok">passed</span><span style="color:var(--dim)">3h</span></div></div></div>
+      <div class="cf"><span>Loaded 14:19</span><span><kbd>↵</kbd> open</span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-pipe">P</span><span class="nm">web-frontend</span><span class="acct">prod-core</span></div>
+      <div class="cb"><div class="bar2"><span></span><span></span><span style="background:var(--run)"></span></div><div class="run" style="font-weight:600">Deploying, 3m so far</div>
+        <div class="runs" style="margin-top:8px"><div><span>0187</span><span class="run">running</span><span style="color:var(--dim)">3m</span></div><div><span>0186</span><span class="ok">passed</span><span style="color:var(--dim)">2h</span></div><div><span>0185</span><span class="ok">passed</span><span style="color:var(--dim)">5h</span></div></div></div>
+      <div class="cf"><span>Loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-pkg">A</span><span class="nm">acme-core</span><span class="acct">shared-tools</span></div>
+      <div class="cb"><div class="vbig">4.12.0</div><div style="color:var(--muted)">pypi, published today 11:02</div><div style="color:var(--dim);margin-top:10px;font:12px Menlo,monospace">4.11.3 Oct 30<br>4.11.2 Oct 21</div></div>
+      <div class="cf"><span>Loaded 14:19</span><span><kbd>y</kbd> copy</span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-pkg">A</span><span class="nm">acme-ledger-client</span><span class="acct">shared-tools</span></div>
+      <div class="cb"><div class="vbig">2.3.1</div><div style="color:var(--muted)">pypi, published yesterday 16:40</div><div style="color:var(--dim);margin-top:10px;font:12px Menlo,monospace">2.3.0 Oct 25<br>2.2.9 Oct 12</div></div>
+      <div class="cf"><span>Loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-log">L</span><span class="nm">payments-handler</span><span class="acct">prod-payments</span></div>
+      <div class="cb clog"><div>14:37:43 calling provider.charge(ord-8821)</div><div class="warn">14:37:43 provider.charge took 1840ms</div><div>14:37:43 writing payment record</div><div class="fail">14:37:43 ProviderTimeout after 3000ms</div><div class="warn">14:37:43 retrying request, attempt 2 of 3</div></div>
+      <div class="cf"><span>Latest stream, loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-log">L</span><span class="nm">ledger-worker</span><span class="acct">prod-core</span></div>
+      <div class="cb clog"><div>14:18:02 START RequestId 7f3c…</div><div class="fail">14:18:03 LedgerWriteTimeout 3000 ms</div><div>14:18:03 retry batch 88213 in 30 s</div><div>14:18:34 END Duration 3112 ms</div></div>
+      <div class="cf"><span>Latest stream, loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-stack">S</span><span class="nm">payment-service-prod</span><span class="acct">prod-payments</span></div>
+      <div class="cb"><div class="ok" style="font-weight:600;margin-top:6px">Update complete</div><div style="color:var(--muted)">13:40 today, 24 resources</div><div style="color:var(--dim);margin-top:10px;font:12px Menlo,monospace">13:40 UPDATE_COMPLETE<br>13:36 UPDATE_IN_PROGRESS</div></div>
+      <div class="cf"><span>Loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-stack">S</span><span class="nm">ledger-db-stg</span><span class="acct">staging</span></div>
+      <div class="cb"><div class="warn" style="font-weight:600;margin-top:6px">Update rollback complete</div><div style="color:var(--muted)">12:05 today, 9 resources</div><div style="color:var(--dim);margin-top:10px;font:12px Menlo,monospace">12:05 UPDATE_ROLLBACK_COMPLETE<br>12:01 UPDATE_FAILED DBCluster</div></div>
+      <div class="cf"><span>Loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-pipe">P</span><span class="nm">ledger-worker</span><span class="acct">prod-core</span></div>
+      <div class="cb"><div class="bar2"><span></span><span></span><span></span></div><div class="ok" style="font-weight:600">Succeeded, 8m 41s</div><div class="runs" style="margin-top:8px"><div><span>0311</span><span class="ok">passed</span><span style="color:var(--dim)">32m</span></div></div></div>
+      <div class="cf"><span>Loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-pipe">P</span><span class="nm">auth-service</span><span class="acct">staging</span></div>
+      <div class="cb"><div class="bar2"><span></span><span></span><span></span></div><div class="ok" style="font-weight:600">Succeeded, 2m 15s</div><div class="runs" style="margin-top:8px"><div><span>0098</span><span class="ok">passed</span><span style="color:var(--dim)">1h</span></div></div></div>
+      <div class="cf"><span>Loaded 14:19</span><span></span></div></div>
+    <div class="card"><div class="ch"><span class="kind k-q">Q</span><span class="nm">errors in the last hour</span><span class="acct">prod-core</span></div>
+      <div class="cb"><div style="color:var(--muted);margin-top:8px">Logs Insights query. It runs only when you ask, because it can cost money.</div></div>
+      <div class="cf"><span>Not run yet</span><span><kbd>r</kbd> run</span></div></div>
+    <div class="addcard"><span><kbd>a</kbd> Add a thing</span></div>
+  </div>
+  <div class="keys">
+    <span><kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> Move</span><span><kbd>↵</kbd> Open full view</span><span><kbd>/</kbd> Filter</span>
+    <span><kbd>r</kbd> Refresh</span><span><kbd>y</kbd> Copy</span><span><kbd>m</kbd> Move card</span><span><kbd>a</kbd> Add a thing</span><span><kbd>?</kbd> All keys</span>
+  </div>
+</div>
+
+<script>
+  const s = location.hash.slice(1) || "watchlist";
+  document.querySelector(`[data-s="${s}"]`).style.display = "flex";
+</script>
+</body>
+</html>
