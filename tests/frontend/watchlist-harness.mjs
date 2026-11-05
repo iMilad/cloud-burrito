@@ -61,6 +61,13 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
           { stack: `${i.name_prefix}two`, status: "CREATE_COMPLETE", resources: 5, last_updated: "2026-11-01T10:00:00Z" }] }),
       "resource-lookup": i => ({ render: "reverse_lookup", query: i.query, scanned: 2,
         matches: [{ arn: `arn:aws:lambda:eu-west-1:acct-a-fixture:function:${i.query}`, type: "lambda:function" }] }),
+      "logs-insights": i => i.acknowledge_unknown || !window.__watchlistHarness.unknownQuery
+        ? { render: "table", columns: ["@message"], rows: [{ "@message": "ERROR synthetic" }] }
+        : { render: "table", columns: ["@message"], rows: [], ok: false, error_type: "QueryIncomplete",
+          error: "Synthetic query remote state is unknown", query_state: "recovery_required", recovery_required: true,
+          can_acknowledge_unknown: true, recovery_pending: [{ token: "q-1", group: i.log_group, window_seconds: 3600, query_digest: "abc123" }],
+          cleanup: { status: "not_confirmed", recovery_required: true, remote_stop_confirmed: false, remote_queries_may_still_run: true } },
+      "errors-by-stack": i => ({ render: "errors_chart", hours: i.hours, rows: [{ stack: "synthetic-stack", errors: 7 }] }),
       "aws-cli": () => ({ render: "table", columns: ["value"], rows: [{ value: "synthetic-cli" }] }),
     };
     function respond(command, params) {
@@ -91,6 +98,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       }
     }
     window.__watchlistHarness = {
+      unknownQuery: false,
       // `widgets` is the live answer table; a spec may replace one entry.
       calls, widgets, saved: () => structuredClone(saved), fail: (name, count = 1) => failures.set(name, count),
       hold: name => holds.push({ name }),

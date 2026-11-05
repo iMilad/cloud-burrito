@@ -17,11 +17,49 @@
   let inspector = null;
   let noticeTimer = null;
 
+  const recoveries = new Map();
+  let cliAvailable = null;
+  const isQuery = (widget, inputs) => widget === "errors-by-stack" || widget === "logs-insights" && inputs?.mode === "query";
+  const recovery = {
+    key: (widget, inputs, context) => JSON.stringify([context?.profile, context?.account_id, context?.region, widget,
+      inputs.log_group || "", inputs.query || "", inputs.range_seconds || 0, inputs.log_group_pattern || "", inputs.hours || 0]),
+    get: key => recoveries.get(key) || null,
+  };
+  const validPending = list => Array.isArray(list) && list.length <= 2 ? list.filter(p => p && /^q-\d{1,24}$/.test(p.token)
+    && typeof p.group === "string" && p.group.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(p.group)
+    && Number.isSafeInteger(p.window_seconds) && p.window_seconds > 0 && p.window_seconds <= 604800
+    && typeof p.query_digest === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(p.query_digest)) : [];
+
   core.configure({
     contextFor: owner => core.contextOverrideFromElement(owner) || { mode: "inherit", profile: null, account_id: null, region: null },
     isIndependent: () => true,
     requestsAllowed: () => state.storageReady,
     resultTitle: host => host.closest?.("[data-result-title]")?.dataset.resultTitle || "Result",
+    async beforeFetch({ widgetName, inputs, request }) {
+      if (widgetName === "aws-cli") {
+        if (cliAvailable !== true) {
+          const info = await call("cli_availability");
+          cliAvailable = info?.available !== false;
+        }
+        if (!request.current()) throw new Error("Request owner is no longer current.");
+        if (!cliAvailable) { cliAvailable = null; throw new Error("AWS CLI v2 was not found. Install it, then press r."); }
+      }
+      if (isQuery(widgetName, inputs) && recoveries.has(recovery.key(widgetName, inputs, request.context)) && inputs.acknowledge_unknown !== true) {
+        throw new Error("An earlier query may still be running. Review it before running again.");
+      }
+    },
+    afterFetch({ widgetName, inputs, request, result }) {
+      if (!isQuery(widgetName, inputs) || !request.current()) return;
+      const key = recovery.key(widgetName, inputs, request.context);
+      const cleanup = result?.cleanup || result?.data?.cleanup;
+      if (result?.recovery_required === true || cleanup?.recovery_required === true || cleanup?.remote_queries_may_still_run === true
+          || result?.query_state === "recovery_mismatch") {
+        recoveries.set(key, { pending: validPending(result.recovery_pending), canAcknowledge: result.can_acknowledge_unknown !== false });
+      } else if (inputs.acknowledge_unknown === true && (cleanup?.remote_stop_confirmed === true
+          || result && result.ok !== false && !result.error && result.render !== "permission_denied")) {
+        recoveries.delete(key);
+      }
+    },
     browserInvoke: !core.isTauri && window.CloudBurritoDemo ? window.CloudBurritoDemo.invoke : null,
   });
 
@@ -316,6 +354,15 @@
       stack: [{ key: "stack_name", label: "Stack name" }],
       "stacks-search": [{ key: "name_prefix", label: "Stack name prefix (optional)", optional: true }],
       lookup: [{ key: "query", label: "Resource name, ARN or partial ID" }],
+      query: [{ key: "log_group", label: "Log group" }, { key: "query", label: "Query", multiline: true },
+        { key: "range_seconds", label: "Time range", choices: [["900", "Last 15 minutes"], ["3600", "Last hour"], ["10800", "Last 3 hours"],
+          ["43200", "Last 12 hours"], ["86400", "Last 24 hours"], ["259200", "Last 3 days"], ["604800", "Last 7 days"]] }],
+      errors: [{ key: "log_group_pattern", label: "Log group names contain" }, { key: "hours", label: "Hours, 1 to 168" }],
+      cli: [{ key: "command", label: "AWS CLI command" }],
+    },
+    defaults: {
+      query: { range_seconds: "3600", query: "fields @timestamp, @message | sort @timestamp desc | limit 20" },
+      errors: { log_group_pattern: "/aws/lambda/", hours: "24" },
     },
     toInputs: {
       logs: v => v.source === "lambda"
@@ -325,7 +372,11 @@
     fromInputs: {
       logs: i => ({ source: i.source, name: i.source === "lambda" ? i.function_name || i.log_group : i.log_group }),
     },
-    notes: {},
+    notes: {
+      query: "Runs only when you press r. Logs Insights queries can cost money.",
+      errors: "Runs only when you press r. Error counts use Logs Insights queries, which can cost money.",
+      cli: "Runs only when you press r. Only reviewed read-only AWS CLI commands are accepted.",
+    },
   };
   let formThing = null;
 
@@ -384,7 +435,7 @@
   }
 
   function renderFormFields(kind, inputs) {
-    const values = inputs ? (form.fromInputs[kind] ? form.fromInputs[kind](inputs) : inputs) : {};
+    const values = inputs ? (form.fromInputs[kind] ? form.fromInputs[kind](inputs) : inputs) : (form.defaults[kind] || {});
     const host = $("#wl-form-fields");
     host.replaceChildren(...(form.notes[kind] ? [el("p", { class: "wl-form-note" }, form.notes[kind])] : []),
       ...form.FIELDS[kind].map(field => fieldControl(field, values[field.key])));
@@ -523,7 +574,7 @@
     $("#wl-filter").addEventListener("input", event => applyFilter(event.target.value));
     $("#wl-inspector").addEventListener("focusin", () => { if (state.focus !== "inspector") { state.focus = "inspector"; document.body.dataset.focus = "inspector"; renderKeys(); } });
     $("#wl-list").addEventListener("focusin", () => { if (state.focus !== "list") { state.focus = "list"; document.body.dataset.focus = "list"; renderKeys(); } });
-    inspector = window.CloudBurritoInspector.create({ host: $("#wl-inspector"), core, things: T, notice });
+    inspector = window.CloudBurritoInspector.create({ host: $("#wl-inspector"), core, things: T, notice, recovery });
     window.CloudBurritoWatchlist.inspector = inspector;
     renderKeys();
     $("#wl-form-kind").addEventListener("change", event => { renderFormFields(event.target.value, null); resetListing(); });

@@ -5,7 +5,7 @@
   const FACTORIES = {};
   function register(kind, factory) { FACTORIES[kind] = factory; }
 
-  function create({ host, core, things: T, notice }) {
+  function create({ host, core, things: T, notice, recovery = null }) {
     const { el, clear } = core;
     let thing = null;
     let stack = [];
@@ -14,7 +14,7 @@
     const body = el("div", { class: "wl-view", tabindex: "-1" });
     host.append(el("div", { class: "wl-inspector-head" }, crumb, account), body);
     const top = () => stack[stack.length - 1] || null;
-    const helpers = { core, T, el, notice, push: view => push(view), refresh: () => refresh() };
+    const helpers = { core, T, el, notice, recovery, push: view => push(view), refresh: () => refresh() };
 
     function genericView(t) {
       return { title: T.name(t), async render(view) {
@@ -84,6 +84,7 @@
     function refresh() {
       const view = top();
       if (!view) return;
+      if ("armed" in view) view.armed = true;
       core.invalidateRequests(view.host);
       clear(view.host);
       view.done = false;
@@ -347,6 +348,66 @@
     };
     return view;
   }
+
+  const ON_DEMAND = {
+    query: "This runs a Logs Insights query. Queries scan log data and can cost money.",
+    errors: "This counts errors with Logs Insights queries over sampled log groups. Queries can cost money.",
+    cli: "This runs a reviewed read-only AWS CLI command with this account's verified credentials.",
+  };
+
+  function onDemandView(thing, h) {
+    const view = {
+      title: h.T.name(thing),
+      armed: false,
+      acknowledge: null,
+      async render(v) {
+        if (!view.armed) {
+          v.host.append(h.el("p", { class: "wl-hint" }, ON_DEMAND[thing.kind]), h.el("p", { class: "wl-hint" }, "Press r or Enter to run it."));
+          return;
+        }
+        const { widget, inputs } = h.T.rowRequest(thing);
+        const extra = view.acknowledge || {};
+        view.acknowledge = null;
+        await h.core.fetchWidgetInto(v.host, widget, { ...inputs, ...extra }, thing.context);
+        if (h.recovery) showRecovery(view, widget, inputs);
+      },
+      open() { view.armed = true; h.refresh(); },
+      items: host => Array.from(host.querySelectorAll("tbody tr, .bar-row")),
+      copy: n => view.host.querySelectorAll("tbody tr, .bar-row")[n]?.textContent.trim() || null,
+    };
+
+    function showRecovery(v, widget, inputs) {
+      v.host.querySelector(".query-recovery")?.remove();
+      const item = h.recovery.get(h.recovery.key(widget, inputs, thing.context));
+      if (!item) return;
+      const box = h.el("section", { class: "query-recovery small", "aria-label": "Unresolved query recovery" },
+        h.el("p", {}, "The earlier query may still be running. Runs are paused for this query. Cancelling locally does not prove that the query stopped."),
+        h.el("p", { class: "wl-hint" }, "Running it again can overlap the earlier query and cost more. It does not stop the earlier query."));
+      if (!item.canAcknowledge) { box.append(h.el("p", { class: "wl-hint" }, "Review the earlier query in the AWS console before running more work.")); v.host.prepend(box); return; }
+      const select = item.pending.length ? h.el("select", { "aria-label": "Earlier query to review" },
+        h.el("option", { value: "" }, "Choose the earlier query…"),
+        ...item.pending.map(p => h.el("option", { value: p.token }, `${p.group}, ${p.window_seconds} seconds, query ${p.query_digest.slice(0, 12)}`))) : null;
+      const confirm = h.el("input", { type: "checkbox" });
+      const run = h.el("button", { type: "button", class: "btn btn-ghost small", disabled: true }, "Review and run again");
+      const update = () => { run.disabled = !confirm.checked || (select && !select.value); };
+      confirm.addEventListener("change", update);
+      select?.addEventListener("change", update);
+      run.addEventListener("click", () => {
+        if (run.disabled) return;
+        view.acknowledge = { acknowledge_unknown: true, ...(select ? { acknowledge_query: select.value } : {}) };
+        view.armed = true;
+        h.refresh();
+      });
+      if (select) box.append(select);
+      box.append(h.el("label", {}, confirm, h.el("span", {}, "I understand the earlier query may still be running")), run);
+      v.host.prepend(box);
+    }
+    return view;
+  }
+
+  register("query", onDemandView);
+  register("errors", onDemandView);
+  register("cli", onDemandView);
 
   register("pipeline", runsView);
   register("stack", (thing, h) => stackView(thing, h));
