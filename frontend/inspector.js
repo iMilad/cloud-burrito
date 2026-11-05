@@ -14,7 +14,7 @@
     const body = el("div", { class: "wl-view", tabindex: "-1" });
     host.append(el("div", { class: "wl-inspector-head" }, crumb, account), body);
     const top = () => stack[stack.length - 1] || null;
-    const helpers = { core, T, el, notice, push: view => push(view) };
+    const helpers = { core, T, el, notice, push: view => push(view), refresh: () => refresh() };
 
     function genericView(t) {
       return { title: T.name(t), async render(view) {
@@ -40,6 +40,7 @@
         if (n) crumb.append(el("span", { "aria-hidden": "true" }, "›"));
         crumb.append(el(n === stack.length - 1 ? "strong" : "span", {}, v.title));
       });
+      if (thing?.unsaved) crumb.append(el("span", { class: "wl-state-flag" }, "not saved"));
       account.textContent = thing ? `${thing.context.profile}, ${thing.context.region}` : "";
       account.title = thing ? `${thing.context.profile}, account ${thing.context.account_id}, ${thing.context.region}` : "";
       if (!view) { body.replaceChildren(el("p", { class: "wl-hint" }, "Select a thing and press Enter.")); return; }

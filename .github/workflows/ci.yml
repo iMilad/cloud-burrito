@@ -75,6 +75,8 @@ jobs:
           node --check frontend/demo-bridge.js
           node --check frontend/inspector.js
           node --check frontend/watchlist.js
+          node --check frontend/commands.js
+          node --check frontend/commandline.js
           node --check frontend/mock-data.js
 
       - name: Install Playwright Chromium

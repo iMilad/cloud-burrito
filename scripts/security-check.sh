@@ -52,6 +52,8 @@ node --check frontend/keys.js
 node --check frontend/demo-bridge.js
 node --check frontend/inspector.js
 node --check frontend/watchlist.js
+node --check frontend/commands.js
+node --check frontend/commandline.js
 node --check frontend/row-filter-worker.js
 node --check frontend/mock-data.js
 

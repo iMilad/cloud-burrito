@@ -460,6 +460,8 @@
     save();
   }
 
+  const appCommands = { add: () => openForm(null), classic: () => { location.href = "index.html"; } };
+
   Object.assign(actions, {
     add: () => openForm(null),
     edit: () => { const thing = selectedThing(); if (thing) openForm(thing); },
@@ -477,10 +479,16 @@
     focus: () => setFocus(state.focus === "list" ? "inspector" : "list"),
     filter: () => $("#wl-filter").focus(),
     refresh: () => {
+      const shown = inspector.current()?.thing;
+      if (state.focus === "inspector" && shown) {
+        inspector.refresh();
+        if (!shown.unsaved) loadRow(shown, { run: true });
+        return;
+      }
       const thing = selectedThing();
       if (!thing) return;
       loadRow(thing, { run: true });
-      if (inspector.current()?.thing.id === thing.id) inspector.refresh();
+      if (shown?.id === thing.id) inspector.refresh();
     },
     "refresh-all": () => refreshAll(),
     copy: () => copyMain(),
@@ -560,7 +568,7 @@
     document.body.dataset.ready = "true";
   }
 
-  window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList,
+  window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList, renderKeys, appCommands,
     save, notice, call, form, openForm, inspector: null, beforeFirstRender: null, onSelect: null };
   document.addEventListener("DOMContentLoaded", boot);
 })();
