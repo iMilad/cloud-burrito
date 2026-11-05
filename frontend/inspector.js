@@ -238,7 +238,59 @@
     return view;
   }
 
+  function logsView(thing, h) {
+    const widget = thing.inputs.source === "lambda" ? "log-tail" : "cloudwatch-logs";
+    const view = {
+      title: thing.inputs.function_name || thing.inputs.log_group,
+      streams: [],
+      async render(v) {
+        const request = h.core.beginOwnedRequest(v.host, thing.context);
+        try {
+          const result = await h.core.fetchWidgetData(widget, { mode: "streams", log_group: thing.inputs.log_group, max_streams: 50 },
+            v.host, thing.context, request);
+          if (!request.accept(result)) return;
+          h.core.renderArrayResult(v.host, result, "streams", streams => {
+            h.core.clear(v.host);
+            view.streams = streams.filter(s => typeof s.name === "string" && s.name);
+            if (thing.inputs.source === "lambda") v.host.append(h.el("p", { class: "wl-hint" },
+              `Log group ${thing.inputs.log_group} comes from the default Lambda naming convention. It is not verified.`));
+            if (!view.streams.length) { v.host.append(h.el("p", { class: "wl-hint" }, "No log streams were returned for this log group.")); return; }
+            v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Log streams" }, ...view.streams.map((s, n) =>
+              h.el("li", { class: "wl-item", role: "option", tabindex: "-1", "data-index": String(n) },
+                h.el("span", { class: "wl-dot", "aria-hidden": "true" }),
+                h.el("code", { class: "wl-id" }, s.name),
+                h.el("span", { class: "wl-muted" }, "last event"),
+                h.el("span", { class: "wl-muted" }, Number(s.last_event_timestamp)
+                  ? h.core.formatDisplayValue("time", new Date(Number(s.last_event_timestamp)).toISOString()).text : ""),
+                h.el("span", {})))));
+            v.host.querySelectorAll(".wl-item").forEach(item => item.addEventListener("click", () => {
+              view.index = Number(item.dataset.index);
+              view.open(view.index, h);
+            }));
+          });
+        } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
+      },
+      items: host => Array.from(host.querySelectorAll(".wl-item")),
+      copy: n => view.streams[n]?.name || null,
+      open(n, { push }) { const stream = view.streams[n]; if (stream) push(eventsView(thing, widget, stream.name, h)); },
+    };
+    return view;
+  }
+
+  function eventsView(thing, widget, stream, h) {
+    const view = {
+      title: stream,
+      async render(v) {
+        await h.core.fetchWidgetInto(v.host, widget, { mode: "events", log_group: thing.inputs.log_group, log_stream: stream, limit: 500 }, thing.context);
+      },
+      items: host => Array.from(host.querySelectorAll(".log-line")),
+      copy: n => view.host.querySelectorAll(".log-line")[n]?.querySelector(".msg")?.textContent || null,
+    };
+    return view;
+  }
+
   register("pipeline", runsView);
+  register("logs", logsView);
   register("package", packagesView);
 
   window.CloudBurritoInspector = { create, register };

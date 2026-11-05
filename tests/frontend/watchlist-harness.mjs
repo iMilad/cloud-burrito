@@ -19,7 +19,16 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       account_id: params.context?.account_id ?? null, region: params.context?.region ?? null, outcome: "succeeded" });
     const failed = params => ({ ...meta(params), context_id: null, provider_revision: null, settings_revision: null,
       profile: null, account_id: null, region: null, outcome: "failed" });
+    const logs = i => i.mode === "streams"
+      ? { ok: true, log_group: i.log_group, streams: [
+        { name: "synthetic-stream-new", last_event_timestamp: 1700000600000, creation_time: 1700000000000 },
+        { name: "synthetic-stream-old", last_event_timestamp: 1700000000000, creation_time: 1699990000000 }].slice(0, i.max_streams) }
+      : { render: "log_stream", events: [
+        { ts: 1700000600000, msg: `event from ${i.log_stream}`, level: "info" },
+        { ts: 1700000601000, msg: "ERROR synthetic timeout", level: "error" }] };
     const widgets = {
+      "log-tail": i => logs(i),
+      "cloudwatch-logs": i => logs(i),
       "pipeline-runs": i => ({ render: "table", columns: ["execution_id", "status", "last_updated", "trigger"], rows: [
         { execution_id: "exec-0042", status: i.pipeline_name === "synthetic-failing" ? "Failed" : "Succeeded",
           last_updated: "2026-11-02T14:02:00Z", trigger: "Webhook: main@a1f3e9c" },
