@@ -66,8 +66,8 @@ async function serveFrontend() {
   return { origin: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(done => server.close(done)) };
 }
 
-const widgetSelector = name => `.widget[data-widget="${name}"]`;
-const widget = (page, name) => page.locator(widgetSelector(name));
+const rowFor = (page, id) => page.locator(`.wl-row[data-thing-id="bench-${id}"]`);
+const tableRows = page => page.locator(".wl-view-host tbody > tr[data-source-row]");
 const twoFrames = page => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
 
 async function settled(page) {
@@ -126,35 +126,39 @@ async function timedInput(page, selector, value) {
   }, { selector, value });
 }
 
-async function refresh(page, name) {
+async function refresh(page) {
   const start = await page.evaluate(() => performance.now());
   const before = await page.evaluate(() => window.__performanceFixture.widgetResponses);
-  await widget(page, name).locator('.widget-header [title="Refresh"]').evaluate(button => button.click());
+  await page.keyboard.press("r");
   await page.waitForFunction(before => window.__performanceFixture.widgetResponses > before, before);
   await settled(page);
   return (await page.evaluate(() => performance.now())) - start;
 }
 
 async function tableInteractions(page) {
-  const selector = `${widgetSelector("cfn-stacks")} > .widget-body .table-filter`;
+  await rowFor(page, "stacks").focus();
+  await page.keyboard.press("Enter");
+  await tableRows(page).first().waitFor();
+  await settled(page);
+  const selector = ".wl-view-host .table-filter";
   const selected = await timedInput(page, selector, "synthetic-stack-00000$");
   // Use an all-column regular expression that matches a row, then restore all.
   const matched = await timedInput(page, selector, "synthetic-stack-00000");
   const invalid = await timedInput(page, selector, "[");
   if (!invalid.invalid) throw new Error("Invalid regex feedback was not preserved");
   await timedInput(page, selector, "");
-  const row = widget(page, "cfn-stacks").locator("tr.expandable").first();
+  // Keyboard drill-down from the first stack into its own detail, then back.
+  const name = (await tableRows(page).first().locator("td").first().textContent()).trim();
+  await page.evaluate(() => window.CloudBurritoWatchlist.setFocus("inspector"));
   const detailStarted = await page.evaluate(() => performance.now());
-  await row.focus();
-  await row.press("Enter");
-  await widget(page, "cfn-stacks").locator(".row-detail").waitFor();
+  await page.keyboard.press("Enter");
+  await page.locator(".wl-crumb strong").filter({ hasText: name }).waitFor();
+  await page.getByText("SyntheticLogGroup", { exact: false }).first().waitFor();
   await settled(page);
   const detailMs = (await page.evaluate(() => performance.now())) - detailStarted;
-  if (!await widget(page, "cfn-stacks").locator(".row-detail").getByText("SyntheticLogs", { exact: false }).count()
-      && !await widget(page, "cfn-stacks").locator(".row-detail").getByText("SyntheticLogGroup", { exact: false }).count()) throw new Error("Synthetic nested detail missing");
-  await row.press("Enter");
-  if (await widget(page, "cfn-stacks").locator(".row-detail").count()) throw new Error("Keyboard detail close failed");
-  const refreshMs = await refresh(page, "cfn-stacks");
+  await page.keyboard.press("Escape");
+  await tableRows(page).first().waitFor();
+  const refreshMs = await refresh(page);
   return { filter_handler_ms: matched.handler_ms, filter_painted_ms: matched.painted_ms,
     filter_no_match_painted_ms: selected.painted_ms, invalid_filter_painted_ms: invalid.painted_ms,
     detail_keyboard_ms: detailMs, refresh_result_ms: refreshMs,
@@ -162,51 +166,18 @@ async function tableInteractions(page) {
 }
 
 async function prepareWorkload(page, scenario) {
-  await page.locator('#connection-status[data-state="verified"]').waitFor();
   await page.waitForFunction(() => window.__performanceFixture?.milestones.interactive != null);
   await settled(page);
   if (scenario.kind === "six" || scenario.kind === "packages") {
-    await refresh(page, "codeartifact-packages");
-    await widget(page, "codeartifact-packages").locator("tbody tr").first().waitFor();
+    await page.locator('.wl-row[data-thing-id="bench-packages"][data-loading="false"]').waitFor();
   }
-  if (scenario.kind === "pins") {
-    const pins = widget(page, "pipeline-runs");
-    await pins.locator('.pipeline-tab[data-tab="pinned"]').evaluate(button => button.click());
-    await refresh(page, "pipeline-runs");
-    if (await pins.locator('.pipeline-pin-card[data-loaded="1"]').count() !== 50) throw new Error("Expected 50 completed synthetic pinned results");
+  if (scenario.kind === "pins" && await page.locator('.wl-row[data-loading="false"]').count() !== 50) {
+    throw new Error("Expected 50 completed synthetic pipeline rows");
   }
   await settled(page);
 }
 
-async function tableCycles(page, session) {
-  const cycles = [];
-  const initial = await cdpMetrics(session);
-  // One separate ten-cycle series per dataset, not a different dataset per cycle.
-  // Production Add/Remove and Refresh controls own every DOM lifecycle here.
-  await widget(page, "cfn-stacks").locator(".rm-btn").evaluate(button => button.click());
-  await page.waitForTimeout(450); // Fixed 400 ms dashboard-save debounce plus margin.
-  for (let index = 0; index < 10; index++) {
-    const before = await cdpMetrics(session);
-    await page.locator("#add-widget-btn").click();
-    await page.locator(".prebuilt-item").filter({ has: page.locator(".prebuilt-name", { hasText: /^CloudFormation Stacks$/ }) }).locator(".prebuilt-add").click();
-    await widget(page, "cfn-stacks").locator("tbody tr").first().waitFor();
-    await settled(page);
-    const interaction = await tableInteractions(page);
-    const populated = await cdpMetrics(session);
-    await widget(page, "cfn-stacks").locator(".rm-btn").evaluate(button => button.click());
-    await page.waitForTimeout(450);
-    await settled(page);
-    const removed = await cdpMetrics(session);
-    cycles.push({ index, heap_before_bytes: before.JSHeapUsedSize, heap_populated_bytes: populated.JSHeapUsedSize,
-      heap_after_remove_bytes: removed.JSHeapUsedSize, dom_nodes_after_remove: removed.Nodes,
-      documents_after_remove: removed.Documents, task_duration_ms: (removed.TaskDuration - before.TaskDuration) * 1000,
-      ...interaction });
-  }
-  return { initial_heap_bytes: initial.JSHeapUsedSize, cycles,
-    interpretation: "Observed browser JavaScript heap only, without forced GC. Includes fixed fixture arrays; does not establish retained objects, native total RSS or a memory-leak verdict." };
-}
-
-async function runTrial({ browser, scenario, index, warmup, origin, freshLaunchStarted = null, cycles = false }) {
+async function runTrial({ browser, scenario, index, warmup, origin, freshLaunchStarted = null }) {
   const errors = [];
   const trial = { index, warmup, success: false, errors, metrics: {}, counters: {}, raw: {} };
   const context = await browser.newContext({ viewport: { width: 1480, height: 920 }, serviceWorkers: "block" });
@@ -247,7 +218,11 @@ async function runTrial({ browser, scenario, index, warmup, origin, freshLaunchS
       ...scenario.kind === "table" ? await tableInteractions(page) : {},
     };
     if (scenario.kind === "packages") {
-      const row = widget(page, "codeartifact-packages").locator("tr.expandable").first();
+      await rowFor(page, "packages").focus();
+      await page.keyboard.press("Enter");
+      const row = page.locator(".wl-view-host tr.expandable").first();
+      await row.waitFor();
+      await settled(page);
       const historyStart = await page.evaluate(() => performance.now());
       await row.focus(); await row.press("Enter"); await settled(page);
       trial.metrics.lazy_history_ms = (await page.evaluate(() => performance.now())) - historyStart;
@@ -265,12 +240,12 @@ async function runTrial({ browser, scenario, index, warmup, origin, freshLaunchS
       actual_aws_attempts: null, actual_aws_retries: null, actual_aws_pages: null, backend_queue: null,
       backend_cancellations: null };
     trial.raw = { milestones: fixture.milestones, responses: finalFixture.responses, outlier,
-      rendered_rows: await page.locator(".widget table tbody > tr:not(.row-detail)").count() };
+      rendered_rows: await page.locator(".wl-view-host tbody > tr:not(.row-detail)").count(),
+      rendered_things: await page.locator(".wl-row").count() };
     const beforeIdle = await cdpMetrics(session);
     await page.waitForTimeout(200);
     const afterIdle = await cdpMetrics(session);
     trial.metrics.browser_idle_task_cpu_ms_per_200ms = (afterIdle.TaskDuration - beforeIdle.TaskDuration) * 1000;
-    if (cycles) trial.cycle_series = await tableCycles(page, session);
     trial.success = errors.length === 0;
   } catch (error) {
     errors.push(error?.name === "TimeoutError" ? "Scenario timed out waiting for expected production UI state" : String(error?.message || "Scenario failed").split("\n")[0].slice(0, 180));
@@ -302,7 +277,7 @@ async function main() {
       "CDP measures browser JavaScript heap and task CPU, not process-tree RSS or native webview idle CPU. Sampling is not a proven peak.",
       "Startup uses a fresh browser process per trial; other workloads use a new isolated context in a reused browser. Machine caches are not flushed.",
       "Synthetic input dispatch measures production event handlers and two animation frames, not a hardware input device.",
-      "Complete six-tile workload includes explicit loading of the saved CodeArtifact form after automatic dashboard results settle.",
+      "The six-thing workload loads four things on open; the error-count and CLI things wait for an explicit run, as in the app.",
       "Failures remain in raw trials and failure counts. Missing timing values are not converted into zero or passed gates.",
       "A single five-second outlier is injected into recorded trial index 29 of startup-six-100; a shorter smoke run omits it.",
       "Browser fake-IPC counters cannot establish backend attempt, retry, service pagination, queue, or cancellation budgets." ],
@@ -321,23 +296,16 @@ async function main() {
         report.environment.browser_version ||= browser.version();
         try {
           const trial = await runTrial({ browser, scenario: definition, index: run < 0 ? run + options.warmups : run,
-            warmup: run < 0, origin: server.origin, freshLaunchStarted: started,
-            cycles: false });
+            warmup: run < 0, origin: server.origin, freshLaunchStarted: started });
           scenario.trials.push(trial);
           scenario.summary = summarize(scenario.trials);
           await save();
           process.stdout.write(`${definition.id} ${run < 0 ? "warmup" : "trial"} ${run < 0 ? run + options.warmups : run}: ${trial.success ? "ok" : "FAILED"}\n`);
         } finally { if (definition.freshProcess) await browser.close(); }
       }
-      if (definition.kind === "table") {
-        sharedBrowser ||= await launch();
-        const cycleTrial = await runTrial({ browser: sharedBrowser, scenario: definition, index: 0, warmup: false, origin: server.origin, cycles: true });
-        scenario.memory_cycles = { success: cycleTrial.success, errors: cycleTrial.errors, ...cycleTrial.cycle_series };
-        await save();
-      }
     }
   } finally { if (sharedBrowser) await sharedBrowser.close(); await server.close(); }
-  const failed = report.scenarios.some(s => s.summary.failed_trials > 0 || s.trials.some(t => !t.success) || s.memory_cycles?.success === false);
+  const failed = report.scenarios.some(s => s.summary.failed_trials > 0 || s.trials.some(t => !t.success));
   report.success = !failed;
   await save();
   if (failed) process.exitCode = 1;

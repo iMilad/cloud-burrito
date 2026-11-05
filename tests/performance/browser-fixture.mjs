@@ -1,6 +1,7 @@
 // Versioned synthetic boundary for the production frontend performance runner.
 // Keep this function self-contained: Playwright serializes it into a fresh page.
-export const FIXTURE_REVISION = "p301-browser-v1";
+// v2: the workload is watchlist things, not grid tiles. Do not compare with v1 reports.
+export const FIXTURE_REVISION = "p301-browser-v2";
 export const FIXTURE_SEED = 7301;
 
 export function installSyntheticBridge(options) {
@@ -21,17 +22,21 @@ export function installSyntheticBridge(options) {
   fixture.scriptOutcome = outcome => { denyNext = outcome === "denied"; partialNext = outcome === "partial"; };
   const settingsResponse = status => ({ ...settings, _storage: { store: "settings", status },
     _settings: { defaults, allowed_regions: ["eu-west-1", "us-east-1"], field_errors: {} } });
-  const tile = (name, index, inputs = {}) => ({ id: `bench-${name}`, widget: name, x: index % 2 ? 6 : 0,
-    y: Math.floor(index / 2) * 6, w: 6, h: 6, config: { inputs } });
-  const six = ["cfn-stacks", "errors-by-stack", "log-tail", "cloudwatch-logs", "codeartifact-packages", "aws-cli"];
-  const tiles = options.kind === "six" ? six.map((name, index) => tile(name, index,
-    name === "aws-cli" ? { command: "aws sts get-caller-identity" }
-      : name === "codeartifact-packages" ? { domain: "synthetic-domain", repository: "synthetic-repository", package_prefix: "synthetic", max_packages: options.rows } : {}))
-    : options.kind === "pins" ? [tile("pipeline-runs", 0, { pinned_pipelines: Array.from({ length: 50 }, (_, index) => ({
-      ...profiles[index % 2], pipeline_name: `synthetic-pipeline-${String(index).padStart(3, "0")}`,
-    })) })]
-    : [tile(options.kind === "packages" ? "codeartifact-packages" : "cfn-stacks", 0,
-      options.kind === "packages" ? { domain: "synthetic-domain", repository: "synthetic-repository", package_prefix: "synthetic", max_packages: options.rows } : {})];
+  const thing = (id, kind, inputs, profile = profiles[0]) => ({ id: `bench-${id}`, kind, order: 0, inputs,
+    context: { mode: "pinned", ...profile } });
+  const packageInputs = { domain: "synthetic-domain", repository: "synthetic-repository", package_prefix: "synthetic" };
+  const things = options.kind === "six" ? [
+      thing("stacks", "stacks-search", { name_prefix: "synthetic-" }),
+      thing("errors", "errors", { hours: 1, log_group_pattern: "/aws/lambda/" }),
+      thing("lambda", "logs", { source: "lambda", log_group: "/synthetic/benchmark" }),
+      thing("logs", "logs", { source: "group", log_group: "/synthetic/benchmark" }),
+      thing("packages", "package", packageInputs),
+      thing("cli", "cli", { command: "aws sts get-caller-identity" }),
+    ]
+    : options.kind === "pins" ? Array.from({ length: 50 }, (_, index) => thing(`pipeline-${index}`, "pipeline",
+      { pipeline_name: `synthetic-pipeline-${String(index).padStart(3, "0")}` }, profiles[index % 2]))
+    : [options.kind === "packages" ? thing("packages", "package", packageInputs)
+      : thing("stacks", "stacks-search", { name_prefix: "synthetic-" })];
   const completeCoverage = count => ({ completeness: "complete", has_more: false,
     counts: { returned: count, pages: 1 }, limits: {}, reasons: [] });
   const stackRows = Array.from({ length: options.rows }, (_, index) => ({
@@ -118,6 +123,8 @@ export function installSyntheticBridge(options) {
       let delay = ["aws_set_account", "widget_fetch"].includes(command) ? options.delayMs : 0;
       if (options.outlier && !outlierUsed && command === "widget_fetch") { outlierUsed = true; delay = 5000; }
       if (command === "aws_set_account") { active = null; fixture.milestones.connectStarted ??= started; }
+      // Pinned things verify on their first request; there is no separate connect step.
+      if (command === "widget_fetch") fixture.milestones.connectStarted ??= started;
       if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       let result;
       switch (command) {
@@ -127,8 +134,8 @@ export function installSyntheticBridge(options) {
         case "ping": result = { ok: true, version: "synthetic-benchmark" }; break;
         case "settings_get": result = settingsResponse("loaded"); break;
         case "settings_set": Object.assign(settings, params); result = settingsResponse("saved"); break;
-        case "dashboard_get": result = { tiles, _storage: { store: "dashboard", status: "loaded" } }; break;
-        case "dashboard_set": result = { ok: true, _storage: { store: "dashboard", status: "saved" } }; break;
+        case "watchlist_get": result = { version: 1, things, _storage: { store: "watchlist", status: "loaded" } }; break;
+        case "watchlist_set": result = { version: 1, things: params.things, _storage: { store: "watchlist", status: "saved" } }; break;
         case "aws_list_profiles": result = { discovery_state: "ready", file_exists: true, profiles: profiles.map(profile => ({
           name: profile.profile, account_id: profile.account_id, region: profile.region, role_name: "SyntheticReadOnly",
           sso_session: "synthetic-session", eligibility: "supported_sso", eligibility_reason: null,
@@ -159,10 +166,9 @@ export function installSyntheticBridge(options) {
     requestAnimationFrame(() => {
       lastResultFramePending = false;
       const now = performance.now();
-      if (document.readyState !== "loading" && document.querySelector("#add-widget-btn:not([disabled])")
-          && document.querySelectorAll("#grid-stack > .grid-stack-item").length === tiles.length) fixture.milestones.interactive ??= now;
-      if (document.querySelector('#connection-status[data-state="verified"]')) fixture.milestones.verified ??= now;
-      const useful = document.querySelector('.widget table tbody tr, .widget .lambda-row, .widget .bar-row');
+      if (document.readyState !== "loading" && document.body.dataset.ready === "true") fixture.milestones.interactive ??= now;
+      if (fixture.widgetResponses > 0) fixture.milestones.verified ??= now;
+      const useful = document.querySelector('.wl-row[data-loading="false"]');
       if (useful) fixture.milestones.firstUseful ??= now;
       if (useful && fixture.active === 0 && fixture.widgetResponses > 0) fixture.milestones.lastSettledResultFrame = now;
     });
