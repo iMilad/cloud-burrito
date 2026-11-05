@@ -81,7 +81,8 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
     window.__TAURI__ = { core: { async invoke(command, payload) {
       const params = structuredClone(payload?.params || {});
       calls.push({ command, params });
-      const hold = command === "widget_fetch" && holds.find(h => h.name === params.widget && !h.resolve);
+      const holdName = command === "widget_fetch" ? params.widget : command;
+      const hold = holds.find(h => h.name === holdName && !h.resolve);
       if (hold) await new Promise(resolve => { hold.resolve = resolve; });
       return respond(command, params);
     } } };

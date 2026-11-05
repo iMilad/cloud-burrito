@@ -345,7 +345,7 @@
   function formContext() {
     const profile = state.profiles.find(p => p.name === $("#wl-form-profile").value);
     const region = $("#wl-form-region").value;
-    return profile && region ? { mode: "pinned", profile: profile.name, account_id: profile.account_id, region } : null;
+    return profile && region && state.allowedRegions.includes(region) ? { mode: "pinned", profile: profile.name, account_id: profile.account_id, region } : null;
   }
 
   async function listPipelines() {
@@ -363,6 +363,20 @@
     } catch (error) { if (request.current()) showFormError(String(error?.message || error)); }
   }
 
+  // Drop any pending or shown pipeline listing: it belongs to an older choice.
+  function resetListing() {
+    core.invalidateRequests($("#wl-form .wl-form-owner"));
+    $("#wl-form-list")?.replaceChildren();
+  }
+
+  function updateAccountNote() {
+    const note = $("#wl-form-account-note");
+    const profile = state.profiles.find(p => p.name === $("#wl-form-profile").value);
+    const mismatch = formThing && profile && profile.account_id !== formThing.context.account_id;
+    note.textContent = mismatch ? `This profile now points to account ${profile.account_id}. Saving pins this thing to it.` : "";
+    note.hidden = !mismatch;
+  }
+
   function showFormError(message) {
     const node = $("#wl-form-error");
     node.textContent = message || "";
@@ -376,9 +390,14 @@
       ...form.FIELDS[kind].map(field => fieldControl(field, values[field.key])));
   }
 
-  function fillRegions(preferred) {
+  function fillRegions(preferred, keepUnsupported = false) {
     const select = $("#wl-form-region");
     select.replaceChildren(...state.allowedRegions.map(region => el("option", { value: region }, region)));
+    if (keepUnsupported && preferred && !state.allowedRegions.includes(preferred)) {
+      select.append(el("option", { value: preferred }, `${preferred} (not supported)`));
+      select.value = preferred;
+      return;
+    }
     select.value = state.allowedRegions.includes(preferred) ? preferred
       : state.allowedRegions.includes(state.settings?.default_region) ? state.settings.default_region : state.allowedRegions[0];
   }
@@ -396,10 +415,15 @@
     const profileSelect = $("#wl-form-profile");
     profileSelect.replaceChildren(...state.profiles.map(p => el("option", { value: p.name }, `${p.name} (${p.account_id})`)));
     const profile = source?.context?.profile || state.settings?.default_profile;
-    profileSelect.value = state.profiles.some(p => p.name === profile) ? profile : state.profiles[0]?.name || "";
-    fillRegions(source?.context?.region || state.profiles.find(p => p.name === profileSelect.value)?.region);
+    if (thing && profile && !state.profiles.some(p => p.name === profile)) {
+      profileSelect.append(el("option", { value: profile, "data-missing": "true" }, `${profile} (not in your AWS config)`));
+    }
+    profileSelect.value = Array.from(profileSelect.options).some(o => o.value === profile) ? profile : state.profiles[0]?.name || "";
+    fillRegions(source?.context?.region || state.profiles.find(p => p.name === profileSelect.value)?.region, !!thing);
+    resetListing();
+    updateAccountNote();
     renderFormFields(kindSelect.value, source?.inputs || null);
-    $("#wl-form-save").disabled = !state.profiles.length;
+    $("#wl-form-save").disabled = !state.profiles.length && !thing;
     if (!state.profiles.length) showFormError("No supported SSO profiles were found. Check the AWS config path in Settings, then try again.");
     dialog.showModal();
     (dialog.querySelector("#wl-form-fields input, #wl-form-fields textarea") || kindSelect).focus();
@@ -408,6 +432,9 @@
   function submitForm(event) {
     event.preventDefault();
     const kind = $("#wl-form-kind").value;
+    if ($("#wl-form-profile").selectedOptions[0]?.dataset.missing) { showFormError("Choose a profile from your AWS config."); return; }
+    if (!state.allowedRegions.includes($("#wl-form-region").value)) { showFormError("Choose a supported region."); return; }
+    if (!formThing && state.things.length >= 200) { showFormError("The watchlist is full (200 things). Remove one, then try again."); return; }
     const context = formContext();
     const values = Object.fromEntries(form.FIELDS[kind].map(field => [field.key, $(`#wl-field-${field.key}`)?.value ?? ""]));
     const raw = form.toInputs[kind] ? form.toInputs[kind](values) : values;
@@ -491,11 +518,16 @@
     inspector = window.CloudBurritoInspector.create({ host: $("#wl-inspector"), core, things: T, notice });
     window.CloudBurritoWatchlist.inspector = inspector;
     renderKeys();
-    $("#wl-form-kind").addEventListener("change", event => renderFormFields(event.target.value, null));
-    $("#wl-form-profile").addEventListener("change", event => fillRegions(state.profiles.find(p => p.name === event.target.value)?.region));
+    $("#wl-form-kind").addEventListener("change", event => { renderFormFields(event.target.value, null); resetListing(); });
+    $("#wl-form-profile").addEventListener("change", event => {
+      fillRegions(state.profiles.find(p => p.name === event.target.value)?.region);
+      resetListing();
+      updateAccountNote();
+    });
+    $("#wl-form-region").addEventListener("change", resetListing);
     $("#wl-form-body").addEventListener("submit", submitForm);
     $("#wl-form-cancel").addEventListener("click", () => { formThing = null; $("#wl-form").close(); });
-    $("#wl-form").addEventListener("close", () => { formThing = null; setFocus("list"); });
+    $("#wl-form").addEventListener("close", () => { formThing = null; resetListing(); setFocus("list"); });
     try {
       const settings = await call("settings_get");
       state.settings = settings;
