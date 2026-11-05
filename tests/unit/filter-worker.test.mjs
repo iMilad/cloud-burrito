@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../../frontend/app.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../frontend/core.js', import.meta.url), 'utf8');
 const start = source.indexOf('  function createRowMatcher(');
 const end = source.indexOf('  function renderTable(', start);
 assert(start > 0 && end > start);
