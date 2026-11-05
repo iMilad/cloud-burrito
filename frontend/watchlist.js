@@ -228,6 +228,8 @@
   async function loadRow(thing, { run = false } = {}) {
     const row = rowEl(thing.id);
     if (!row) return;
+    // A package detail request from an older load never paints over this one.
+    core.invalidateRequests(row.querySelector(".wl-row-owner-detail"));
     const problem = accountProblem(thing);
     if (problem) return setRow(thing, { label: `needs account: ${problem}`, tone: "warn" });
     const previous = state.rows.get(thing.id) || {};
@@ -242,7 +244,10 @@
       const { widget, inputs } = T.rowRequest(thing);
       let result = await core.fetchWidgetData(widget, inputs, owner, thing.context, request);
       if (!request.accept(result)) return;
-      if (thing.kind === "package") result = await enrichPackage(thing, row, result);
+      if (thing.kind === "package") {
+        result = await enrichPackage(thing, row, result);
+        if (!request.current()) return;
+      }
       if (result) applyRowResult(thing, result);
     } catch (error) {
       if (request.current()) applyRowFailure(thing, String(error?.message || error));

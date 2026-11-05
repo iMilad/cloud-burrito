@@ -83,11 +83,7 @@ test("an unreadable watchlist is never overwritten by s on a command result", as
 });
 
 test("nothing can be added while the first conversion runs, so it is never lost", async ({ page }) => {
-  await page.addInitScript(() => {
-    // Hold the conversion read once the harness is installed.
-    const wait = setInterval(() => { if (window.__watchlistHarness) { clearInterval(wait); window.__watchlistHarness.hold("dashboard_get"); } }, 0);
-  });
-  const booted = bootWatchlist(page, { storage: "missing", tiles });
+  const booted = bootWatchlist(page, { storage: "missing", tiles, holds: [{ name: "dashboard_get" }] });
   await page.waitForFunction(() => window.__watchlistHarness?.calls.some(c => c.command === "dashboard_get"));
   await page.keyboard.press("a");
   await expect(page.locator("#wl-notice")).toHaveText(UNREADABLE);

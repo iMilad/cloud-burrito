@@ -5,15 +5,16 @@ export const B = { profile: "demo-b", account_id: "acct-b-fixture", region: "eu-
 export const pinned = identity => ({ mode: "pinned", ...identity });
 export const thing = (id, kind, identity, inputs, order = 0) => ({ id, kind, order, context: pinned(identity), inputs });
 
-export async function bootWatchlist(page, { things = [], storage = "loaded", tiles = [], profiles = [A, B], settings = {}, settingsMetadata = {}, failSave = false } = {}) {
+export async function bootWatchlist(page, { things = [], storage = "loaded", tiles = [], profiles = [A, B], settings = {}, settingsMetadata = {}, failSave = false, holds: initialHolds = [] } = {}) {
   await page.context().route("**/*", route => new URL(route.request().url()).origin === "http://127.0.0.1:4173"
     ? route.continue() : route.abort("blockedbyclient"));
-  await page.addInitScript(({ things, storage, tiles, profiles, settings, settingsMetadata, failSave }) => {
+  await page.addInitScript(({ things, storage, tiles, profiles, settings, settingsMetadata, failSave, initialHolds }) => {
     const calls = [];
     let saved = structuredClone(things);
     let status = storage;
     const failures = new Map();
-    const holds = [];
+    // A hold matches a command or widget name and, if given, the widget input mode.
+    const holds = initialHolds.map(h => ({ ...h }));
     const meta = params => ({ id: params.request_id ?? null, context_id: `ctx-${params.context?.profile}`,
       provider_revision: "p1", settings_revision: "s1", profile: params.context?.profile ?? null,
       account_id: params.context?.account_id ?? null, region: params.context?.region ?? null, outcome: "succeeded" });
@@ -131,18 +132,19 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       rejectSettings: false,
       // `widgets` is the live answer table; a spec may replace one entry.
       calls, widgets, saved: () => structuredClone(saved), fail: (name, count = 1) => failures.set(name, count),
-      hold: name => holds.push({ name }),
-      release: name => { const item = holds.find(h => h.name === name && h.resolve); holds.splice(holds.indexOf(item), 1); item.resolve(); },
+      hold: (name, mode) => holds.push({ name, mode }),
+      release: (name, mode) => { const item = holds.find(h => h.name === name && (!mode || h.mode === mode) && h.resolve);
+        holds.splice(holds.indexOf(item), 1); item.resolve(); },
     };
     window.__TAURI__ = { core: { async invoke(command, payload) {
       const params = structuredClone(payload?.params || {});
       calls.push({ command, params });
       const holdName = command === "widget_fetch" ? params.widget : command;
-      const hold = holds.find(h => h.name === holdName && !h.resolve);
+      const hold = holds.find(h => h.name === holdName && (!h.mode || h.mode === params.inputs?.mode) && !h.resolve);
       if (hold) await new Promise(resolve => { hold.resolve = resolve; });
       return respond(command, params);
     } } };
-  }, { things, storage, tiles, profiles, settings, settingsMetadata, failSave });
+  }, { things, storage, tiles, profiles, settings, settingsMetadata, failSave, initialHolds });
   await page.goto("/");
   await page.waitForFunction(() => document.body.dataset.ready === "true");
 }

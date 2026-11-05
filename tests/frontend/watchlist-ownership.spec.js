@@ -73,3 +73,18 @@ test("leaving a filtered stack search terminates its filter worker", async ({ pa
   await expect.poll(live).toBe(0);
   expect(await page.evaluate(() => window.__workers.started)).toBe(1);
 });
+
+test("a late package detail from an older refresh never hides a newer failed refresh", async ({ page }) => {
+  const pkg = thing("k", "package", A, { domain: "synthetic-domain", repository: "synthetic-repo", package_prefix: "acme-core" });
+  await bootWatchlist(page, { things: [pkg], holds: [{ name: "codeartifact-packages", mode: "enrich" }] });
+  const state = page.locator('.wl-row[data-thing-id="k"] .wl-state-text');
+  await expect.poll(async () => (await calls(page, "widget_fetch", "codeartifact-packages"))
+    .filter(c => c.params.inputs.mode === "enrich").length).toBe(1);
+  await page.evaluate(() => window.__watchlistHarness.fail("codeartifact-packages"));
+  await page.keyboard.press("r");
+  await expect(state).toHaveText("failed, press r to retry");
+  await page.evaluate(() => window.__watchlistHarness.release("codeartifact-packages", "enrich"));
+  await page.waitForTimeout(200);
+  await expect(state).toHaveText("failed, press r to retry");
+  await expect(state).not.toHaveText("4.12.0");
+});
