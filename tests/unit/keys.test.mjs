@@ -44,3 +44,25 @@ test('text fields keep their keys except Escape, and command shortcut needs a mo
   assert.equal(map.action(key('r', { metaKey: true })), null);
   assert.equal(map.action(key('j', { altKey: true })), null);
 });
+
+test('a pending d is cancelled by any other key, chord, or text input', () => {
+  const ctrlX = keymap([0, 100]);
+  ctrlX.action(key('d'));
+  ctrlX.action(key('x', { ctrlKey: true }));
+  assert.equal(ctrlX.action(key('d')), null);
+
+  const typed = keymap([0, 100]);
+  typed.action(key('d'));
+  typed.action(key('j', { typing: true }));
+  assert.equal(typed.action(key('d')), null);
+
+  const cmdK = keymap([0, 100]);
+  cmdK.action(key('d'));
+  cmdK.action(key('k', { metaKey: true }));
+  assert.equal(cmdK.action(key('d')), null);
+
+  const repeated = keymap([0, 100, 200]);
+  repeated.action(key('d'));
+  assert.equal(repeated.action(key('d', { repeat: true })), null);
+  assert.equal(repeated.action(key('d')), null);
+});

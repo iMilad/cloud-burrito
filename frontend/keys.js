@@ -15,10 +15,13 @@
     let firstD = null;
     return {
       action(event) {
+        const plainD = event.key === "d" && !event.typing && !event.metaKey && !event.ctrlKey && !event.altKey;
+        if (!plainD) firstD = null;
         if (event.typing) return event.key === "Escape" ? "back" : null;
         if ((event.metaKey || event.ctrlKey) && !event.altKey && String(event.key).toLowerCase() === "k") return "command";
         if (event.metaKey || event.ctrlKey || event.altKey) return null;
         if (event.key === "d") {
+          if (event.repeat) { firstD = null; return null; }
           const at = now();
           if (firstD !== null && at - firstD <= sequenceMs) { firstD = null; return "remove"; }
           firstD = at;
