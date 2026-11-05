@@ -59,9 +59,10 @@ The optional AWS CLI Table widget requires a separately installed AWS CLI v2.
   preflights appear in the Audit panel. They are not SDK wire-call counts. Failed
   audit writes show a visible warning; raw inputs and error payloads are excluded.
 - **Multi-account via AWS SSO.** Uses your existing `~/.aws/config` SSO profiles;
-  search for a default account/region from the top bar, or pin account/region per widget.
-- **Customizable dashboard.** Drag/resize widget tiles (GridStack); the layout
-  and per-tile config persist across launches.
+  every watchlist thing is pinned to its own profile, account and region.
+- **Watchlist across accounts.** Keep the specific pipelines, packages, logs and
+  stacks you care about, each pinned to its own SSO profile, account and region.
+  Keyboard first, with a vim-style command line.
 - **Native core.** Rust + a webview UI; AWS CLI is optional for the CLI widget.
 - **Offline demo mode.** Open the frontend in a plain browser to explore the UI
   with mock data — no AWS account required.
@@ -220,10 +221,12 @@ adds result ownership; [P1-06](docs/roadmap/p1-06-evidence.md) records bounded I
 safe console links, redacted diagnostics and audit outcomes. P1 is complete locally;
 live AWS, installer and native-platform acceptance remain pending.
 
-## Widgets
+## Watchlist and commands
 
-The dashboard widgets are compiled into the binary, with drill-down views for
-stack details, pipeline execution details, and CodeBuild logs:
+The watchlist is the app. Each thing is one pipeline, package, log group, stack
+or query, pinned to its own profile, account and region. The reads behind each
+thing are compiled into the binary, with drill-down views for stack details,
+pipeline execution details, CodeBuild logs and package versions.
 
 Results identify their verified account/region and when the displayed evidence
 was received. A same-context refresh failure can retain earlier evidence
@@ -237,19 +240,62 @@ CLI coverage can remain unknown after output projection; shortened nested JSON
 cells are marked. Existing CodeBuild log reads stop between whole pages after
 the event threshold, so their reported event count can exceed that threshold.
 
-| Widget | Stable ID | Available behavior |
-| --- | --- | --- |
-| CloudFormation Stacks | `cfn-stacks` | Filter returned non-deleted stacks, inspect resources and recent events, and refresh; failed enrichment and event limits remain visible |
-| Lambda Logs | `log-tail` | Filter functions, inspect their logging configuration, load streams and view events; a default log-group naming convention is labelled unverified |
-| CloudWatch Logs | `cloudwatch-logs` | Filter loaded log groups, search AWS with Enter, load streams and view events |
-| Log Error Counts | `errors-by-stack` | Bounded Logs Insights counts for sampled log groups over the last 24 hours by default, with local filtering; these are not verified stack ownership or complete account-wide counts |
-| Resource Reverse Lookup | `resource-lookup` | Search tagged resource ARNs and show a confirmed stack association only when reviewed, exact evidence establishes it; other associations remain unknown |
-| Pipeline Runs | `pipeline-runs` | Select a pipeline, load executions, inspect action/build evidence, and keep independently scoped pinned pipelines |
-| CodeArtifact Packages | `codeartifact-packages` | Load packages by domain, repository and prefix; inspect available version information and partial failures |
-| Logs Insights Query | `logs-insights` | Run a query for a supplied log group and time range; inspect rows, query statistics and reported cleanup status |
-| AWS CLI Table | `aws-cli` | Run or pin one of the 18 supported resource-read commands with reviewed arguments, including `sts get-caller-identity`; inspect JSON output as a table |
+| Kind | Widget behind it | Drill-down | Loads on open |
+| --- | --- | --- | --- |
+| `pipeline` | Pipeline Runs (`pipeline-runs`) | Run actions, then the CodeBuild log | Yes |
+| `package` | CodeArtifact Packages (`codeartifact-packages`) | Version history | Yes |
+| `logs` | Lambda Logs (`log-tail`) or CloudWatch Logs (`cloudwatch-logs`) | Streams, then events | Yes |
+| `stack` | CloudFormation stack detail (`cfn-stack-detail`) | Resources and recent events | Yes |
+| `stacks-search` | CloudFormation Stacks (`cfn-stacks`) | Stack rows, then stack detail | Yes |
+| `lookup` | Resource Reverse Lookup (`resource-lookup`) | Match rows | Yes |
+| `query` | Logs Insights Query (`logs-insights`) | Result rows | No, it can cost money |
+| `errors` | Log Error Counts (`errors-by-stack`) | Bars | No, it can cost money |
+| `cli` | AWS CLI Table (`aws-cli`), 18 supported read commands | Result table | No, it runs a process |
 
-The beta exposes these implemented widgets and their local filters. It does not
+Things that start Logs Insights queries or a child process never run on their
+own. Everything else loads when the app opens.
+
+### Keys
+
+| Keys | Action |
+| --- | --- |
+| `j` `k` / arrows, `g` `G` | Move, top, bottom |
+| `Enter` / `l`, `Esc` / `h` | Drill in, go back |
+| `Tab` | Focus list or inspector |
+| `/` | Filter rows |
+| `r`, `R` | Refresh row, refresh all (things that don't load on open are excluded) |
+| `y` | Copy main value (version, run ID, ARN) |
+| `o` | Open the AWS console, only for reviewed links |
+| `n` `N` | Next or previous error line in a log |
+| `a` | Add a thing |
+| `e` | Edit a thing (account, region, inputs) |
+| `dd` | Remove a thing |
+| `J` `K` | Move a row down or up within its group |
+| `?` | All keys |
+| `:` / `Cmd+K` | Command line |
+| `,` | Settings |
+| `s` | In a command result: save it as a thing |
+
+Keys do not fire while a text field has focus, except `Esc`.
+
+### Command line
+
+```text
+:pipe <name> [@profile] [region]     :pkg <name-or-prefix> [repo] [@profile]
+:logs <function-or-group> [@profile] :stack <name> [@profile]
+:stacks [prefix] [@profile]          :lookup <text> [@profile]
+:errors [pattern] [hours] [@profile] :insights <log-group> "<query>" [@profile]
+:aws <cli command> [@profile]
+:add  :settings  :policy  :audit  :theme  :help
+```
+
+`@profile` completes from your discovered SSO profiles. The region defaults to
+the profile's region, then to the default region in settings. Results show as
+"not saved" in the inspector until you press `s`. `:errors` and `:insights`
+show a cost note before they start. `:aws` text uses the same parser and rules
+as the CLI widget.
+
+The app exposes these implemented kinds and their local filters. It does not
 include a global resource-search box or an AI widget generator. Log views load
 on explicit actions; a displayed result is not a continuously streaming feed.
 The error-count widget can run bounded Logs Insights queries when loaded or
@@ -327,16 +373,11 @@ tags; a maintainer reviews and publishes each draft. See
 
 ## Configuration
 
-Studio opens with the **Paper** workspace style on a fresh installation. Open
-**Appearance** in the Studio rail (or its compact top-bar control) to switch
-between Studio Original, Precision, Paper and Night Shift. The choice is stored
-locally on that device and stays independent from the light/dark color theme,
-Classic view, saved layout and AWS context.
+The selected profile in the configured AWS file determines the SSO session.
+Every watchlist thing is pinned to its own profile, account and region, and
+each pinned connection is verified independently. The light or dark look
+follows the theme setting.
 
-Search for your default account and region in the top bar. The selected profile
-in the configured AWS file determines the SSO session. Individual widgets can
-inherit the verified connection or pin their own profile/account/region; pinned
-connections are verified independently.
 State lives in your home directory:
 
 | Path | Purpose |
@@ -344,7 +385,8 @@ State lives in your home directory:
 | `~/.aws/config` | Your AWS SSO profiles (standard AWS CLI config) |
 | `~/.cloud_burrito/settings.json` | App settings (config path, SSO session constraint, default profile/region, light/dark theme) |
 | `~/.cloud_burrito/policy.yaml` | Read-only allowlist (see [Security model](#security-model)) |
-| `~/.cloud_burrito/dashboard.json` | Saved dashboard layout and per-tile config |
+| `~/.cloud_burrito/watchlist.json` | Your watchlist: each thing with its pinned profile, account and region |
+| `~/.cloud_burrito/dashboard.json` | Old dashboard layout, read once to convert it, never written |
 | `~/.cloud_burrito/audit.log` | Structured application outcomes and capability preflights; write failures are visible |
 
 On macOS and Linux, app files use `0600` and app/archive directories use `0700`.
@@ -379,20 +421,26 @@ SDK-backed widgets remain available after identity verification.
 ## Architecture
 
 A [Tauri 2](https://tauri.app) application: a Rust backend that does all the work,
-and an HTML/CSS/JS dashboard rendered in the OS webview.
+and an HTML/CSS/JS watchlist rendered in the OS webview.
 
 - **`src-tauri/` (Rust)** — every AWS call (via `aws-sdk-*` + `aws-config`), the
   read-only policy and structural guard, the audit log, credential/SSO handling,
   and settings/dashboard persistence. The UI reaches it through `#[tauri::command]`
   handlers — there is no separate sidecar process or RPC bridge.
-- **`frontend/` (vanilla JS, no build step)** — renders the dashboard, handles
-  layout and the settings/policy editor, and calls the backend via `invoke(...)`.
+- **`frontend/` (vanilla JS, no build step)** — renders the watchlist and calls
+  the backend via `invoke(...)`. One file per job, sharing one namespace:
+  `things.js` (thing model, storage mapping, migration), `watchlist.js` (list,
+  groups, selection, row states), `inspector.js` (drill-down and breadcrumb),
+  `commands.js` and `commandline.js` (the `:` parser, completion and results),
+  `keys.js` (key map and focus rules), `core.js` (bridge, request ownership,
+  result states, renderers), `panels.js` (settings, policy and audit panels),
+  `row-filter-worker.js` (table filtering) and `demo-bridge.js` (offline demo data).
   Opened directly in a browser, it falls back to mock data for an offline preview.
 
 ## Project layout
 
 ```
-frontend/    Vanilla HTML/CSS/JS dashboard (open index.html for the offline demo)
+frontend/    Vanilla HTML/CSS/JS watchlist (open index.html for the offline demo)
 src-tauri/   Tauri 2 (Rust) app — all AWS calls happen in-process
   src/aws/   Credentials/SSO context, config parsing, exact operation registry + policy
   src/widgets/  The compiled-in widgets

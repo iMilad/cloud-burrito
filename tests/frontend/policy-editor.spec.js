@@ -29,6 +29,7 @@ async function boot(page, options = {}) {
         case "ping": return { version: "synthetic" };
         case "settings_get": return { ...defaults, _settings: { defaults, allowed_regions: ["eu-west-1"], field_errors: {} } };
         case "dashboard_get": return { version: 1, tiles: [] };
+        case "watchlist_get": return { version: 1, things: [], _storage: { store: "watchlist", status: "loaded" } };
         case "aws_list_profiles": return { discovery_state: "missing_config", profiles: [] };
         case "aws_auth_status": return { has_context: false, logged_in: false, connection_state: "disconnected" };
         case "audit_history": return { ok: true, mode: "preserve", location: "/synthetic/audit.log",

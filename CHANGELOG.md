@@ -25,8 +25,28 @@ tag has been published for these changes.
   AWS identity status and the actual SSO-token countdown remain visible.
 - Investigation workspaces, bounded table rendering and explicit partial,
   unavailable and stale result states.
+- A keyboard-first watchlist of specific things from many accounts, each pinned
+  to its own profile, account and region, with an inspector that drills from a
+  failed run to its build log line.
+- A vim-style command line (`:pipe`, `:pkg`, `:logs`, `:stack`, `:insights`,
+  `:aws`, ...) whose results can be saved with `s`.
+- SSO token time for the selected thing's own profile.
 - Native candidate build paths and inspection receipts for macOS ARM64/Intel,
   Windows x64 and Ubuntu 22.04 x64. Windows/Linux device acceptance is pending.
+
+### Changed
+
+- The default-account dashboard is replaced. Existing dashboard widgets are
+  converted once into watchlist things; `dashboard.json` is read and never
+  written.
+- The synthetic browser benchmark measures the watchlist (fixture revision
+  p301-browser-v2). It no longer includes the old widget add/remove memory-cycle
+  series.
+
+### Removed
+
+- GridStack layout, Classic view, the Studio rail and overview, appearance
+  presets and contrast adjustment.
 
 ### Fixed
 

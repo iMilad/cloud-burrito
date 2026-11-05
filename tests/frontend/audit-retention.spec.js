@@ -57,7 +57,7 @@ async function boot(page, options = {}) {
   const fixture = { kind: "table", rows: 1, delayMs: 0, fixtureRevision: FIXTURE_REVISION, seed: FIXTURE_SEED };
   await page.addInitScript({ content: `(${installSyntheticBridge.toString()})(${JSON.stringify(fixture)});(${installAudit.toString()})(${JSON.stringify(options)});` });
   await page.goto("/");
-  await expect(page.locator("#connection-status")).toHaveAttribute("data-state", "verified");
+  await page.waitForFunction(() => document.body.dataset.ready === "true");
 }
 const calls = (page, command) => page.evaluate(command => window.__auditFixture.calls.filter(call => call.command === command), command);
 const queue = (page, pages) => page.evaluate(pages => window.__auditFixture.pages.push(...pages), pages);
