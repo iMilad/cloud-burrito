@@ -289,7 +289,68 @@
     return view;
   }
 
+  function stackView(thing, h, stackName = thing.inputs.stack_name) {
+    const view = {
+      title: stackName,
+      async render(v) { await h.core.fetchWidgetInto(v.host, "cfn-stack-detail", { stack_name: stackName }, thing.context); },
+      items: host => Array.from(host.querySelectorAll(".stack-detail-panel:not([hidden]) tbody tr")),
+      copy: n => view.host.querySelectorAll(".stack-detail-panel:not([hidden]) tbody tr")[n]?.querySelector(".stack-resource-physical")?.textContent || null,
+    };
+    return view;
+  }
+
+  function stacksSearchView(thing, h) {
+    const view = {
+      title: h.T.name(thing),
+      rows: [],
+      async render(v) {
+        const { widget, inputs } = h.T.rowRequest(thing);
+        const request = h.core.beginOwnedRequest(v.host, thing.context);
+        try {
+          const result = await h.core.fetchWidgetData(widget, inputs, v.host, thing.context, request);
+          if (!request.accept(result)) return;
+          view.rows = Array.isArray(result.rows) ? result.rows : [];
+          // Today's table renderer: at most 100 mounted rows per page, and its
+          // filter searches every row. Keeps large accounts fast.
+          h.core.renderTable(v.host, result, { rowKey: row => row.stack, filterEmptyText: "No stacks match this filter." });
+          if (!view.clickWired) {
+            view.clickWired = true;
+            v.host.addEventListener("click", event => {
+              const tr = event.target.closest?.("tbody > tr[data-source-row]");
+              if (!tr || event.target.closest("a, button, input")) return;
+              view.index = view.items(v.host).indexOf(tr);
+              view.open(view.index, h);
+            });
+          }
+        } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
+      },
+      // Only the rows of the current page are mounted; the index maps back to
+      // the full result through data-source-row.
+      items: host => Array.from(host.querySelectorAll("tbody > tr[data-source-row]")),
+      source: n => view.rows[Number(view.items(view.host)[n]?.dataset.sourceRow)] || null,
+      copy: n => view.source(n)?.stack || null,
+      open(n, { push }) { const s = view.source(n); if (s?.stack) push(stackView(thing, h, String(s.stack))); },
+    };
+    return view;
+  }
+
+  function lookupView(thing, h) {
+    const view = {
+      title: h.T.name(thing),
+      async render(v) {
+        const { widget, inputs } = h.T.rowRequest(thing);
+        await h.core.fetchWidgetInto(v.host, widget, inputs, thing.context);
+      },
+      items: host => Array.from(host.querySelectorAll(".lookup-row")),
+      copy: n => view.host.querySelectorAll(".lookup-row")[n]?.querySelector(".resource")?.textContent || null,
+    };
+    return view;
+  }
+
   register("pipeline", runsView);
+  register("stack", (thing, h) => stackView(thing, h));
+  register("stacks-search", stacksSearchView);
+  register("lookup", lookupView);
   register("logs", logsView);
   register("package", packagesView);
 

@@ -52,6 +52,15 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
         : { render: "table", mode: "list", columns: ["package", "latest_version", "last_published"], next_page_token: null,
           rows: [{ package: i.package_prefix, latest_version: "", last_published: "", versions: [], enrichment_state: "pending" }] },
       "codeartifact-package-version-history": i => ({ render: "codeartifact_version_history", versions: i.versions }),
+      "cfn-stack-detail": i => ({ render: "stack_detail", stack: i.stack_name, resources: [
+        { logical_id: "Table", type: "AWS::DynamoDB::Table", status: "UPDATE_FAILED", physical_id: `${i.stack_name}-table` }],
+        events: [{ time: "2026-11-02T12:05:00Z", logical_id: i.stack_name, type: "AWS::CloudFormation::Stack",
+          status: "UPDATE_ROLLBACK_COMPLETE", reason: "" }] }),
+      "cfn-stacks": i => ({ render: "table", columns: ["stack", "status", "resources", "last_updated"],
+        rows: [{ stack: `${i.name_prefix}one`, status: "UPDATE_COMPLETE", resources: 3, last_updated: "2026-11-02T10:00:00Z" },
+          { stack: `${i.name_prefix}two`, status: "CREATE_COMPLETE", resources: 5, last_updated: "2026-11-01T10:00:00Z" }] }),
+      "resource-lookup": i => ({ render: "reverse_lookup", query: i.query, scanned: 2,
+        matches: [{ arn: `arn:aws:lambda:eu-west-1:acct-a-fixture:function:${i.query}`, type: "lambda:function" }] }),
       "aws-cli": () => ({ render: "table", columns: ["value"], rows: [{ value: "synthetic-cli" }] }),
     };
     function respond(command, params) {
