@@ -1465,14 +1465,105 @@ async fn list_pipelines_scoped(wctx: &widgets::WidgetCtx) -> Value {
 }
 
 #[tauri::command]
-pub async fn aws_auth_status(state: State<'_, AppState>) -> Result<Value, String> {
-    final_diagnostics(&state, aws_auth_status_impl(&state).await).await
+pub async fn aws_auth_status(
+    state: State<'_, AppState>,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    final_diagnostics(
+        &state,
+        aws_auth_status_with(&state, params.unwrap_or_else(|| json!({}))).await,
+    )
+    .await
 }
 
+#[cfg(test)]
 async fn aws_auth_status_impl(state: &AppState) -> Result<Value, String> {
+    aws_auth_status_with(state, json!({})).await
+}
+
+async fn aws_auth_status_with(state: &AppState, params: Value) -> Result<Value, String> {
+    if let Some(error) = local_validation(state, "aws_auth_status", &params) {
+        return Ok(error);
+    }
     let mut request = RequestEnvelope::default().audited("aws_auth_status", &state.runtime);
-    let result = aws_auth_status_request(state, &mut request).await;
+    let result = if params.get("context").is_some() {
+        aws_auth_status_pinned(state, &params, &mut request).await
+    } else {
+        aws_auth_status_request(state, &mut request).await
+    };
     finish_request(request, result)
+}
+
+/// Status for one pinned thing. Uses the same verification and cache as its
+/// widget requests, reads only local SSO cache metadata, and never touches the
+/// top-bar connection state.
+async fn aws_auth_status_pinned(
+    state: &AppState,
+    params: &Value,
+    request: &mut RequestEnvelope,
+) -> Result<Value, String> {
+    let scope = &params["context"];
+    let mut out = json!({
+        "has_context": false, "logged_in": false, "profile": scope["profile"].clone(),
+        "account_id": scope["account_id"].clone(), "region": scope["region"].clone(),
+        "sso_session": Value::Null, "caller_arn": Value::Null, "needs_sso_login": false,
+        "expires_at": Value::Null, "sso_token_expires_at": Value::Null,
+        "read_only_guard_active": true, "error": Value::Null, "connection_state": "unverified",
+    });
+    let resolved = match resolve_widget_ctx(state, params) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            out["error"] = error["error"].clone();
+            out["error_type"] = error["error_type"].clone();
+            return Ok(out);
+        }
+    };
+    let policy = aws::policy::load(&state.runtime.paths).map_err(|e| e.message);
+    let session = match verify_request_context_owned(state, &resolved, &policy, Some(request)).await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            out["error"] = error
+                .get("error")
+                .or_else(|| error.get("reason"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            out["error_type"] = error.get("error_type").cloned().unwrap_or(Value::Null);
+            out["needs_sso_login"] =
+                json!(out["error"].as_str().is_some_and(aws::sso_login_required));
+            out["connection_state"] = json!("failed");
+            return Ok(out);
+        }
+    };
+    let backend = state.runtime.aws.clone();
+    let snapshot = session.snapshot.clone();
+    let sso_token_expiry = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || backend.sso_token_expiry(&snapshot)),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten();
+    if let Err(error) = validate_request_context(state, &resolved, &session) {
+        out["error_type"] = error["error_type"].clone();
+        out["error"] = error["error"].clone();
+        return Ok(out);
+    }
+    request.bind(&resolved.context, &session);
+    let format = aws_smithy_types::date_time::Format::DateTime;
+    out["has_context"] = json!(true);
+    out["logged_in"] = json!(true);
+    out["connection_state"] = json!("verified");
+    out["account_id"] = json!(session.identity.account_id);
+    out["sso_session"] = json!(session.snapshot.session_name);
+    out["caller_arn"] = json!(session.identity.arn);
+    out["expires_at"] = json!(aws_smithy_types::DateTime::from(session.expires_at)
+        .fmt(format)
+        .unwrap_or_default());
+    out["sso_token_expires_at"] = json!(sso_token_expiry
+        .and_then(|expiry| aws_smithy_types::DateTime::from(expiry).fmt(format).ok()));
+    Ok(out)
 }
 
 async fn aws_auth_status_request(

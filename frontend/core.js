@@ -117,6 +117,19 @@
       .join(" ");
   }
 
+  function formatRemaining(expiresAt) {
+    if (typeof expiresAt !== "string" || !expiresAt.trim()) return null;
+    const t = Date.parse(expiresAt);
+    if (Number.isNaN(t)) return null;
+    const diff = t - Date.now();
+    if (diff <= 0) return "expired";
+    const mins = Math.round(diff / 60000);
+    if (mins < 60) return `${mins}m left`;
+    const hours = Math.floor(mins / 60);
+    const remMins = mins - hours * 60;
+    return remMins === 0 ? `${hours}h left` : `${hours}h ${remMins}m left`;
+  }
+
   function tableHeaderLabel(column) {
     return displayName(column);
   }
@@ -1908,7 +1921,7 @@
     displayPreferenceKey, displayPreferences, markResultDetailsPreferenceChanged,
     resultDetailsPreferenceRevision: () => resultDetailsPreferenceRevision,
     $, el, clear, focusableWithin, focusSafely, announceResult,
-    CAMEL_WORD_SPLIT, displayName, tableHeaderLabel, breakableIdentifier,
+    CAMEL_WORD_SPLIT, displayName, formatRemaining, tableHeaderLabel, breakableIdentifier,
     isTauri, tauriInvoke, invoke, canInvoke, observeDiagnostics, contextOverrideFromElement,
     cancelOwnedRequest, cancelPendingWithin, invokeOwnedRequest, invalidateRequests, requestFailureLabel,
     beginOwnedRequest, fetchWidgetData, resultHostForRequest, beginResultRequest, validCoverage,

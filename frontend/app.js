@@ -5,7 +5,7 @@
   "use strict";
   const core = window.CloudBurritoCore;
   const {
-    $, el, clear, focusableWithin, focusSafely, announceResult, CAMEL_WORD_SPLIT, displayName, tableHeaderLabel,
+    $, el, clear, focusableWithin, focusSafely, announceResult, CAMEL_WORD_SPLIT, displayName, formatRemaining, tableHeaderLabel,
     breakableIdentifier, isTauri, tauriInvoke, observeDiagnostics, displayPreferenceKey, displayPreferences,
     contextOverrideFromElement, cancelOwnedRequest, cancelPendingWithin, invokeOwnedRequest, invalidateRequests,
     requestFailureLabel, beginOwnedRequest, fetchWidgetData, resultHostForRequest, beginResultRequest, validCoverage,
@@ -1912,19 +1912,6 @@
 
   // ===== Auth status pill (Tauri only) =====
   let authStatusTimer = null;
-
-  function formatRemaining(expiresAt) {
-    if (typeof expiresAt !== "string" || !expiresAt.trim()) return null;
-    const t = Date.parse(expiresAt);
-    if (Number.isNaN(t)) return null;
-    const diff = t - Date.now();
-    if (diff <= 0) return "expired";
-    const mins = Math.round(diff / 60000);
-    if (mins < 60) return `${mins}m left`;
-    const hours = Math.floor(mins / 60);
-    const remMins = mins - hours * 60;
-    return remMins === 0 ? `${hours}h left` : `${hours}h ${remMins}m left`;
-  }
 
   // Cached aws_auth_status result so the Identity panel can render without
   // re-issuing an RPC if it was just refreshed.

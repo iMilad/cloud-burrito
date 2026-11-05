@@ -35,7 +35,17 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
     let p = object(params)?;
     match command {
         "ping" | "settings_get" | "dashboard_get" | "watchlist_get" | "aws_list_profiles"
-        | "aws_auth_status" | "policy_get" | "cli_availability" => keys(p, &[]),
+        | "policy_get" | "cli_availability" => keys(p, &[]),
+        "aws_auth_status" => {
+            keys(p, &["context"])?;
+            if let Some(context) = p.get("context") {
+                context_shape(context)?;
+                if context.get("mode").and_then(Value::as_str) != Some("pinned") {
+                    return Err("Identity status needs a pinned account context");
+                }
+            }
+            Ok(())
+        }
         "aws_set_account" => {
             keys(
                 p,
@@ -724,6 +734,21 @@ fn json_budget(value: &Value) -> Check {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn auth_status_accepts_only_an_optional_pinned_context() {
+        let pinned = json!({"context": {"mode": "pinned", "profile": "demo-fixture", "account_id": "acct-a-fixture", "region": "eu-west-1"}});
+        assert!(validate("aws_auth_status", &json!({})).is_ok());
+        assert!(validate("aws_auth_status", &pinned).is_ok());
+        for params in [
+            json!({"context": {"mode": "inherit"}}),
+            json!({"context": {"profile": "demo-fixture", "account_id": "acct-a-fixture", "region": "eu-west-1"}}),
+            json!({"context": {"mode": "pinned", "profile": "demo-fixture"}}),
+            json!({"account_override": pinned["context"].clone()}),
+        ] {
+            assert!(validate("aws_auth_status", &params).is_err(), "{params}");
+        }
+    }
+
     use super::*;
     use serde_json::json;
 

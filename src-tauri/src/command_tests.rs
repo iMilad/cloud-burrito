@@ -2757,3 +2757,41 @@ fn watchlist_commands_round_trip_and_reject_invalid_things() {
     fixture.aws.assert_no_resolution();
     fixture.no_process();
 }
+
+#[tokio::test]
+async fn pinned_auth_status_reports_only_that_account_and_leaves_the_top_bar_alone() {
+    let fixture = Fixture::new();
+    fixture.aws.ready(
+        "demo-b",
+        "CB_SYNTHETIC_B_STATUS",
+        ACCOUNT_B,
+        "principal-b",
+        3000,
+    );
+    fixture.aws.token_expiries.lock().insert(
+        "synthetic-session".into(),
+        UNIX_EPOCH + Duration::from_secs(2000),
+    );
+    let status = aws_auth_status_with(&fixture.state, pinned("demo-b", ACCOUNT_B))
+        .await
+        .unwrap();
+    assert_eq!(status["logged_in"], true, "{status}");
+    assert_eq!(status["has_context"], true);
+    assert_eq!(status["account_id"], ACCOUNT_B);
+    assert_eq!(status["sso_token_expires_at"], "1970-01-01T00:33:20Z");
+    assert_eq!(status["_request"]["profile"], "demo-b");
+    assert!(fixture.state.current_ctx().is_none());
+    let again = aws_auth_status_with(&fixture.state, pinned("demo-b", ACCOUNT_B))
+        .await
+        .unwrap();
+    assert_eq!(again["logged_in"], true);
+    assert_eq!(fixture.aws.credential_calls.load(Ordering::SeqCst), 1);
+    let invalid = aws_auth_status_with(&fixture.state, json!({"context": {"mode": "inherit"}}))
+        .await
+        .unwrap();
+    assert_eq!(invalid["error_type"], "InvalidRequest");
+    assert_no_handoff_secrets(&fixture, &status, &["CB_SYNTHETIC_B_STATUS"]);
+    // The top-bar form is unchanged.
+    let top = aws_auth_status_impl(&fixture.state).await.unwrap();
+    assert_eq!(top["has_context"], false);
+}

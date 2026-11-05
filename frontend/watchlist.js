@@ -265,6 +265,36 @@
     }
   }
 
+  let ssoSeq = 0, ssoTimer = null, ssoShown = null;
+  function showSso(thing, info) {
+    const node = $("#wl-sso");
+    ssoShown = thing && info ? { thing, info } : null;
+    if (!thing || !info?.has_context) {
+      node.hidden = !info?.needs_sso_login;
+      node.textContent = info?.needs_sso_login ? `SSO sign in needed for ${info.profile}` : "";
+      return;
+    }
+    node.hidden = false;
+    node.textContent = `SSO for ${thing.context.profile}: ${core.formatRemaining(info.sso_token_expires_at) || "expiry unknown"}`;
+    node.title = "Remaining lifetime of the cached SSO token for this profile. Account credentials expire separately.";
+  }
+  function scheduleSso(thing) {
+    clearTimeout(ssoTimer);
+    if (!thing || thing.unsaved || !core.canInvoke()) return;
+    ssoTimer = setTimeout(async () => {
+      const seq = ++ssoSeq;
+      try {
+        const info = await call("aws_auth_status", { context: thing.context });
+        if (seq !== ssoSeq) return;
+        const meta = info?._request;
+        const matches = meta && ["profile", "account_id", "region"].every(key => meta[key] === thing.context[key]);
+        showSso(matches ? thing : null, info);
+      } catch (_) { if (seq === ssoSeq) showSso(null, null); }
+    }, 300);
+  }
+  // Local repaint of the countdown only; this timer never calls AWS.
+  setInterval(() => { if (ssoShown) showSso(ssoShown.thing, ssoShown.info); }, 60000);
+
   function select(id, { focus = true } = {}) {
     state.selectedId = id;
     for (const node of document.querySelectorAll("#wl-list .wl-row")) {
@@ -273,7 +303,7 @@
       node.tabIndex = on ? 0 : -1;
     }
     if (focus && state.focus === "list") rowEl(id)?.focus({ preventScroll: false });
-    window.CloudBurritoWatchlist?.onSelect?.(selectedThing());
+    scheduleSso(selectedThing());
   }
 
   function moveSelection(to) {
@@ -647,6 +677,6 @@
   }
 
   window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList, renderKeys, appCommands,
-    save, notice, call, form, openForm, inspector: null, onSelect: null };
+    save, notice, call, form, openForm, inspector: null };
   document.addEventListener("DOMContentLoaded", boot);
 })();

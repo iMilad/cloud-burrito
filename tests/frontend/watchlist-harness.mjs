@@ -77,6 +77,10 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
           _storage: { store: "settings", status: "loaded" } };
         case "aws_list_profiles": return { ok: true, allowed_regions: ["eu-west-1", "us-east-1"],
           profiles: profiles.map(p => ({ name: p.profile, account_id: p.account_id, region: p.region, eligibility: "supported_sso" })) };
+        case "aws_auth_status": return { has_context: true, logged_in: true, connection_state: "verified",
+          profile: params.context?.profile, account_id: params.context?.account_id, region: params.context?.region,
+          sso_token_expires_at: new Date(Date.now() + (params.context?.profile === "demo-b" ? 3 : 7) * 3600000 + 60000).toISOString(),
+          _request: meta(params) };
         case "watchlist_get": return { version: 1, things: structuredClone(saved), _storage: { store: "watchlist", status } };
         case "watchlist_set":
           if (window.__watchlistHarness.failSet) { window.__watchlistHarness.failSet = false;
