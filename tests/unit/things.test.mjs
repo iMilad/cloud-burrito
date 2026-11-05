@@ -85,3 +85,32 @@ test('create numbers order per group, not per kind', () => {
   things.push(T.create('query', ctx, { log_group: '/g', query: 'fields @timestamp', range_seconds: 3600 }, things));
   assert.deepEqual(things.map(t => t.order), [0, 1, 2]);
 });
+
+test('old tiles become pinned things, inherited tiles use the default profile, empty tiles are skipped', () => {
+  const T = load();
+  const env = { defaultProfile: 'demo-a', defaultRegion: 'eu-west-1', allowedRegions: ['eu-west-1', 'us-east-1'],
+    profiles: [{ name: 'demo-a', account_id: 'acct-a-fixture', region: 'eu-west-1' }] };
+  const pinB = { profile: 'demo-b', account_id: 'acct-b-fixture', region: 'eu-west-1' };
+  const tiles = [
+    { id: 'pipeline-runs', widget: 'pipeline-runs', x: 0, y: 0, w: 4, h: 3, config: { inputs: { pinned_pipelines: [{ ...pinB, pipeline_name: 'synthetic-pipe' }, { ...pinB, pipeline_name: 'synthetic-pipe' }] } } },
+    { id: 'codeartifact-packages', widget: 'codeartifact-packages', x: 0, y: 3, w: 6, h: 4, config: { context: { mode: 'inherit' }, inputs: { domain: 'd', repository: 'r', package_prefix: 'acme', max_packages: 50 } } },
+    { id: 'aws-cli:1', x: 0, y: 7, w: 6, h: 4, config: { inputs: { command: 'aws sts get-caller-identity', pinned_cli_commands: [{ id: 'x', ...pinB, command: 'aws cloudformation list-stacks' }] } } },
+    { id: 'cfn-stacks', widget: 'cfn-stacks', x: 6, y: 0, w: 6, h: 3, config: {} },
+  ];
+  const result = T.migrateTiles(tiles, env);
+  assert.equal(result.converted, 3);
+  assert.equal(result.skippedEmpty, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.things.map(t => [t.kind, t.context.profile, T.name(t)]))), [
+    ['pipeline', 'demo-b', 'synthetic-pipe'],
+    ['package', 'demo-a', 'acme'],
+    ['cli', 'demo-b', 'aws cloudformation list-stacks'],
+    ['cli', 'demo-a', 'aws sts get-caller-identity'],
+  ]);
+  const noDefault = T.migrateTiles(tiles, { ...env, defaultProfile: '' });
+  // The inherited CodeArtifact tile cannot get an account; the CLI tile still
+  // converts its pinned command, so it counts as converted.
+  assert.equal(noDefault.skippedNoAccount, 1);
+  assert.equal(noDefault.converted, 2);
+  assert.equal(noDefault.things.filter(t => t.context.profile === 'demo-a').length, 0);
+  assert.equal(T.migrateTiles([tiles[1]], { ...env, defaultProfile: '' }).skippedNoAccount, 1);
+});

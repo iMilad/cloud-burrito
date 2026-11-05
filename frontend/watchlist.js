@@ -570,6 +570,27 @@
     actions[action]();
   });
 
+  async function migrateIfNeeded(loaded) {
+    if (loaded?._storage?.status !== "missing") return;
+    let dashboard;
+    try { dashboard = await call("dashboard_get"); } catch (_) { return; }
+    const tiles = Array.isArray(dashboard?.tiles) ? dashboard.tiles : [];
+    if (!tiles.length || dashboard.ok === false) return;
+    const result = T.migrateTiles(tiles, { defaultProfile: state.settings?.default_profile || "", profiles: state.profiles,
+      allowedRegions: state.allowedRegions, defaultRegion: state.settings?.default_region || "" });
+    const skipped = result.skippedNoAccount
+      ? `${result.skippedNoAccount} widget${result.skippedNoAccount === 1 ? " needs" : "s need"} an account. Set a default profile in Settings, then add ${result.skippedNoAccount === 1 ? "it" : "them"} with a.`
+      : "";
+    if (!result.things.length) { if (skipped) notice(skipped); return; }
+    const kept = result.things.slice(0, 200);
+    const left = result.things.length - kept.length;
+    state.things = kept;
+    await save();
+    notice([`Converted ${result.converted} widget${result.converted === 1 ? "" : "s"} into ${kept.length} thing${kept.length === 1 ? "" : "s"}.`,
+      "Your old dashboard file was not changed.",
+      left ? `${left} more did not fit, because the watchlist holds at most 200 things.` : "", skipped].filter(Boolean).join(" "));
+  }
+
   async function boot() {
     $("#wl-mode").hidden = core.isTauri;
     if (!core.isTauri) $("#wl-mode").textContent = "Demo, sample data";
@@ -616,7 +637,7 @@
     state.things = raw.map(T.normalize).filter(Boolean);
     if (state.things.length !== raw.length) notice(`${raw.length - state.things.length} saved things could not be read and were skipped.`);
     state.storageReady = true;
-    await window.CloudBurritoWatchlist.beforeFirstRender?.(loaded);
+    await migrateIfNeeded(loaded);
     renderList();
     setFocus("list");
     refreshAll();
@@ -624,6 +645,6 @@
   }
 
   window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList, renderKeys, appCommands,
-    save, notice, call, form, openForm, inspector: null, beforeFirstRender: null, onSelect: null };
+    save, notice, call, form, openForm, inspector: null, onSelect: null };
   document.addEventListener("DOMContentLoaded", boot);
 })();

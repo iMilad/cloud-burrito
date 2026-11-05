@@ -211,6 +211,58 @@
     return things.map(t => ({ id: t.id, kind: t.kind, context: { ...t.context }, inputs: { ...t.inputs }, order: t.order }));
   }
 
-  root.CloudBurritoThings = { GROUPS, KINDS, inputsFor, normalize, create, name, rowRequest, summarize, statusTone,
+  function migrateTiles(tiles, env = {}) {
+    const things = [];
+    const seen = new Set();
+    let converted = 0, skippedNoAccount = 0, skippedEmpty = 0;
+    const profileContext = name => {
+      const p = (env.profiles || []).find(x => x.name === name);
+      if (!p) return null;
+      const region = (env.allowedRegions || []).includes(p.region) ? p.region : env.defaultRegion;
+      return region ? { mode: "pinned", profile: p.name, account_id: p.account_id, region } : null;
+    };
+    const add = (kind, context, inputs) => {
+      const probe = normalize({ id: "probe", kind, context, inputs, order: 0 });
+      if (!probe) return false;
+      const key = JSON.stringify([kind, probe.context, probe.inputs]);
+      if (!seen.has(key)) { seen.add(key); things.push(create(kind, probe.context, probe.inputs, things)); }
+      return true;
+    };
+    for (const tile of Array.isArray(tiles) ? tiles : []) {
+      if (!tile || typeof tile !== "object") continue;
+      const widget = String(tile.widget || String(tile.id || "").split(":")[0]);
+      const config = tile.config && typeof tile.config === "object" ? tile.config : {};
+      const inputs = config.inputs && typeof config.inputs === "object" ? config.inputs : {};
+      const raw = config.context || config.account_override;
+      const own = raw && (raw.mode === "pinned" || !raw.mode && raw.profile) ? pinned({ ...raw, mode: "pinned" }) : null;
+      const tileContext = own || (env.defaultProfile ? profileContext(env.defaultProfile) : null);
+      let made = 0, needsAccount = false;
+      const want = (kind, context, values) => {
+        if (!context) { needsAccount = true; return; }
+        if (add(kind, context, values)) made++;
+      };
+      const pins = key => Array.isArray(inputs[key]) ? inputs[key] : [];
+      switch (widget) {
+        case "pipeline-runs": pins("pinned_pipelines").forEach(pin => want("pipeline", pinned({ ...pin, mode: "pinned" }), { pipeline_name: pin.pipeline_name })); break;
+        case "aws-cli":
+          pins("pinned_cli_commands").forEach(pin => want("cli", pinned({ ...pin, mode: "pinned" }), { command: pin.command }));
+          if (inputs.command) want("cli", tileContext, { command: inputs.command });
+          break;
+        case "codeartifact-packages": if (inputs.domain && inputs.repository && inputs.package_prefix) want("package", tileContext, inputs); break;
+        case "logs-insights": if (inputs.log_group && inputs.query) want("query", tileContext, inputs); break;
+        case "errors-by-stack": want("errors", tileContext, inputs); break;
+        case "cfn-stacks": if (inputs.name_prefix || Array.isArray(inputs.status_filter) && inputs.status_filter.length) want("stacks-search", tileContext, inputs); break;
+        case "resource-lookup": if (inputs.query) want("lookup", tileContext, inputs); break;
+        case "log-tail": case "cloudwatch-logs":
+          if (inputs.log_group) want("logs", tileContext, { log_group: inputs.log_group, source: widget === "log-tail" ? "lambda" : "group" });
+          break;
+        default: break;
+      }
+      if (made) converted++; else if (needsAccount) skippedNoAccount++; else skippedEmpty++;
+    }
+    return { things, converted, skippedNoAccount, skippedEmpty };
+  }
+
+  root.CloudBurritoThings = { GROUPS, KINDS, inputsFor, normalize, create, name, rowRequest, migrateTiles, summarize, statusTone,
     groupThings, move, toStored, words };
 })(typeof window !== "undefined" ? window : globalThis);
