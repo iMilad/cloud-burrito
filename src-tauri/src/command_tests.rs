@@ -2730,3 +2730,30 @@ async fn cached_detail_commands_isolate_account_profile_and_region() {
         fixture.no_process();
     }
 }
+
+#[test]
+fn watchlist_commands_round_trip_and_reject_invalid_things() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        watchlist_get_impl(&fixture.state)["_storage"]["status"],
+        "missing"
+    );
+    let thing = json!({"id": "pipe-1", "kind": "pipeline", "order": 0,
+        "context": {"mode": "pinned", "profile": "demo-b", "account_id": ACCOUNT_B, "region": "us-east-1"},
+        "inputs": {"pipeline_name": "synthetic-pipeline"}});
+    let saved = watchlist_set_impl(&fixture.state, json!({"things": [thing.clone()]}));
+    assert_eq!(saved["_storage"]["status"], "saved", "{saved}");
+    assert_eq!(watchlist_get_impl(&fixture.state)["things"][0], thing);
+    let rejected = watchlist_set_impl(&fixture.state, json!({"things": [{"id": "x"}]}));
+    assert_eq!(rejected["error_type"], "InvalidRequest");
+    assert_eq!(watchlist_get_impl(&fixture.state)["things"][0], thing);
+    // The old dashboard file is never written by watchlist commands.
+    assert!(!fixture
+        .state
+        .runtime
+        .paths
+        .data_file("dashboard.json")
+        .exists());
+    fixture.aws.assert_no_resolution();
+    fixture.no_process();
+}

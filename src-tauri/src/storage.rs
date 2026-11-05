@@ -52,6 +52,7 @@ impl StorageError {
         let store = match store {
             "settings" => "settings",
             "dashboard" => "dashboard",
+            "watchlist" => "watchlist",
             _ => "application",
         };
         json!({"ok":false, "error_type":error_type, "error":message,

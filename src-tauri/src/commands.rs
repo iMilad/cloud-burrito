@@ -1071,6 +1071,33 @@ fn dashboard_set_impl(state: &AppState, params: Value) -> Value {
     )
 }
 
+#[tauri::command]
+pub async fn watchlist_get(state: State<'_, AppState>) -> Result<Value, String> {
+    final_diagnostics(&state, Ok(watchlist_get_impl(&state))).await
+}
+
+fn watchlist_get_impl(state: &AppState) -> Value {
+    state.runtime.with_diagnostics(
+        crate::watchlist::load(&state.runtime.storage)
+            .unwrap_or_else(|error| error.response("watchlist")),
+    )
+}
+
+#[tauri::command]
+pub async fn watchlist_set(state: State<'_, AppState>, params: Value) -> Result<Value, String> {
+    final_diagnostics(&state, Ok(watchlist_set_impl(&state, params))).await
+}
+
+fn watchlist_set_impl(state: &AppState, params: Value) -> Value {
+    if let Some(error) = local_validation(state, "watchlist_set", &params) {
+        return error;
+    }
+    state.runtime.with_diagnostics(
+        crate::watchlist::save(&state.runtime.storage, &params["things"])
+            .unwrap_or_else(|error| error.response("watchlist")),
+    )
+}
+
 /// Flush after the final request event, then refresh the sticky diagnostics.
 async fn final_diagnostics(
     state: &AppState,

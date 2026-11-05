@@ -122,7 +122,12 @@ fn archive_name(name: &str) -> bool {
 pub(crate) fn secure_app_storage(paths: &AppPaths) -> io::Result<()> {
     let root = paths.data_dir();
     ensure_directory(root)?;
-    for name in ["settings.json", "policy.yaml", "dashboard.json"] {
+    for name in [
+        "settings.json",
+        "policy.yaml",
+        "dashboard.json",
+        "watchlist.json",
+    ] {
         secure_existing_file(&root.join(name))?;
     }
     for name in audit_names() {
@@ -166,10 +171,15 @@ mod tests {
         for directory in [root, &archive] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let mut files: Vec<_> = ["settings.json", "policy.yaml", "dashboard.json"]
-            .into_iter()
-            .map(|name| root.join(name))
-            .collect();
+        let mut files: Vec<_> = [
+            "settings.json",
+            "policy.yaml",
+            "dashboard.json",
+            "watchlist.json",
+        ]
+        .into_iter()
+        .map(|name| root.join(name))
+        .collect();
         files.extend(audit_names().flat_map(|name| [root.join(&name), archive.join(name)]));
         for file in &files {
             legacy_file(file);
