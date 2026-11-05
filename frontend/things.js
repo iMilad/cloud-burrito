@@ -97,7 +97,8 @@
   }
 
   function create(kind, context, inputs, existing = []) {
-    const order = existing.filter(t => t.kind === kind).reduce((max, t) => Math.max(max, t.order), -1) + 1;
+    const group = KINDS[kind].group;
+    const order = existing.filter(t => KINDS[t.kind].group === group).reduce((max, t) => Math.max(max, t.order), -1) + 1;
     const random = Math.random().toString(36).slice(2, 8);
     return normalize({ id: `${kind}-${Date.now().toString(36)}-${random}`, kind, context, inputs, order });
   }

@@ -76,3 +76,12 @@ test('groups, create and move keep a stable order inside each kind', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(T.groupThings(things)[0].things.map(t => t.inputs.pipeline_name))), ['b', 'a']);
   assert.deepEqual(Object.keys(T.toStored(things)[0]).sort(), ['context', 'id', 'inputs', 'kind', 'order']);
 });
+
+test('create numbers order per group, not per kind', () => {
+  const T = load();
+  let things = [];
+  things.push(T.create('query', ctx, { log_group: '/g', query: 'fields @message', range_seconds: 3600 }, things));
+  things.push(T.create('cli', ctx, { command: 'aws sts get-caller-identity' }, things));
+  things.push(T.create('query', ctx, { log_group: '/g', query: 'fields @timestamp', range_seconds: 3600 }, things));
+  assert.deepEqual(things.map(t => t.order), [0, 1, 2]);
+});
