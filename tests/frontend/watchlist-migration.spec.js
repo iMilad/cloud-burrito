@@ -46,3 +46,54 @@ test("a failed save after conversion shows the save error, not a success notice"
   await expect(page.locator("#wl-notice")).not.toContainText("Converted");
   expect(await saved(page)).toEqual([]);
 });
+
+const UNREADABLE = "Your watchlist could not be read, so changes are not saved. Fix or move the file, then restart the app.";
+
+test("an unreadable watchlist is never overwritten by the add form", async ({ page }) => {
+  await bootWatchlist(page, { storage: "failed", things: [] });
+  await expect(page.locator(".wl-empty h2")).toHaveText("Your watchlist could not be read");
+  await page.keyboard.press("a");
+  await expect(page.locator("#wl-notice")).toHaveText(UNREADABLE);
+  await expect(page.locator("#wl-form")).toBeHidden();
+  // Even a form that is already open refuses to save.
+  await page.evaluate(() => {
+    const W = window.CloudBurritoWatchlist;
+    W.state.storageReady = true;
+    W.openForm(null);
+    W.state.storageReady = false;
+  });
+  const form = page.locator("#wl-form");
+  await form.getByLabel("Pipeline name").fill("synthetic-new");
+  await form.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("#wl-notice")).toHaveText(UNREADABLE);
+  expect(await calls(page, "watchlist_set")).toEqual([]);
+});
+
+test("an unreadable watchlist is never overwritten by s on a command result", async ({ page }) => {
+  await bootWatchlist(page, { storage: "failed", things: [] });
+  await expect(page.locator(".wl-empty h2")).toHaveText("Your watchlist could not be read");
+  await page.keyboard.press(":");
+  const input = page.getByRole("combobox", { name: "Command" });
+  await input.fill("pipe synthetic-x @demo-a");
+  await input.press("Enter");
+  await expect(page.locator(".wl-crumb")).toContainText("not saved");
+  await page.keyboard.press("s");
+  await expect(page.locator("#wl-notice")).toHaveText(UNREADABLE);
+  expect(await calls(page, "watchlist_set")).toEqual([]);
+});
+
+test("nothing can be added while the first conversion runs, so it is never lost", async ({ page }) => {
+  await page.addInitScript(() => {
+    // Hold the conversion read once the harness is installed.
+    const wait = setInterval(() => { if (window.__watchlistHarness) { clearInterval(wait); window.__watchlistHarness.hold("dashboard_get"); } }, 0);
+  });
+  const booted = bootWatchlist(page, { storage: "missing", tiles });
+  await page.waitForFunction(() => window.__watchlistHarness?.calls.some(c => c.command === "dashboard_get"));
+  await page.keyboard.press("a");
+  await expect(page.locator("#wl-notice")).toHaveText(UNREADABLE);
+  await expect(page.locator("#wl-form")).toBeHidden();
+  await page.evaluate(() => window.__watchlistHarness.release("dashboard_get"));
+  await booted;
+  await expect(page.locator(".wl-row")).toHaveCount(2);
+  expect(await calls(page, "watchlist_set")).toHaveLength(1);
+});

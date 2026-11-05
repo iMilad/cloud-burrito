@@ -78,6 +78,7 @@
   }
 
   function saveShown() {
+    if (W.storageBlocked()) return;
     const shown = W.inspector.current()?.thing;
     if (!shown?.unsaved) { W.notice("Only command results can be saved with s."); return; }
     if (W.state.things.length >= 200) { W.notice("The watchlist is full (200 things). Remove one, then try again."); return; }

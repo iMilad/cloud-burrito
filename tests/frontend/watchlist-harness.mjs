@@ -98,7 +98,9 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
           profile: params.context?.profile, account_id: params.context?.account_id, region: params.context?.region,
           sso_token_expires_at: new Date(Date.now() + (params.context?.profile === "demo-b" ? 3 : 7) * 3600000 + 60000).toISOString(),
           _request: meta(params) };
-        case "watchlist_get": return { version: 1, things: structuredClone(saved), _storage: { store: "watchlist", status } };
+        case "watchlist_get": return status === "failed"
+          ? { ok: false, error_type: "StorageInvalid", error: "Synthetic unreadable watchlist", _storage: { store: "watchlist", status } }
+          : { version: 1, things: structuredClone(saved), _storage: { store: "watchlist", status } };
         case "watchlist_set":
           if (window.__watchlistHarness.failSet) { window.__watchlistHarness.failSet = false;
             return { ok: false, error_type: "StorageWriteFailed", _storage: { store: "watchlist", status: "failed" } }; }

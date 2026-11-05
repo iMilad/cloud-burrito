@@ -257,7 +257,16 @@
     for (const group of T.groupThings(state.things)) for (const thing of group.things) loadRow(thing);
   }
 
-  async function save() {
+  // An unreadable or still-loading watchlist file is never replaced.
+  function storageBlocked() {
+    if (state.storageReady) return false;
+    notice("Your watchlist could not be read, so changes are not saved. Fix or move the file, then restart the app.");
+    return true;
+  }
+
+  function save() { return state.storageReady ? write() : Promise.resolve(false); }
+
+  async function write() {
     const seq = ++state.saveSeq;
     try {
       const result = await call("watchlist_set", { things: T.toStored(state.things) });
@@ -506,6 +515,7 @@
   }
 
   function openForm(thing, preset = null) {
+    if (storageBlocked()) return;
     formThing = thing;
     const source = thing || preset;
     const dialog = $("#wl-form");
@@ -534,6 +544,7 @@
 
   function submitForm(event) {
     event.preventDefault();
+    if (storageBlocked()) return;
     const kind = $("#wl-form-kind").value;
     if ($("#wl-form-profile").selectedOptions[0]?.dataset.missing) { showFormError("Choose a profile from your AWS config."); return; }
     if (!state.allowedRegions.includes($("#wl-form-region").value)) { showFormError("Choose a supported region."); return; }
@@ -656,7 +667,8 @@
     const kept = result.things.slice(0, 200);
     const left = result.things.length - kept.length;
     state.things = kept;
-    if (!await save()) return;
+    // Storage is not ready yet: this first write of the converted list is the only one allowed.
+    if (!await write()) return;
     notice([`Converted ${result.converted} widget${result.converted === 1 ? "" : "s"} into ${kept.length} thing${kept.length === 1 ? "" : "s"}.`,
       "Your old dashboard file was not changed.",
       left ? `${left} more did not fit, because the watchlist holds at most 200 things.` : "", skipped].filter(Boolean).join(" "));
@@ -725,8 +737,9 @@
     const raw = Array.isArray(loaded.things) ? loaded.things : [];
     state.things = raw.map(T.normalize).filter(Boolean);
     if (state.things.length !== raw.length) notice(`${raw.length - state.things.length} saved things could not be read and were skipped.`);
-    state.storageReady = true;
     await migrateIfNeeded(loaded);
+    // Only now: a thing added while the conversion ran would be replaced by it.
+    state.storageReady = true;
     renderList();
     setFocus("list");
     refreshAll();
@@ -734,6 +747,6 @@
   }
 
   window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList, renderKeys, appCommands,
-    save, notice, call, form, openForm, inspector: null, clearSso: () => scheduleSso(null) };
+    save, storageBlocked, notice, call, form, openForm, inspector: null, clearSso: () => scheduleSso(null) };
   document.addEventListener("DOMContentLoaded", boot);
 })();
