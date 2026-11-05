@@ -60,3 +60,52 @@ test("the demo page works without the desktop bridge", async ({ page }) => {
   await expect(page.locator(".wl-row")).not.toHaveCount(0);
   await expect(page.locator('.wl-row[data-thing-id="demo-pipe-1"] .wl-state-text')).toHaveText("Failed");
 });
+
+test("keyboard drills from a failed run to the failing build log line and back", async ({ page }) => {
+  await bootWatchlist(page, { things: [failing] });
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".wl-crumb")).toHaveText("synthetic-failing");
+  await expect(page.locator(".wl-item")).toHaveCount(2);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".wl-crumb")).toContainText("run exec-0042");
+  await expect(page.locator(".exec-action-block.wl-current")).toContainText("Integration tests");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".wl-crumb strong")).toHaveText("Build log");
+  await expect(page.locator(".log-line")).toHaveCount(4);
+  await page.keyboard.press("n");
+  await expect(page.locator(".log-line.wl-current")).toContainText("FAILED synthetic_test");
+  await page.keyboard.press("n");
+  await expect(page.locator(".log-line.wl-current")).toContainText("Phase complete: FAILED");
+  const build = (await calls(page, "widget_fetch", "codebuild-log"))[0];
+  expect(build.params.inputs).toEqual({ build_id: "synthetic-build:2" });
+  expect(build.params.context.profile).toBe("demo-a");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".wl-crumb")).toHaveText("synthetic-failing");
+  await page.keyboard.press("Escape");
+  await expect(row(page, "p-fail")).toBeFocused();
+});
+
+test("o opens only reviewed console links", async ({ page }) => {
+  await bootWatchlist(page, { things: [failing] });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".exec-action-block.wl-current")).toContainText("Integration tests");
+  await page.keyboard.press("o");
+  await expect(page.locator("#wl-notice")).toHaveText("No AWS console link is available here.");
+  await expect(page.locator(".exec-action-block").first().locator("a.exec-link"))
+    .toHaveAttribute("href", /^https:\/\/eu-west-1\.console\.aws\.amazon\.com\//);
+});
+
+test("package history opens with Enter and y copies the selected version", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:4173" });
+  await bootWatchlist(page, { things: [pkg] });
+  await page.keyboard.press("Enter");
+  await expect(page.locator("tr.expandable")).toHaveCount(1);
+  await page.keyboard.press("y");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("4.12.0");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".codeartifact-version-value")).toHaveText(["4.12.0", "4.11.3"]);
+  const history = (await calls(page, "widget_fetch", "codeartifact-package-version-history"))[0];
+  expect(history.params.context.profile).toBe("demo-b");
+});

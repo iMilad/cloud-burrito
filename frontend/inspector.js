@@ -117,5 +117,129 @@
       current: () => thing ? { thing, depth: stack.length } : null };
   }
 
+  const shortId = id => { const tail = String(id || "").replace(/^exec-/, ""); return tail ? `exec-${tail.slice(-4)}` : ""; };
+
+  function runsView(thing, h) {
+    const view = {
+      title: thing.inputs.pipeline_name,
+      rows: [],
+      async render(v) {
+        const request = h.core.beginOwnedRequest(v.host, thing.context);
+        try {
+          const result = await h.core.fetchWidgetData("pipeline-runs", { pipeline_name: thing.inputs.pipeline_name, max_results: 10 },
+            v.host, thing.context, request);
+          if (!request.accept(result)) return;
+          view.rows = Array.isArray(result.rows) ? result.rows : [];
+          h.core.renderWithResultState(v.host, result, () => {
+            h.core.clear(v.host);
+            if (result.render !== "table") { h.core.dispatchRenderContent(v.host, result); return; }
+            if (!view.rows.length) {
+              v.host.append(h.el("p", { class: "wl-hint" }, h.core.resultFailure(result)
+                ? result.error || "Runs could not be loaded. Press r to retry." : "No runs were returned for this pipeline."));
+              return;
+            }
+            v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Runs" }, ...view.rows.map((run, n) =>
+              h.el("li", { class: "wl-item", role: "option", tabindex: "-1", "data-index": String(n) },
+                h.el("span", { class: `wl-dot wl-tone-${h.T.statusTone(run.status)}`, "aria-hidden": "true" }),
+                h.el("code", { class: "wl-id" }, run.execution_id),
+                h.el("span", { class: "wl-muted" }, run.trigger || ""),
+                h.el("span", { class: `badge ${h.core.statusToBadge(run.status)}` }, h.core.formatStatusLabel(run.status)),
+                h.el("span", { class: "wl-muted" }, h.core.formatDisplayValue("last_updated", run.last_updated).text)))));
+            v.host.querySelectorAll(".wl-item").forEach(item => item.addEventListener("click", () => {
+              view.index = Number(item.dataset.index);
+              view.open(view.index, h);
+            }));
+          });
+        } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
+      },
+      items: host => Array.from(host.querySelectorAll(".wl-item")),
+      copy: n => view.rows[n]?.execution_id || null,
+      open(n, { push }) { const run = view.rows[n]; if (run) push(actionsView(thing, run, h)); },
+    };
+    return view;
+  }
+
+  function actionsView(thing, run, h) {
+    const view = {
+      title: `run ${shortId(run.execution_id)}`,
+      actions: [],
+      async render(v) {
+        const request = h.core.beginOwnedRequest(v.host, thing.context);
+        try {
+          const result = await h.core.fetchWidgetData("pipeline-execution-detail",
+            { pipeline_name: thing.inputs.pipeline_name, execution_id: run.execution_id }, v.host, thing.context, request);
+          if (!request.accept(result)) return;
+          view.actions = Array.isArray(result.actions) ? result.actions : [];
+          h.core.dispatchRender(v.host, result);
+          const failed = view.actions.findIndex(a => /fail/i.test(String(a.status)));
+          view.index = failed >= 0 ? failed : 0;
+        } catch (error) { if (request.current()) h.core.renderError(v.host, String(error?.message || error)); }
+      },
+      items: host => Array.from(host.querySelectorAll(".exec-action-block")),
+      consoleLink: n => view.host.querySelectorAll(".exec-action-block")[n]?.querySelector("a.exec-link") || null,
+      copy: () => run.execution_id,
+      open(n, { push, notice }) {
+        const action = view.actions[n];
+        const target = action ? h.core.reviewedHandoff(action.handoffs?.build, "build") : null;
+        if (target?.status === "available" && target.widget === "codebuild-log") push(buildLogView(thing, target, h));
+        else notice("This action has no build log to open.");
+      },
+    };
+    return view;
+  }
+
+  function buildLogView(thing, target, h) {
+    const view = {
+      title: "Build log",
+      async render(v) { await h.core.fetchWidgetInto(v.host, "codebuild-log", target.inputs, thing.context); },
+      items: host => Array.from(host.querySelectorAll(".log-line")),
+      copy: n => view.host.querySelectorAll(".log-line")[n]?.querySelector(".msg")?.textContent || null,
+    };
+    return view;
+  }
+
+  function packagesView(thing, h) {
+    const view = {
+      title: thing.inputs.package_prefix,
+      rows: [],
+      async render(v) {
+        const i = thing.inputs;
+        const base = { domain: i.domain, repository: i.repository, package_prefix: i.package_prefix,
+          ...(i.domain_owner ? { domain_owner: i.domain_owner } : {}) };
+        const request = h.core.beginOwnedRequest(v.host, thing.context);
+        try {
+          const list = await h.core.fetchWidgetData("codeartifact-packages", { ...base, mode: "list", max_packages: 50 },
+            v.host, thing.context, request);
+          if (!request.accept(list)) return;
+          let rows = Array.isArray(list.rows) ? list.rows.map(r => ({ ...r })) : [];
+          let partial = null;
+          const pending = rows.filter(r => r.enrichment_state !== "complete").map(r => r.package);
+          for (let start = 0; start < pending.length; start += 25) {
+            const owner = h.el("div", { hidden: true });
+            v.host.append(owner);
+            const batch = h.core.beginOwnedRequest(owner, thing.context);
+            const enriched = await h.core.fetchWidgetData("codeartifact-packages",
+              { ...base, mode: "enrich", packages: pending.slice(start, start + 25) }, owner, thing.context, batch);
+            if (!request.current() || !batch.accept(enriched)) return;
+            const byName = new Map((Array.isArray(enriched.rows) ? enriched.rows : []).map(r => [r.package, r]));
+            rows = rows.map(r => byName.has(r.package) ? { ...r, ...byName.get(r.package) } : r);
+            if (h.core.resultFailure(enriched)) partial = "Some package details could not be loaded.";
+            owner.remove();
+          }
+          view.rows = rows;
+          h.core.renderCodeArtifactPackagesTable(v.host, { ...list, rows, ...(partial ? { ok: false, partial: true, error: partial } : {}) },
+            { form: v.host, inputs: base, context: thing.context });
+        } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
+      },
+      items: host => Array.from(host.querySelectorAll("tr.expandable")),
+      copy: n => view.rows[n]?.latest_version || null,
+      open(n) { view.host.querySelectorAll("tr.expandable")[n]?.click(); },
+    };
+    return view;
+  }
+
+  register("pipeline", runsView);
+  register("package", packagesView);
+
   window.CloudBurritoInspector = { create, register };
 })();
