@@ -591,10 +591,17 @@
     audit: desktopOnly(panelOpen.audit), theme: desktopOnly(panelOpen.theme),
   };
 
+  // While the inspector shows an unsaved result, that result is the selected
+  // thing. These keys never act on the list row behind it.
+  const onSavedThing = run => () => {
+    if (inspector.current()?.thing.unsaved) { notice("This result is not saved. Press s to save it."); return; }
+    run();
+  };
+
   Object.assign(actions, {
     add: () => openForm(null),
     settings: desktopOnly(panelOpen.settings),
-    edit: () => { const thing = selectedThing(); if (thing) openForm(thing); },
+    edit: onSavedThing(() => { const thing = selectedThing(); if (thing) openForm(thing); }),
     down: () => state.focus === "list" ? moveSelection(1) : inspector.move(1),
     up: () => state.focus === "list" ? moveSelection(-1) : inspector.move(-1),
     top: () => state.focus === "list" ? moveSelection("top") : inspector.move(-1000),
@@ -631,9 +638,9 @@
     console: () => inspector.openConsole(),
     "next-error": () => inspector.jumpError(1),
     "previous-error": () => inspector.jumpError(-1),
-    remove: () => removeSelected(),
-    "move-down": () => moveThing(1),
-    "move-up": () => moveThing(-1),
+    remove: onSavedThing(() => removeSelected()),
+    "move-down": onSavedThing(() => moveThing(1)),
+    "move-up": onSavedThing(() => moveThing(-1)),
     help: () => { state.help = !state.help; renderKeys(); },
   });
 

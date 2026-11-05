@@ -59,3 +59,25 @@ test("s refuses a 201st thing and does not write", async ({ page }) => {
   expect(await saved(page)).toHaveLength(200);
   await expect(page.locator(".wl-crumb")).toContainText("not saved");
 });
+
+test("dd, e, J and K do nothing to the list while an unsaved result is shown", async ({ page }) => {
+  const things = [thing("p-1", "pipeline", A, { pipeline_name: "synthetic-one" }, 0),
+    thing("p-2", "pipeline", A, { pipeline_name: "synthetic-two" }, 1)];
+  await bootWatchlist(page, { things });
+  await page.keyboard.press(":");
+  const input = page.getByRole("combobox", { name: "Command" });
+  await input.fill("pipe synthetic-x @demo-a");
+  await input.press("Enter");
+  await expect(page.locator(".wl-crumb")).toContainText("not saved");
+  const notice = page.locator("#wl-notice");
+  for (const keys of [["d", "d"], ["e"], ["Shift+J"], ["Shift+K"]]) {
+    await page.evaluate(() => { document.getElementById("wl-notice").textContent = ""; });
+    for (const key of keys) await page.keyboard.press(key);
+    await expect(notice).toHaveText("This result is not saved. Press s to save it.");
+    await expect(page.locator("#wl-form")).toBeHidden();
+  }
+  expect(await calls(page, "watchlist_set")).toEqual([]);
+  expect((await saved(page)).map(t => t.id)).toEqual(["p-1", "p-2"]);
+  await expect(page.locator(".wl-row")).toHaveCount(2);
+  await expect(page.locator(".wl-row").first()).toHaveAttribute("data-thing-id", "p-1");
+});
