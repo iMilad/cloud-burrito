@@ -35,6 +35,8 @@
     isIndependent: () => true,
     requestsAllowed: () => state.storageReady,
     resultTitle: host => host.closest?.("[data-result-title]")?.dataset.resultTitle || "Result",
+    announceAllowed: host => { const panel = window.CloudBurritoPanels?.activePanel(); return !(panel && !panel.contains(host)); },
+    openAudit: () => window.CloudBurritoPanels?.openAuditPanel(),
     async beforeFetch({ widgetName, inputs, request }) {
       if (widgetName === "aws-cli") {
         if (cliAvailable !== true) {
@@ -559,10 +561,17 @@
     save();
   }
 
-  const appCommands = { add: () => openForm(null), classic: () => { location.href = "index.html"; } };
+  const appCommands = {
+    add: () => openForm(null), classic: () => { location.href = "index.html"; },
+    settings: () => window.CloudBurritoPanels.openSettingsPanel(),
+    policy: () => { window.CloudBurritoPanels.openSettingsPanel(); setTimeout(() => $("#policy-editor")?.focus(), 0); },
+    audit: () => window.CloudBurritoPanels.openAuditPanel(),
+    theme: () => { window.CloudBurritoPanels.openSettingsPanel(); setTimeout(() => $("#settings-theme")?.focus(), 0); },
+  };
 
   Object.assign(actions, {
     add: () => openForm(null),
+    settings: () => window.CloudBurritoPanels?.openSettingsPanel(),
     edit: () => { const thing = selectedThing(); if (thing) openForm(thing); },
     down: () => state.focus === "list" ? moveSelection(1) : inspector.move(1),
     up: () => state.focus === "list" ? moveSelection(-1) : inspector.move(-1),
@@ -579,6 +588,9 @@
     filter: () => $("#wl-filter").focus(),
     refresh: () => {
       const shown = inspector.current()?.thing;
+      // Ask the local SSO cache again for the selected saved thing.
+      const chosen = selectedThing();
+      if (chosen && !chosen.unsaved && !shown?.unsaved) { scheduleSso(null); scheduleSso(chosen); }
       if (state.focus === "inspector" && shown) {
         inspector.refresh();
         // On-demand things run once, in the inspector, which updates the row.
@@ -604,7 +616,7 @@
   });
 
   document.addEventListener("keydown", event => {
-    if (event.defaultPrevented || document.querySelector("dialog[open]")) return;
+    if (event.defaultPrevented || document.querySelector("dialog[open]") || window.CloudBurritoPanels?.activePanel()) return;
     const target = event.target;
     const typing = target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
     const action = keymap.action({ key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey,
@@ -639,6 +651,17 @@
       left ? `${left} more did not fit, because the watchlist holds at most 200 things.` : "", skipped].filter(Boolean).join(" "));
   }
 
+  async function loadProfiles() {
+    try {
+      const info = await call("aws_list_profiles");
+      state.profiles = (Array.isArray(info?.profiles) ? info.profiles : [])
+        .filter(p => p.eligibility === "supported_sso" && p.name && p.account_id)
+        .map(p => ({ name: p.name, account_id: p.account_id, region: p.region || "" }));
+      state.profilesKnown = info?.ok !== false;
+      if (Array.isArray(info?.allowed_regions) && info.allowed_regions.length) state.allowedRegions = info.allowed_regions;
+    } catch (_) { state.profilesKnown = false; }
+  }
+
   async function boot() {
     $("#wl-mode").hidden = core.isTauri;
     if (!core.isTauri) $("#wl-mode").textContent = "Demo, sample data";
@@ -660,19 +683,27 @@
     $("#wl-form-body").addEventListener("submit", submitForm);
     $("#wl-form-cancel").addEventListener("click", () => { formThing = null; $("#wl-form").close(); });
     $("#wl-form").addEventListener("close", () => { formThing = null; resetListing(); setFocus("list"); });
-    try {
-      const settings = await call("settings_get");
-      state.settings = settings;
-      if (["dark", "light"].includes(settings?.theme)) document.documentElement.dataset.theme = settings.theme;
-    } catch (_) { notice("Settings could not be loaded. Defaults are used."); }
-    try {
-      const info = await call("aws_list_profiles");
-      state.profiles = (Array.isArray(info?.profiles) ? info.profiles : [])
-        .filter(p => p.eligibility === "supported_sso" && p.name && p.account_id)
-        .map(p => ({ name: p.name, account_id: p.account_id, region: p.region || "" }));
-      state.profilesKnown = info?.ok !== false;
-      if (Array.isArray(info?.allowed_regions) && info.allowed_regions.length) state.allowedRegions = info.allowed_regions;
-    } catch (_) { state.profilesKnown = false; }
+    const panels = window.CloudBurritoPanels;
+    panels.configure({
+      onSettingsLoaded: settings => {
+        state.settings = settings;
+        if (["dark", "light"].includes(settings?.theme)) document.documentElement.dataset.theme = settings.theme;
+      },
+      onCredentialsChanged: async () => {
+        for (const node of document.querySelectorAll("#wl-list .wl-row")) core.invalidateRequests(node);
+        state.rows.clear();
+        inspector.clear();
+        scheduleSso(null);
+        await loadProfiles();
+        renderList();
+        refreshAll();
+        scheduleSso(selectedThing());
+      },
+    });
+    state.settings = (await panels.loadSettings()) || (core.isTauri ? null : await call("settings_get").catch(() => null));
+    if (["dark", "light"].includes(state.settings?.theme)) document.documentElement.dataset.theme = state.settings.theme;
+    if (core.isTauri && !state.settings) notice("Settings could not be loaded. Open Settings to retry.");
+    await loadProfiles();
     let loaded;
     try { loaded = await call("watchlist_get"); } catch (_) { loaded = { ok: false }; }
     if (!loaded || loaded.ok === false) {

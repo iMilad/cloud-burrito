@@ -5,10 +5,10 @@ export const B = { profile: "demo-b", account_id: "acct-b-fixture", region: "eu-
 export const pinned = identity => ({ mode: "pinned", ...identity });
 export const thing = (id, kind, identity, inputs, order = 0) => ({ id, kind, order, context: pinned(identity), inputs });
 
-export async function bootWatchlist(page, { things = [], storage = "loaded", tiles = [], profiles = [A, B], settings = {}, failSave = false } = {}) {
+export async function bootWatchlist(page, { things = [], storage = "loaded", tiles = [], profiles = [A, B], settings = {}, settingsMetadata = {}, failSave = false } = {}) {
   await page.context().route("**/*", route => new URL(route.request().url()).origin === "http://127.0.0.1:4173"
     ? route.continue() : route.abort("blockedbyclient"));
-  await page.addInitScript(({ things, storage, tiles, profiles, settings, failSave }) => {
+  await page.addInitScript(({ things, storage, tiles, profiles, settings, settingsMetadata, failSave }) => {
     const calls = [];
     let saved = structuredClone(things);
     let status = storage;
@@ -70,11 +70,28 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       "errors-by-stack": i => ({ render: "errors_chart", hours: i.hours, rows: [{ stack: "synthetic-stack", errors: 7 }] }),
       "aws-cli": () => ({ render: "table", columns: ["value"], rows: [{ value: "synthetic-cli" }] }),
     };
+    const settingsDefaults = { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "", default_region: "eu-west-1",
+      theme: "dark", audit_retention: "preserve" };
+    const settingsMeta = { defaults: settingsDefaults, allowed_regions: ["eu-west-1", "us-east-1"],
+      field_errors: settingsMetadata?.field_errors || {} };
+    let settingsState = { ...settingsDefaults, default_profile: "demo-a", ...settings };
+    const currentSettings = () => ({ ...settingsState });
     function respond(command, params) {
       switch (command) {
-        case "settings_get": return { aws_config_path: "~/.aws/config", sso_session_name: "", default_profile: "demo-a",
-          default_region: "eu-west-1", theme: "dark", audit_retention: "preserve", ...settings,
-          _storage: { store: "settings", status: "loaded" } };
+        case "settings_get": return { ...currentSettings(), _storage: { store: "settings", status: "loaded" },
+          ...(settingsMetadata === false ? {} : { _settings: settingsMeta }) };
+        case "settings_set":
+          if (window.__watchlistHarness.rejectSettings) return { ok: false, error_type: "InvalidRequest", error: "Synthetic rejection",
+            _settings: { ...settingsMeta, field_errors: { default_region: "Choose a supported default region" } },
+            _storage: { store: "settings", status: "failed" } };
+          // Like the backend: a blank field saves as its default.
+          settingsState = Object.fromEntries(Object.entries(settingsDefaults).map(([key, fallback]) =>
+            [key, typeof params[key] === "string" && params[key].trim() ? params[key].trim() : fallback]));
+          return { ...currentSettings(), _storage: { store: "settings", status: "saved" }, _settings: settingsMeta };
+        case "policy_get": return { ok: true, raw: "statements: []\n", valid: true, actions: [], path: "/synthetic/policy.yaml" };
+        case "audit_history": return { ok: true, mode: "preserve", location: "/synthetic/audit.log", active_bytes: 0,
+          total_bytes: 0, known_files: 0, preserve_required: false, expiry: "Preserved history never expires automatically." };
+        case "audit_tail": return { ok: true, entries: [{ kind: "request", command: "widget_fetch", event: "succeeded", ts: 1700000000 }] };
         case "aws_list_profiles": return { ok: true, allowed_regions: ["eu-west-1", "us-east-1"],
           profiles: profiles.map(p => ({ name: p.profile, account_id: p.account_id, region: p.region, eligibility: "supported_sso" })) };
         case "aws_auth_status": return { has_context: true, logged_in: true, connection_state: "verified",
@@ -107,6 +124,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
     window.__watchlistHarness = {
       unknownQuery: false,
       failSet: failSave,
+      rejectSettings: false,
       // `widgets` is the live answer table; a spec may replace one entry.
       calls, widgets, saved: () => structuredClone(saved), fail: (name, count = 1) => failures.set(name, count),
       hold: name => holds.push({ name }),
@@ -120,7 +138,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       if (hold) await new Promise(resolve => { hold.resolve = resolve; });
       return respond(command, params);
     } } };
-  }, { things, storage, tiles, profiles, settings, failSave });
+  }, { things, storage, tiles, profiles, settings, settingsMetadata, failSave });
   await page.goto("/watchlist.html");
   await page.waitForFunction(() => document.body.dataset.ready === "true");
 }
