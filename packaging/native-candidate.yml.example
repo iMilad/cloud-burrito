@@ -67,9 +67,16 @@ jobs:
           python3 scripts/packaging_contract.py
           python3 -m unittest discover -s tests/scripts -p 'test_*.py'
           bash -n scripts/*.sh
-          node --check frontend/app.js
+          node --check frontend/core.js
+          node --check frontend/panels.js
+          node --check frontend/things.js
+          node --check frontend/keys.js
+          node --check frontend/demo-bridge.js
+          node --check frontend/inspector.js
+          node --check frontend/watchlist.js
+          node --check frontend/commands.js
+          node --check frontend/commandline.js
           node --check frontend/row-filter-worker.js
-          node --check frontend/mock-data.js
           git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
       - name: Replay P1 through P3 correctness coverage
         shell: bash
