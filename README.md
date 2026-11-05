@@ -5,7 +5,7 @@
 <h1 align="center">Cloud Burrito</h1>
 
 <p align="center">
-  A fast, <strong>read-only</strong> desktop dashboard for browsing AWS across multiple accounts — built in pure Rust.
+  A fast, <strong>read-only</strong> desktop watchlist for browsing AWS across multiple accounts — built in pure Rust.
 </p>
 
 <p align="center">
@@ -230,8 +230,10 @@ pipeline execution details, CodeBuild logs and package versions.
 
 Results identify their verified account/region and when the displayed evidence
 was received. A same-context refresh failure can retain earlier evidence
-with its original time and a stale label. Changing the inherited connection
-clears its old results while the new identity is verified.
+with its original time and a stale label. There is no inherited connection:
+editing a thing's profile or region clears its old result and loads it again in
+the new context, and changing the AWS config path or SSO session in Settings
+clears all results before they load again.
 
 Coverage notices describe loaded pages, requested limits and failed subrequests.
 An empty limited result does not establish that no matching resource or event
@@ -298,8 +300,9 @@ as the CLI widget.
 The app exposes these implemented kinds and their local filters. It does not
 include a global resource-search box or an AI widget generator. Log views load
 on explicit actions; a displayed result is not a continuously streaming feed.
-The error-count widget can run bounded Logs Insights queries when loaded or
-refreshed, and both query widgets can incur AWS charges. Error counts match the
+Error counts run bounded Logs Insights queries only when you press `r` or the
+first `Enter` on them, never on their own. Error counts and Logs Insights
+queries can both incur AWS charges. Error counts match the
 case-sensitive text `ERROR`; discovery covers its first page and at most 20
 matching log groups, with query-result limits reported in the result coverage.
 
@@ -390,8 +393,8 @@ State lives in your home directory:
 | `~/.cloud_burrito/audit.log` | Structured application outcomes and capability preflights; write failures are visible |
 
 On macOS and Linux, app files use `0600` and app/archive directories use `0700`.
-Startup repairs permissions on existing settings, policy, dashboard, audit files
-and preserved audit archives without rewriting their contents. Links are rejected
+Startup repairs permissions on existing settings, policy, watchlist, dashboard,
+audit files and preserved audit archives without rewriting their contents. Links are rejected
 and startup stops if this repair fails. Windows retains inherited filesystem ACLs.
 
 Authentication supports inline SSO profiles and profiles referencing an
@@ -415,8 +418,9 @@ process. Profile discovery is bounded and marks omitted results explicitly.
 
 CLI availability is checked locally without executing a process. A discovered
 candidate does not verify its version, publisher, or successful execution.
-When it is absent, the CLI widget explains the prerequisite and offers Retry;
-SDK-backed widgets remain available after identity verification.
+When it is absent, a CLI command says that AWS CLI v2 was not found: install
+it, then press `r`. SDK-backed things remain available after identity
+verification.
 
 ## Architecture
 
@@ -425,7 +429,7 @@ and an HTML/CSS/JS watchlist rendered in the OS webview.
 
 - **`src-tauri/` (Rust)** — every AWS call (via `aws-sdk-*` + `aws-config`), the
   read-only policy and structural guard, the audit log, credential/SSO handling,
-  and settings/dashboard persistence. The UI reaches it through `#[tauri::command]`
+  and settings/watchlist persistence. The UI reaches it through `#[tauri::command]`
   handlers — there is no separate sidecar process or RPC bridge.
 - **`frontend/` (vanilla JS, no build step)** — renders the watchlist and calls
   the backend via `invoke(...)`. One file per job, sharing one namespace:
