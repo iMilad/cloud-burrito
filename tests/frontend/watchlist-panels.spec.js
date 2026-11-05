@@ -56,3 +56,23 @@ test("r on a saved thing asks for its SSO status again", async ({ page }) => {
   await page.keyboard.press("r");
   await expect.poll(async () => (await calls(page, "aws_auth_status")).length).toBeGreaterThan(before);
 });
+
+test("the browser demo opens no panel and says why", async ({ page }) => {
+  await page.context().route("**/*", route => new URL(route.request().url()).origin === "http://127.0.0.1:4173"
+    ? route.continue() : route.abort("blockedbyclient"));
+  await page.goto("/watchlist.html");
+  await page.waitForFunction(() => document.body.dataset.ready === "true");
+  const notice = "Settings, the policy editor and the audit log open only in the desktop app.";
+  await page.keyboard.press(",");
+  await expect(page.locator("#settings-panel")).toHaveAttribute("aria-hidden", "true");
+  await expect(page.locator("#wl-notice")).toHaveText(notice);
+  await page.keyboard.press(":");
+  await page.getByRole("combobox", { name: "Command" }).fill("audit");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#audit-panel")).toHaveAttribute("aria-hidden", "true");
+  await expect(page.locator("#wl-notice")).toHaveText(notice);
+  await expect(page.locator("#wl-keys")).not.toContainText("Settings");
+  await page.keyboard.press("?");
+  await expect(page.locator("#wl-keys")).toContainText("All keys");
+  await expect(page.locator("#wl-keys")).not.toContainText("Settings");
+});

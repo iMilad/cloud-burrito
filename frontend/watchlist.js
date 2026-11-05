@@ -388,7 +388,7 @@
   function renderKeys() {
     const host = $("#wl-keys");
     clear(host);
-    for (const [keys, label] of (state.help ? window.CloudBurritoKeys.HELP : KEYBAR[state.focus])) {
+    for (const [keys, label] of (state.help ? window.CloudBurritoKeys.HELP.filter(([keys]) => core.isTauri || keys !== ",") : KEYBAR[state.focus])) {
       host.append(el("span", { class: "wl-key" }, ...keys.split(" ").map(k => el("kbd", {}, k)), label));
     }
   }
@@ -561,17 +561,26 @@
     save();
   }
 
-  const appCommands = {
-    add: () => openForm(null), classic: () => { location.href = "index.html"; },
+  // Settings, policy and audit are desktop-only: the demo has no settings file or audit log.
+  const desktopOnly = open => () => {
+    if (core.isTauri) open();
+    else notice("Settings, the policy editor and the audit log open only in the desktop app.");
+  };
+  const panelOpen = {
     settings: () => window.CloudBurritoPanels.openSettingsPanel(),
     policy: () => { window.CloudBurritoPanels.openSettingsPanel(); setTimeout(() => $("#policy-editor")?.focus(), 0); },
     audit: () => window.CloudBurritoPanels.openAuditPanel(),
     theme: () => { window.CloudBurritoPanels.openSettingsPanel(); setTimeout(() => $("#settings-theme")?.focus(), 0); },
   };
+  const appCommands = {
+    add: () => openForm(null), classic: () => { location.href = "index.html"; },
+    settings: desktopOnly(panelOpen.settings), policy: desktopOnly(panelOpen.policy),
+    audit: desktopOnly(panelOpen.audit), theme: desktopOnly(panelOpen.theme),
+  };
 
   Object.assign(actions, {
     add: () => openForm(null),
-    settings: () => window.CloudBurritoPanels?.openSettingsPanel(),
+    settings: desktopOnly(panelOpen.settings),
     edit: () => { const thing = selectedThing(); if (thing) openForm(thing); },
     down: () => state.focus === "list" ? moveSelection(1) : inspector.move(1),
     up: () => state.focus === "list" ? moveSelection(-1) : inspector.move(-1),
