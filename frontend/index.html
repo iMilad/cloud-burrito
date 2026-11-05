@@ -1,418 +1,33 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-design="studio" data-appearance="paper" data-density="compact">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cloud Burrito</title>
-  <link id="app-icon" rel="icon" type="image/svg+xml" href="assets/cloud-burrito-icon.svg" />
-  <script src="studio.js"></script>
-  <link rel="stylesheet" href="vendor/gridstack.min.css" />
+  <link rel="icon" type="image/svg+xml" href="assets/cloud-burrito-icon.svg" />
   <link rel="stylesheet" href="styles.css" />
-  <link rel="stylesheet" href="studio.css" />
-  <link rel="stylesheet" href="studio-appearances.css" />
-  <link rel="stylesheet" href="widget-collapse.css" />
-  <link rel="stylesheet" href="contrast.css" />
-  <script src="contrast.js" defer></script>
-  <link rel="stylesheet" href="widget-headers.css" />
-  <link rel="stylesheet" href="studio-workspace.css" />
-  <link rel="stylesheet" href="studio-topbar.css" />
-  <script src="studio-topbar.js" defer></script>
+  <link rel="stylesheet" href="watchlist.css" />
 </head>
-<body>
-  <aside class="studio-rail studio-only" aria-label="Workspace navigation">
-    <a class="studio-wordmark" href="#" aria-label="Cloud Burrito workspace">
-      <img data-studio-mark src="assets/cloud-burrito-icon.svg" alt="" width="38" height="38" />
-      <span>cloud<br /><b>burrito.</b></span>
-    </a>
-    <div class="studio-rail-label">YOUR CONTROL ROOM</div>
-    <nav id="studio-nav" aria-label="Open tools">
-      <button type="button" data-studio-jump="overview" aria-current="location"><span class="studio-nav-icon" aria-hidden="true">◈</span><span>Overview</span><span id="studio-tool-count" class="studio-count">0</span></button>
-      <div class="studio-nav-rule"></div>
-      <button type="button" data-studio-jump="pipeline-runs"><span class="studio-nav-icon" aria-hidden="true">⇢</span><span>Pipelines</span></button>
-      <button type="button" data-studio-jump="cfn-stacks"><span class="studio-nav-icon" aria-hidden="true">▱</span><span>Infrastructure</span></button>
-      <button type="button" data-studio-jump="log-tail"><span class="studio-nav-icon" aria-hidden="true">≋</span><span>Logs</span></button>
-      <button type="button" data-studio-jump="errors-by-stack"><span class="studio-nav-icon" aria-hidden="true">⌁</span><span>Error signals</span></button>
-      <button type="button" data-studio-jump="codeartifact-packages"><span class="studio-nav-icon" aria-hidden="true">⬡</span><span>Packages</span></button>
-      <button type="button" data-studio-jump="resource-lookup"><span class="studio-nav-icon" aria-hidden="true">⌕</span><span>Resource lookup</span></button>
-    </nav>
-    <div class="studio-rail-bottom">
-      <div class="studio-rail-note"><span aria-hidden="true">↗</span><p>Stay curious.<br /><b>Keep the context.</b></p></div>
-      <button type="button" data-studio-action="appearance"><span aria-hidden="true">◩</span> Appearance</button>
-      <button type="button" data-studio-action="settings"><span aria-hidden="true">⚙</span> Settings</button>
-      <button type="button" data-studio-action="audit"><span aria-hidden="true">◷</span> Audit history</button>
-      <span class="studio-edition">STUDIO EDITION <i aria-hidden="true"></i></span>
-    </div>
-  </aside>
-  <header class="topbar">
-    <div class="topbar-left">
-      <div class="brand">
-        <img class="brand-mark brand-mark-classic" data-studio-mark src="assets/cloud-burrito-icon.svg" alt="" aria-hidden="true" />
-        <img class="brand-mark brand-mark-studio" data-studio-mark src="assets/cloud-burrito-icon.svg" alt="" aria-hidden="true" />
-        <span class="brand-name">Cloud Burrito</span>
-      </div>
-      <div class="picker picker-account">
-        <label class="picker-label" for="account-picker-search">Default account</label>
-        <input class="picker-search" id="account-picker-search" type="text"
-          role="combobox" aria-autocomplete="list" aria-expanded="false"
-          aria-controls="topbar-picker-list" autocomplete="off" autocorrect="off"
-          spellcheck="false" data-select-id="account-select" />
-        <select class="picker-select" id="account-select" aria-label="Account" hidden aria-hidden="true" tabindex="-1">
-          <option value="">(loading…)</option>
-        </select>
-      </div>
-      <div class="picker picker-region">
-        <label class="picker-label" for="region-picker-search">Default region</label>
-        <input class="picker-search" id="region-picker-search" type="text"
-          role="combobox" aria-autocomplete="list" aria-expanded="false"
-          aria-controls="topbar-picker-list" autocomplete="off" autocorrect="off"
-          spellcheck="false" data-select-id="region-select" />
-        <select class="picker-select" id="region-select" aria-label="Region" hidden aria-hidden="true" tabindex="-1">
-          <option value="">(loading settings…)</option>
-        </select>
-      </div>
-      <span class="sr-only" id="topbar-picker-status" aria-live="polite"></span>
-      <span id="studio-demo-status" class="studio-only" hidden title="Browser preview uses sample data. Live AWS data requires the desktop app."><span aria-hidden="true"></span>Demo</span>
-      <span class="ro-badge" title="Resource reads use reviewed operations. Queries can incur charges, and SSO obtains temporary credentials. See Identity details.">
-        <span class="ro-dot"></span>RESOURCE READS
-      </span>
-      <span class="core-status" id="core-status" data-state="unknown" title="Backend core status">
-        <span class="core-dot"></span>
-        <span class="core-label">checking…</span>
-      </span>
-      <button type="button" class="core-status" id="auth-status" aria-label="Open AWS identity details" data-state="unknown" title="AWS SSO status — open identity details" hidden>
-        <span class="core-dot"></span>
-        <span class="core-label">auth: —</span>
-      </button>
-    </div>
-    <div class="topbar-right">
-      <button type="button" class="btn btn-ghost" id="studio-return" title="Switch to the modern Studio workspace">Studio view <span aria-hidden="true">↗</span></button>
-      <button type="button" class="btn btn-ghost" id="connection-toggle" aria-label="Connection details" aria-controls="connection-status" aria-expanded="false" hidden><span class="connection-dot" aria-hidden="true"></span><span class="connection-toggle-label">Connection</span></button>
-      <button class="btn btn-ghost" id="reset-layout-btn" title="Reset layout" aria-label="Reset layout">↺</button>
-      <button class="btn btn-ghost" id="theme-toggle" title="Preview another theme" aria-label="Preview another theme" disabled>◐</button>
-      <button class="btn btn-ghost studio-only" id="appearance-btn" title="Workspace appearance" aria-label="Workspace appearance">◩</button>
-      <button class="btn btn-ghost" id="audit-btn" title="Audit log" hidden aria-label="Audit log">⏱</button>
-      <button class="btn btn-ghost" id="settings-btn" title="Settings" hidden aria-label="Settings">⚙</button>
-      <button class="btn btn-primary" id="add-widget-btn">+ Widget</button>
-      <details id="studio-workspace-menu" class="studio-only">
-        <summary id="studio-workspace-menu-toggle" aria-label="Workspace options" title="Workspace options" aria-controls="studio-workspace-menu-panel" aria-expanded="false"><span aria-hidden="true">⋯</span></summary>
-        <div id="studio-workspace-menu-panel" aria-label="Workspace options">
-          <a id="open-watchlist" href="watchlist.html">Open watchlist</a>
-          <button type="button" id="studio-menu-appearance">Appearance <span aria-hidden="true">↗</span></button>
-          <div id="studio-reset-slot"></div>
-          <p>Resource reads use reviewed operations. Queries can incur charges. See Identity details for AWS access information.</p>
-        </div>
-      </details>
-    </div>
+<body class="wl" data-focus="list">
+  <header class="wl-top">
+    <a class="wl-logo" href="index.html"><span class="wl-logo-mark" aria-hidden="true">cb</span>cloud burrito</a>
+    <label class="wl-filter">
+      <kbd aria-hidden="true">/</kbd>
+      <input id="wl-filter" type="search" placeholder="Filter your things" aria-label="Filter your things"
+        autocomplete="off" spellcheck="false" />
+    </label>
+    <p id="wl-summary" class="wl-meta" aria-live="polite"></p>
+    <span class="wl-grow"></span>
+    <p id="wl-sso" class="wl-meta" hidden></p>
+    <span id="wl-mode" class="wl-mode" hidden></span>
+    <button id="audit-btn" class="wl-link" type="button">Audit log</button>
+    <button id="settings-btn" class="wl-link" type="button" title="Settings (,)">Settings</button>
   </header>
-
-  <section id="connection-status" class="connection-status" data-state="discovering" aria-label="AWS connection" hidden>
-    <div class="connection-copy">
-      <strong id="connection-title">Discovering profiles</strong>
-      <p id="connection-message"></p>
-      <p id="connection-identity" class="small"></p>
-      <p id="connection-coverage" class="small" hidden></p>
-      <ul id="connection-profiles" class="small" hidden></ul>
-    </div>
-    <div class="connection-actions">
-      <button type="button" class="btn btn-ghost small" id="connection-settings">Settings</button>
-      <button type="button" class="btn btn-ghost small" id="connection-retry">Retry connection</button>
-      <button type="button" class="btn btn-ghost small" id="connection-details">Identity details</button>
-      <button type="button" class="icon-btn" id="connection-close" aria-label="Close connection details" title="Close connection details">✕</button>
-    </div>
-  </section>
-
-  <div id="appearance-unsaved" class="preference-notice" role="status" hidden>
-    <span>Unsaved appearance preview.</span>
-    <button type="button" class="btn btn-ghost small" id="appearance-settings">Open Settings to save</button>
-  </div>
-  <p id="layout-save-status" class="save-status" role="status" hidden></p>
-  <p id="clipboard-status" class="sr-only" role="status"></p>
-  <p id="result-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-  <p id="connection-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-
-  <main class="dashboard">
-    <section class="studio-overview studio-only" id="studio-overview" aria-labelledby="studio-heading">
-      <div class="studio-hero-copy">
-        <div class="studio-eyebrow"><span aria-hidden="true"></span> THE INVESTIGATION WORKSPACE</div>
-        <h1 id="studio-heading">Less noise.<br /> <span>More signal.</span></h1>
-        <p class="studio-hero-intro">From a failed run to the line that explains it.<br />Your tools. Your context. One workspace.</p>
-        <div class="studio-mode-row">
-          <span id="studio-mode-label" class="studio-mode" role="status">Checking workspace mode…</span>
-          <span id="studio-demo-description" hidden>Sample data · no AWS connection</span>
-        </div>
-      </div>
-      <div class="studio-route" id="studio-overview-route" aria-label="Investigation shortcuts">
-        <svg class="studio-route-art" viewBox="0 0 360 270" fill="none" aria-hidden="true"><circle cx="258" cy="150" r="113" stroke="currentColor" stroke-width="1"/><circle cx="258" cy="150" r="87" stroke="currentColor" stroke-width="1"/><path d="M70 243 300 13M194 257 337 114" stroke="currentColor"/><circle cx="329" cy="63" r="8" fill="currentColor"/></svg>
-        <div class="studio-route-label">FOLLOW A THREAD <span aria-hidden="true">↙</span></div>
-        <button type="button" data-studio-jump="pipeline-runs"><span class="studio-route-number">01</span><span><b>Start with the run</b><small>Pipeline executions</small></span><span class="studio-route-arrow" aria-hidden="true">↗</span></button>
-        <button type="button" data-studio-jump="cfn-stacks"><span class="studio-route-number">02</span><span><b>Find the moving parts</b><small>CloudFormation stacks</small></span><span class="studio-route-arrow" aria-hidden="true">↗</span></button>
-        <button type="button" data-studio-jump="log-tail"><span class="studio-route-number">03</span><span><b>Get to the evidence</b><small>Lambda log output</small></span><span class="studio-route-arrow" aria-hidden="true">↗</span></button>
-      </div>
-    </section>
-    <section class="studio-workspace-bar studio-only" aria-label="Workspace controls">
-      <div><span class="studio-section-index">01 /</span><h2 id="studio-workspace-heading">Your workspace</h2><span id="studio-summary">Open tools</span></div>
-      <div class="studio-workspace-actions">
-        <button type="button" id="studio-classic-switch" title="Return to the original design"><span aria-hidden="true">↶</span> Classic view</button>
-        <button type="button" id="studio-density" aria-pressed="true"><svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="2" y="3" width="14" height="4" rx="1"/><rect x="2" y="11" width="14" height="4" rx="1"/></svg> Compact view</button>
-        <button type="button" id="studio-launcher" aria-label="Search commands" aria-haspopup="dialog" aria-controls="command-panel"><span aria-hidden="true">⌕</span> Search commands <kbd>⌘ / Ctrl K</kbd></button>
-      </div>
-    </section>
-    <div class="grid-stack" id="grid-stack">
-
-      <!-- Pipeline Runs -->
-      <div class="grid-stack-item" gs-id="pipeline-runs" gs-x="0" gs-y="0" gs-w="4" gs-h="3" gs-min-w="3" gs-min-h="2">
-        <div class="grid-stack-item-content">
-          <article class="widget" data-widget="pipeline-runs">
-            <header class="widget-header">
-              <h2 class="widget-title">Pipeline Runs</h2>
-              <span class="widget-sub">Recent CodePipeline executions</span>
-              <div class="widget-actions">
-                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
-              </div>
-            </header>
-            <div class="widget-body pipeline-runs-body" data-tab="live">
-              <div class="pipeline-toolbar">
-                <div class="pipeline-tabs" role="tablist">
-                  <button type="button" class="pipeline-tab active" data-tab="live" role="tab" aria-selected="true">Live</button>
-                  <button type="button" class="pipeline-tab" data-tab="pinned" role="tab" aria-selected="false">Pinned<span class="pipeline-pin-count" hidden></span></button>
-                </div>
-                <div class="pipeline-config-actions">
-                  <button type="button" class="btn btn-primary pipeline-load-btn">Load runs</button>
-                  <button type="button" class="btn btn-ghost pipeline-pin-btn">Pin</button>
-                </div>
-              </div>
-              <div class="pipeline-tab-pane pipeline-pane-live">
-                <form class="widget-config pipeline-config" data-mode="setup">
-                  <label>
-                    <span>Pipeline name</span>
-                    <div class="combo">
-                      <input class="pipeline-name-search" type="text" role="combobox"
-                        aria-autocomplete="list" aria-expanded="false" autocomplete="off"
-                        autocorrect="off" spellcheck="false"
-                        placeholder="(pick an account to list pipelines)" disabled />
-                    </div>
-                    <select class="pipeline-name-select" hidden aria-hidden="true"></select>
-                    <span class="muted small pipeline-name-hint"></span>
-                  </label>
-                  <p class="muted small pipeline-error"></p>
-                  <p class="muted small ui-hint">Profile, account, and region come from this widget's context.</p>
-                </form>
-                <div class="widget-data pipeline-runs-rows" hidden></div>
-              </div>
-              <div class="pipeline-tab-pane pipeline-pane-pinned" hidden>
-                <div class="pipeline-pin-panel">
-                  <div class="pipeline-pin-list"></div>
-                  <p class="muted small pipeline-pin-empty">No pinned pipelines yet. Pick one on the Live tab and hit Pin.</p>
-                </div>
-              </div>
-            </div>
-          </article>
-        </div>
-      </div>
-
-      <!-- Lambda Logs -->
-      <div class="grid-stack-item" gs-id="log-tail" gs-x="4" gs-y="0" gs-w="8" gs-h="6" gs-min-w="3" gs-min-h="2">
-        <div class="grid-stack-item-content">
-          <article class="widget" data-widget="log-tail">
-            <header class="widget-header">
-              <h2 class="widget-title">Lambda Logs</h2>
-              <span class="widget-sub">Lambda functions and CloudWatch logs</span>
-              <div class="widget-actions">
-                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
-              </div>
-            </header>
-            <div class="widget-body lambda-log-browser log-tail-body"></div>
-          </article>
-        </div>
-      </div>
-
-      <!-- CFN Stacks -->
-      <div class="grid-stack-item" gs-id="cfn-stacks" gs-x="0" gs-y="3" gs-w="4" gs-h="3" gs-min-w="3" gs-min-h="2">
-        <div class="grid-stack-item-content">
-          <article class="widget" data-widget="cfn-stacks">
-            <header class="widget-header">
-              <h2 class="widget-title">CloudFormation Stacks</h2>
-              <span class="widget-sub">Stacks in this widget's region</span>
-              <div class="widget-actions">
-                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
-              </div>
-            </header>
-            <div class="widget-body cfn-stacks-body"></div>
-          </article>
-        </div>
-      </div>
-
-      <!-- Resource Reverse Lookup -->
-      <div class="grid-stack-item" gs-id="resource-lookup" gs-x="0" gs-y="6" gs-w="4" gs-h="3" gs-min-w="3" gs-min-h="2">
-        <div class="grid-stack-item-content">
-          <article class="widget" data-widget="resource-lookup">
-            <header class="widget-header">
-              <h2 class="widget-title">Resource Reverse Lookup</h2>
-              <span class="widget-sub">Search tagged resources and inspect confirmed stack associations</span>
-              <div class="widget-actions">
-                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
-              </div>
-            </header>
-            <div class="widget-body">
-              <input class="lookup-input" type="text" aria-label="Resource lookup query" placeholder="Resource name, ARN, or partial id…" />
-              <div class="lookup-results"></div>
-            </div>
-          </article>
-        </div>
-      </div>
-
-      <!-- Log Error Counts -->
-      <div class="grid-stack-item" gs-id="errors-by-stack" gs-x="4" gs-y="6" gs-w="8" gs-h="3" gs-min-w="3" gs-min-h="2">
-        <div class="grid-stack-item-content">
-          <article class="widget" data-widget="errors-by-stack">
-            <header class="widget-header">
-              <h2 class="widget-title">Log Error Counts</h2>
-              <span class="widget-sub">CloudWatch errors in the last 24 hours</span>
-              <div class="widget-actions">
-                <button class="icon-btn" title="Refresh" aria-label="Refresh">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
-              </div>
-            </header>
-            <div class="widget-body errors-body"></div>
-          </article>
-        </div>
-      </div>
-
-      <!-- CodeArtifact Packages -->
-      <div class="grid-stack-item" gs-id="codeartifact-packages" gs-x="0" gs-y="9" gs-w="6" gs-h="4" gs-min-w="4" gs-min-h="3">
-        <div class="grid-stack-item-content">
-          <article class="widget" data-widget="codeartifact-packages">
-            <header class="widget-header">
-              <h2 class="widget-title">CodeArtifact Packages</h2>
-              <span class="widget-sub">Latest package versions by prefix</span>
-              <div class="widget-actions">
-                <button class="icon-btn" title="Refresh" aria-label="Load or refresh packages">↻</button>
-                <button class="icon-btn fs-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-                <button class="icon-btn cfg-btn" title="Configure widget" aria-label="Configure widget">⚙</button>
-                <button class="icon-btn rm-btn" title="Remove widget" aria-label="Remove widget">✕</button>
-              </div>
-            </header>
-            <div class="widget-body codeartifact-packages-body">
-              <form class="widget-config codeartifact-packages-config" data-mode="setup">
-                <label>
-                  <span>Domain</span>
-                  <input class="codeartifact-domain" type="text" value="example-domain" autocomplete="off" autocorrect="off" spellcheck="false" />
-                </label>
-                <label>
-                  <span>Repository</span>
-                  <input class="codeartifact-repository" type="text" value="example_pypi_repo" autocomplete="off" autocorrect="off" spellcheck="false" />
-                </label>
-                <label>
-                  <span>Package prefix</span>
-                  <input class="codeartifact-prefix" type="text" value="example" autocomplete="off" autocorrect="off" spellcheck="false" />
-                </label>
-                <label>
-                  <span>Max packages</span>
-                  <input class="codeartifact-max" type="number" min="1" max="1000" value="50" />
-                </label>
-                <p class="muted small codeartifact-packages-error"></p>
-              </form>
-              <div class="widget-data codeartifact-packages-rows" hidden></div>
-            </div>
-          </article>
-        </div>
-      </div>
-
-    </div>
+  <main id="watchlist-main" class="wl-main">
+    <section id="wl-list" class="wl-list" aria-label="Your things" tabindex="-1"></section>
+    <section id="wl-inspector" class="wl-inspector" aria-label="Inspector" tabindex="-1"></section>
   </main>
-
-  <!-- Add-widget side panel -->
-  <aside class="side-panel" id="side-panel" role="dialog" aria-modal="true" aria-labelledby="side-panel-title" aria-hidden="true" tabindex="-1" inert>
-    <header class="side-panel-header">
-      <h2 id="side-panel-title">Add a widget</h2>
-      <button class="icon-btn" id="side-panel-close" title="Close" aria-label="Close add a widget" type="button">✕</button>
-    </header>
-
-    <div class="side-panel-body">
-      <section class="panel-section">
-        <h3 class="panel-section-title">Prebuilt</h3>
-        <div class="prebuilt-list" id="prebuilt-list"></div>
-      </section>
-
-
-    </div>
-  </aside>
-
-  <!-- Local presentation choices; independent from AWS and backend settings. -->
-  <aside class="side-panel appearance-panel" id="appearance-panel" role="dialog" aria-modal="true" aria-labelledby="appearance-panel-title" aria-hidden="true" tabindex="-1" inert>
-    <header class="side-panel-header">
-      <div><span class="appearance-kicker">WORKSPACE STYLE</span><h2 id="appearance-panel-title">Appearance</h2></div>
-      <button class="icon-btn" id="appearance-panel-close" title="Close" aria-label="Close appearance" type="button">✕</button>
-    </header>
-    <div class="side-panel-body">
-      <p class="appearance-intro">Choose the visual rhythm of Studio. Your workspace, context and layout stay in place.</p>
-      <section class="appearance-theme" aria-labelledby="appearance-theme-title">
-        <h3 id="appearance-theme-title">Color theme</h3>
-        <div id="appearance-theme-slot"></div>
-      </section>
-      <div class="appearance-options" role="radiogroup" aria-label="Studio appearance">
-        <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="original">
-          <img src="assets/cloud-burrito-style-current.svg" width="48" height="48" alt="" />
-          <span><b>Studio Original</b><small>Warm · expressive · familiar</small></span>
-          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#141612"></i><i style="--choice-color:#e9eddf"></i><i style="--choice-color:#ff8657"></i></span>
-          <span class="appearance-check" aria-hidden="true">✓</span>
-        </button>
-        <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="precision">
-          <img src="assets/cloud-burrito-style-precision.svg" width="48" height="48" alt="" />
-          <span><b>Precision</b><small>Clean · restrained · intentional</small></span>
-          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#20231e"></i><i style="--choice-color:#f4f5ef"></i><i style="--choice-color:#f0784c"></i></span>
-          <span class="appearance-check" aria-hidden="true">✓</span>
-        </button>
-        <button class="appearance-choice" type="button" role="radio" aria-checked="true" tabindex="0" data-appearance-choice="paper">
-          <img src="assets/cloud-burrito-style-paper.svg" width="48" height="48" alt="" />
-          <span><b>Paper</b><small>Soft · tactile · quietly playful</small></span>
-          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#30392c"></i><i style="--choice-color:#f3eee4"></i><i style="--choice-color:#c87852"></i></span>
-          <span class="appearance-check" aria-hidden="true">✓</span>
-        </button>
-        <button class="appearance-choice" type="button" role="radio" aria-checked="false" tabindex="-1" data-appearance-choice="night">
-          <img src="assets/cloud-burrito-style-night.svg" width="48" height="48" alt="" />
-          <span><b>Night Shift</b><small>Crisp · neutral · focused</small></span>
-          <span class="appearance-swatches" aria-hidden="true"><i style="--choice-color:#181a1b"></i><i style="--choice-color:#f2f2ee"></i><i style="--choice-color:#ea875e"></i></span>
-          <span class="appearance-check" aria-hidden="true">✓</span>
-        </button>
-      </div>
-      <p id="appearance-status" class="appearance-status" role="status">Paper is active.</p>
-      <section class="workspace-preferences" aria-labelledby="workspace-preferences-title">
-        <h3 id="workspace-preferences-title">Workspace</h3>
-        <p class="muted small">Compact view is on by default. Use the workspace toolbar to adjust widget spacing.</p>
-        <p id="workspace-preferences-status" class="muted small" role="status">Workspace choices are saved on this device.</p>
-      </section>
-      <section class="appearance-contrast" aria-labelledby="contrast-label">
-        <div class="contrast-heading">
-          <label id="contrast-label" for="appearance-contrast">Contrast</label>
-          <output id="contrast-value" for="appearance-contrast" aria-live="off">Original (0)</output>
-        </div>
-        <p class="contrast-help" id="contrast-help">Adjust text readability and border strength. Original keeps the current design. Works in every style, including Classic.</p>
-        <input id="appearance-contrast" type="range" min="-20" max="50" step="5" value="0" aria-describedby="contrast-help" aria-valuetext="Original (0)" />
-        <div class="contrast-scale" aria-hidden="true"><span>Softer</span><span>Stronger</span></div>
-        <div class="contrast-footer">
-          <button id="contrast-reset" class="btn btn-ghost" type="button">Reset contrast</button>
-          <p id="contrast-status" role="status">Original contrast. Changes save on this device.</p>
-        </div>
-      </section>
-      <p class="muted small ui-hint">Changes are saved locally on this device when storage is available. Light and dark color themes remain separate.</p>
-    </div>
-  </aside>
-
-  <!-- Settings side panel -->
+  <footer id="wl-keys" class="wl-keys" aria-label="Keyboard shortcuts"></footer>
   <aside class="side-panel" id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
       <h2 id="settings-panel-title">Settings</h2>
@@ -505,7 +120,6 @@
     </div>
   </aside>
 
-  <!-- Audit log side panel -->
   <aside class="side-panel audit-panel" id="audit-panel" role="dialog" aria-modal="true" aria-labelledby="audit-panel-title" aria-hidden="true" tabindex="-1" inert>
     <header class="side-panel-header">
       <h2 id="audit-panel-title">Audit log</h2>
@@ -527,98 +141,34 @@
       <div id="audit-table-wrap"></div>
     </div>
   </aside>
-
-  <!-- Identity panel -->
-  <aside class="side-panel" id="identity-panel" role="dialog" aria-modal="true" aria-labelledby="identity-panel-title" aria-hidden="true" tabindex="-1" inert>
-    <header class="side-panel-header">
-      <h2 id="identity-panel-title">Identity</h2>
-      <button class="icon-btn" id="identity-panel-close" title="Close" aria-label="Close identity" type="button">✕</button>
-    </header>
-    <div class="side-panel-body">
-      <p class="muted small">
-        Live state of the active AWS context: which profile, which role you
-        asked for, which role SSO actually gave you, and whether the assumed
-        identity is still valid.
-      </p>
-      <div id="identity-body"></div>
-    </div>
-  </aside>
-
-  <!-- Per-widget config side panel -->
-  <aside class="side-panel" id="widget-config-panel" role="dialog" aria-modal="true" aria-labelledby="cfg-title" aria-hidden="true" tabindex="-1" inert>
-    <header class="side-panel-header">
-      <h2 id="cfg-title">Configure widget</h2>
-      <button class="icon-btn" id="widget-config-panel-close" title="Close" aria-label="Close configure widget" type="button">✕</button>
-    </header>
-    <div class="side-panel-body">
-      <p class="muted small" id="cfg-subline"></p>
-
-      <section class="panel-section">
-        <h3 class="panel-section-title">Widget context</h3>
-        <label class="cfg-toggle">
-          <input type="checkbox" id="cfg-use-override" />
-          <span>Pin this widget to an account and region</span>
-        </label>
-        <p class="muted small" id="cfg-default-context"></p>
-        <div id="cfg-override-fields" hidden>
-          <label>
-            <span>Profile</span>
-            <select id="cfg-override-profile"></select>
-          </label>
-          <label>
-            <span>Account ID</span>
-            <input id="cfg-override-account" type="text" readonly />
-          </label>
-          <label>
-            <span>Region</span>
-            <select id="cfg-override-region"></select>
-          </label>
-          <p id="cfg-context-error" class="field-error" role="status"></p>
-        </div>
-      </section>
-
-      <section class="panel-section">
-        <h3 class="panel-section-title">Header color</h3>
-        <div class="color-swatches" id="cfg-color-swatches"></div>
-        <p class="header-selection muted small" id="cfg-header-selection" role="status"></p>
-        <div class="header-style-choices" id="cfg-header-styles" role="group" aria-label="Header treatment"></div>
-        <div class="header-preview" id="cfg-header-preview" aria-label="Header preview">
-          <div class="widget-header"><span class="widget-title" id="cfg-header-preview-title">Widget header</span><span class="header-preview-symbol" aria-hidden="true">⌄</span></div>
-          <div class="header-preview-body"><span></span><span></span><span></span></div>
-        </div>
-        <p class="muted small">Preview only. Save to apply to this widget.</p>
-      </section>
-
-      <section class="panel-section">
-        <h3 class="panel-section-title">Widget source</h3>
-        <details id="cfg-source-details">
-          <summary>View source</summary>
-          <div id="cfg-source-body">
-            <p class="muted small">Loading…</p>
-          </div>
-        </details>
-      </section>
-
-      <div class="ai-actions">
-        <button type="button" class="btn btn-ghost" id="cfg-reset">Reset to defaults</button>
-        <button type="button" class="btn btn-ghost" id="cfg-cancel">Cancel</button>
-        <button type="button" class="btn btn-primary" id="cfg-save">Save</button>
-      </div>
-    </div>
-  </aside>
-
-  <section id="command-panel" class="studio-command-panel" role="dialog" aria-modal="true" aria-labelledby="command-title" aria-hidden="true" inert>
-    <div class="studio-command-heading"><div><span class="studio-eyebrow">AT YOUR FINGERTIPS</span><h2 id="command-title">Where next?</h2></div><button type="button" id="command-close" aria-label="Close commands">Esc <span aria-hidden="true">×</span></button></div>
-    <input type="search" id="command-search" aria-label="Search commands" placeholder="Find an open tool or workspace action…" autocomplete="off" spellcheck="false" />
-    <div id="command-results" aria-label="Matching commands"></div>
-    <p id="command-empty" hidden>No matching commands. Try a tool name.</p>
-    <div class="studio-command-footer"><span>↑ ↓ to move · Enter to open</span><span>WORKSPACE COMMANDS</span></div>
-  </section>
   <div class="scrim" id="scrim" hidden></div>
-
-  <script src="vendor/gridstack-all.js"></script>
-  <script src="mock-data.js"></script>
+  <div id="wl-notice" class="wl-notice" role="status" hidden></div>
+  <p id="clipboard-status" class="sr-only" role="status"></p>
+  <p id="result-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <dialog id="wl-form" class="wl-dialog" aria-labelledby="wl-form-title">
+    <form id="wl-form-body" method="dialog" novalidate>
+      <h2 id="wl-form-title">Add a thing</h2>
+      <label class="wl-field">Kind <select id="wl-form-kind"></select></label>
+      <label class="wl-field">Profile <select id="wl-form-profile"></select></label>
+      <label class="wl-field">Region <select id="wl-form-region"></select></label>
+      <p id="wl-form-account-note" class="wl-form-note" hidden></p>
+      <div id="wl-form-fields"></div>
+      <p id="wl-form-error" class="wl-form-error" role="alert" hidden></p>
+      <div class="wl-form-owner" hidden></div>
+      <div class="wl-form-actions">
+        <button type="button" id="wl-form-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" id="wl-form-save" class="btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="demo-bridge.js"></script>
   <script src="core.js"></script>
-  <script src="app.js"></script>
+  <script src="panels.js"></script>
+  <script src="things.js"></script>
+  <script src="keys.js"></script>
+  <script src="inspector.js"></script>
+  <script src="watchlist.js"></script>
+  <script src="commands.js"></script>
+  <script src="commandline.js"></script>
 </body>
 </html>

@@ -139,7 +139,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       return respond(command, params);
     } } };
   }, { things, storage, tiles, profiles, settings, settingsMetadata, failSave });
-  await page.goto("/watchlist.html");
+  await page.goto("/");
   await page.waitForFunction(() => document.body.dataset.ready === "true");
 }
 

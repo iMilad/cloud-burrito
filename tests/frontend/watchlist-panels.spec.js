@@ -60,7 +60,7 @@ test("r on a saved thing asks for its SSO status again", async ({ page }) => {
 test("the browser demo opens no panel and says why", async ({ page }) => {
   await page.context().route("**/*", route => new URL(route.request().url()).origin === "http://127.0.0.1:4173"
     ? route.continue() : route.abort("blockedbyclient"));
-  await page.goto("/watchlist.html");
+  await page.goto("/");
   await page.waitForFunction(() => document.body.dataset.ready === "true");
   const notice = "Settings, the policy editor and the audit log open only in the desktop app.";
   await page.keyboard.press(",");

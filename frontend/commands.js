@@ -4,7 +4,7 @@
   "use strict";
   const THING_COMMANDS = { pipe: "pipeline", pkg: "package", logs: "logs", stack: "stack", stacks: "stacks-search",
     lookup: "lookup", errors: "errors", insights: "query", aws: "cli" };
-  const APP_COMMANDS = ["add", "settings", "policy", "audit", "theme", "help", "classic"];
+  const APP_COMMANDS = ["add", "settings", "policy", "audit", "theme", "help"];
   const RANGES = { "15m": 900, "1h": 3600, "3h": 10800, "12h": 43200, "24h": 86400, "3d": 259200, "7d": 604800 };
   const MISSING = {
     pipeline: "Add a pipeline name, for example :pipe payments-api.",

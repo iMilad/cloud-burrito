@@ -45,7 +45,6 @@ echo "== Tauri command registry =="
 python3 scripts/check-tauri-commands.py
 
 echo "== frontend syntax =="
-node --check frontend/app.js
 node --check frontend/core.js
 node --check frontend/panels.js
 node --check frontend/things.js
@@ -56,7 +55,6 @@ node --check frontend/watchlist.js
 node --check frontend/commands.js
 node --check frontend/commandline.js
 node --check frontend/row-filter-worker.js
-node --check frontend/mock-data.js
 
 echo "== whitespace =="
 git diff --check

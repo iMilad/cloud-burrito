@@ -54,7 +54,7 @@ test("j, k, dd and K edit the list and save it", async ({ page }) => {
 });
 
 test("the demo page works without the desktop bridge", async ({ page }) => {
-  await page.goto("/watchlist.html");
+  await page.goto("/");
   await page.waitForFunction(() => document.body.dataset.ready === "true");
   await expect(page.locator("#wl-mode")).toHaveText("Demo, sample data");
   await expect(page.locator(".wl-row")).not.toHaveCount(0);

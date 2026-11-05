@@ -52,11 +52,6 @@ test("e changes the account of a thing and reloads it there", async ({ page }) =
   await expect(row(page, "p-ok").locator(".wl-acct")).toHaveText("demo-a");
 });
 
-test("the old dashboard links to the watchlist", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator("#open-watchlist")).toHaveAttribute("href", "watchlist.html");
-});
-
 test("Enter on the empty-state Add a thing button opens the add dialog", async ({ page }) => {
   await bootWatchlist(page, { things: [] });
   await page.locator(".wl-empty button").focus();

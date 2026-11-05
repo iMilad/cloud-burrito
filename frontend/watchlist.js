@@ -573,7 +573,7 @@
     theme: () => { window.CloudBurritoPanels.openSettingsPanel(); setTimeout(() => $("#settings-theme")?.focus(), 0); },
   };
   const appCommands = {
-    add: () => openForm(null), classic: () => { location.href = "index.html"; },
+    add: () => openForm(null),
     settings: desktopOnly(panelOpen.settings), policy: desktopOnly(panelOpen.policy),
     audit: desktopOnly(panelOpen.audit), theme: desktopOnly(panelOpen.theme),
   };
@@ -674,7 +674,6 @@
   async function boot() {
     $("#wl-mode").hidden = core.isTauri;
     if (!core.isTauri) $("#wl-mode").textContent = "Demo, sample data";
-    $("#wl-classic").addEventListener("click", () => { location.href = "index.html"; });
     $("#wl-filter").addEventListener("input", event => applyFilter(event.target.value));
     $("#wl-inspector").addEventListener("focusin", () => { if (state.focus !== "inspector") { state.focus = "inspector"; document.body.dataset.focus = "inspector"; renderKeys(); } });
     $("#wl-list").addEventListener("focusin", () => { if (state.focus !== "list") { state.focus = "list"; document.body.dataset.focus = "list"; renderKeys(); } });
