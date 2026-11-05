@@ -5,10 +5,10 @@ export const B = { profile: "demo-b", account_id: "acct-b-fixture", region: "eu-
 export const pinned = identity => ({ mode: "pinned", ...identity });
 export const thing = (id, kind, identity, inputs, order = 0) => ({ id, kind, order, context: pinned(identity), inputs });
 
-export async function bootWatchlist(page, { things = [], storage = "loaded", tiles = [], profiles = [A, B], settings = {} } = {}) {
+export async function bootWatchlist(page, { things = [], storage = "loaded", tiles = [], profiles = [A, B], settings = {}, failSave = false } = {}) {
   await page.context().route("**/*", route => new URL(route.request().url()).origin === "http://127.0.0.1:4173"
     ? route.continue() : route.abort("blockedbyclient"));
-  await page.addInitScript(({ things, storage, tiles, profiles, settings }) => {
+  await page.addInitScript(({ things, storage, tiles, profiles, settings, failSave }) => {
     const calls = [];
     let saved = structuredClone(things);
     let status = storage;
@@ -78,7 +78,10 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
         case "aws_list_profiles": return { ok: true, allowed_regions: ["eu-west-1", "us-east-1"],
           profiles: profiles.map(p => ({ name: p.profile, account_id: p.account_id, region: p.region, eligibility: "supported_sso" })) };
         case "watchlist_get": return { version: 1, things: structuredClone(saved), _storage: { store: "watchlist", status } };
-        case "watchlist_set": saved = structuredClone(params.things); status = "loaded";
+        case "watchlist_set":
+          if (window.__watchlistHarness.failSet) { window.__watchlistHarness.failSet = false;
+            return { ok: false, error_type: "StorageWriteFailed", _storage: { store: "watchlist", status: "failed" } }; }
+          saved = structuredClone(params.things); status = "loaded";
           return { version: 1, things: structuredClone(saved), _storage: { store: "watchlist", status: "saved" } };
         case "dashboard_get": return { version: 1, tiles: structuredClone(tiles), _storage: { store: "dashboard", status: tiles.length ? "loaded" : "missing" } };
         case "request_cancel": return { ok: true, cancelled_locally: true, cleanup_confirmed: false };
@@ -99,6 +102,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
     }
     window.__watchlistHarness = {
       unknownQuery: false,
+      failSet: failSave,
       // `widgets` is the live answer table; a spec may replace one entry.
       calls, widgets, saved: () => structuredClone(saved), fail: (name, count = 1) => failures.set(name, count),
       hold: name => holds.push({ name }),
@@ -112,7 +116,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       if (hold) await new Promise(resolve => { hold.resolve = resolve; });
       return respond(command, params);
     } } };
-  }, { things, storage, tiles, profiles, settings });
+  }, { things, storage, tiles, profiles, settings, failSave });
   await page.goto("/watchlist.html");
   await page.waitForFunction(() => document.body.dataset.ready === "true");
 }

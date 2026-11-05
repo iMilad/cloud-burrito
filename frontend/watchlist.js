@@ -258,8 +258,10 @@
     try {
       const result = await call("watchlist_set", { things: T.toStored(state.things) });
       if (seq === state.saveSeq && result?._storage?.status !== "saved") throw new Error("not saved");
+      return true;
     } catch (_) {
       if (seq === state.saveSeq) notice("Changes could not be saved. The file on disk was not changed. Try again.");
+      return false;
     }
   }
 
@@ -585,7 +587,7 @@
     const kept = result.things.slice(0, 200);
     const left = result.things.length - kept.length;
     state.things = kept;
-    await save();
+    if (!await save()) return;
     notice([`Converted ${result.converted} widget${result.converted === 1 ? "" : "s"} into ${kept.length} thing${kept.length === 1 ? "" : "s"}.`,
       "Your old dashboard file was not changed.",
       left ? `${left} more did not fit, because the watchlist holds at most 200 things.` : "", skipped].filter(Boolean).join(" "));

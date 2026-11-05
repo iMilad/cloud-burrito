@@ -39,3 +39,10 @@ test("a conversion that is too big keeps the first 200 things and says what was 
   expect(items[0].inputs.pipeline_name).toBe("synthetic-pipe-0");
   expect(items[199].inputs.pipeline_name).toBe("synthetic-pipe-199");
 });
+
+test("a failed save after conversion shows the save error, not a success notice", async ({ page }) => {
+  await bootWatchlist(page, { storage: "missing", tiles, failSave: true });
+  await expect(page.locator("#wl-notice")).toHaveText("Changes could not be saved. The file on disk was not changed. Try again.");
+  await expect(page.locator("#wl-notice")).not.toContainText("Converted");
+  expect(await saved(page)).toEqual([]);
+});
