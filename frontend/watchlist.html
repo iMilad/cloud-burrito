@@ -30,6 +30,21 @@
   <div id="wl-notice" class="wl-notice" role="status" hidden></div>
   <p id="clipboard-status" class="sr-only" role="status"></p>
   <p id="result-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  <dialog id="wl-form" class="wl-dialog" aria-labelledby="wl-form-title">
+    <form id="wl-form-body" method="dialog" novalidate>
+      <h2 id="wl-form-title">Add a thing</h2>
+      <label class="wl-field">Kind <select id="wl-form-kind"></select></label>
+      <label class="wl-field">Profile <select id="wl-form-profile"></select></label>
+      <label class="wl-field">Region <select id="wl-form-region"></select></label>
+      <div id="wl-form-fields"></div>
+      <p id="wl-form-error" class="wl-form-error" role="alert" hidden></p>
+      <div class="wl-form-owner" hidden></div>
+      <div class="wl-form-actions">
+        <button type="button" id="wl-form-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" id="wl-form-save" class="btn">Save</button>
+      </div>
+    </form>
+  </dialog>
   <script src="demo-bridge.js"></script>
   <script src="core.js"></script>
   <script src="things.js"></script>

@@ -79,3 +79,16 @@ body.wl::before { content: none; }
 .wl-notice { position: fixed; right: 18px; bottom: 50px; max-width: 420px; padding: 10px 14px; border: 1px solid var(--wl-line); border-radius: 8px; background: var(--wl-raise); color: var(--wl-ink); box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
 @media (max-width: 900px) { .wl-main { grid-template-columns: 1fr; } .wl-list { border-right: 0; border-bottom: 1px solid var(--wl-line); max-height: 45vh; } .wl-filter { width: auto; flex: 1; } }
 @media (prefers-reduced-motion: reduce) { .wl * { scroll-behavior: auto !important; } }
+
+.wl-dialog { width: min(520px, calc(100vw - 32px)); border: 1px solid var(--wl-line); border-radius: 10px; padding: 18px 20px; background: var(--wl-panel); color: var(--wl-ink); }
+.wl-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.wl-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.wl-field { display: grid; gap: 4px; margin: 0 0 10px; font-size: 12.5px; color: var(--wl-muted); }
+.wl-field input, .wl-field select, .wl-field textarea { font: 13px var(--wl-mono); color: var(--wl-ink); background: var(--wl-bg); border: 1px solid var(--wl-line); border-radius: 6px; padding: 6px 8px; }
+.wl-field textarea { min-height: 96px; resize: vertical; }
+.wl-field input:focus, .wl-field select:focus, .wl-field textarea:focus { outline: 2px solid var(--wl-accent); outline-offset: 0; }
+.wl-field-row { display: flex; gap: 8px; align-items: end; }
+.wl-field-row .wl-field { flex: 1; }
+.wl-form-error { color: var(--wl-fail); margin: 0 0 10px; }
+.wl-form-note { color: var(--wl-muted); font-size: 12.5px; margin: 0 0 10px; }
+.wl-form-actions { display: flex; justify-content: flex-end; gap: 8px; }

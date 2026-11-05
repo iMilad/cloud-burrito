@@ -305,7 +305,137 @@
     }
   }
 
+  const form = {
+    FIELDS: {
+      pipeline: [{ key: "pipeline_name", label: "Pipeline name", list: "pipelines" }],
+      package: [{ key: "domain", label: "Domain" }, { key: "repository", label: "Repository" },
+        { key: "package_prefix", label: "Package name or prefix" },
+        { key: "domain_owner", label: "Domain owner account (optional)", optional: true }],
+      logs: [{ key: "source", label: "Source", choices: [["lambda", "Lambda function"], ["group", "Log group"]] },
+        { key: "name", label: "Function name or log group" }],
+      stack: [{ key: "stack_name", label: "Stack name" }],
+      "stacks-search": [{ key: "name_prefix", label: "Stack name prefix (optional)", optional: true }],
+      lookup: [{ key: "query", label: "Resource name, ARN or partial ID" }],
+    },
+    toInputs: {
+      logs: v => v.source === "lambda"
+        ? { source: "lambda", function_name: v.name, log_group: v.name ? `/aws/lambda/${v.name}` : "" }
+        : { source: "group", log_group: v.name },
+    },
+    fromInputs: {
+      logs: i => ({ source: i.source, name: i.source === "lambda" ? i.function_name || i.log_group : i.log_group }),
+    },
+    notes: {},
+  };
+  let formThing = null;
+
+  function fieldControl(field, value) {
+    const id = `wl-field-${field.key}`;
+    let control;
+    if (field.choices) control = el("select", { id, name: field.key }, ...field.choices.map(([v, label]) => el("option", { value: v }, label)));
+    else if (field.multiline) control = el("textarea", { id, name: field.key, spellcheck: "false" });
+    else control = el("input", { id, name: field.key, type: "text", autocomplete: "off", spellcheck: "false", ...(field.list ? { list: "wl-form-list" } : {}) });
+    if (value !== undefined && value !== null) control.value = String(value);
+    const label = el("label", { class: "wl-field", for: id }, field.label, control);
+    if (!field.list) return label;
+    const listButton = el("button", { type: "button", class: "btn btn-ghost", onclick: listPipelines }, "List pipelines");
+    return el("div", { class: "wl-field-row" }, label, listButton, el("datalist", { id: "wl-form-list" }));
+  }
+
+  function formContext() {
+    const profile = state.profiles.find(p => p.name === $("#wl-form-profile").value);
+    const region = $("#wl-form-region").value;
+    return profile && region ? { mode: "pinned", profile: profile.name, account_id: profile.account_id, region } : null;
+  }
+
+  async function listPipelines() {
+    const context = formContext();
+    const owner = $("#wl-form .wl-form-owner");
+    if (!context) return;
+    owner._widgetContextOverride = context;
+    const request = core.beginOwnedRequest(owner, context);
+    try {
+      const result = await core.invokeOwnedRequest(request, "aws_list_pipelines", { context });
+      if (!request.accept(result)) return;
+      const names = (Array.isArray(result.pipelines) ? result.pipelines : []).map(p => p.name).filter(n => typeof n === "string");
+      $("#wl-form-list")?.replaceChildren(...names.map(name => el("option", { value: name })));
+      if (!names.length) showFormError(result.error || "No pipelines were returned for this account.");
+    } catch (error) { if (request.current()) showFormError(String(error?.message || error)); }
+  }
+
+  function showFormError(message) {
+    const node = $("#wl-form-error");
+    node.textContent = message || "";
+    node.hidden = !message;
+  }
+
+  function renderFormFields(kind, inputs) {
+    const values = inputs ? (form.fromInputs[kind] ? form.fromInputs[kind](inputs) : inputs) : {};
+    const host = $("#wl-form-fields");
+    host.replaceChildren(...(form.notes[kind] ? [el("p", { class: "wl-form-note" }, form.notes[kind])] : []),
+      ...form.FIELDS[kind].map(field => fieldControl(field, values[field.key])));
+  }
+
+  function fillRegions(preferred) {
+    const select = $("#wl-form-region");
+    select.replaceChildren(...state.allowedRegions.map(region => el("option", { value: region }, region)));
+    select.value = state.allowedRegions.includes(preferred) ? preferred
+      : state.allowedRegions.includes(state.settings?.default_region) ? state.settings.default_region : state.allowedRegions[0];
+  }
+
+  function openForm(thing, preset = null) {
+    formThing = thing;
+    const source = thing || preset;
+    const dialog = $("#wl-form");
+    $("#wl-form-title").textContent = thing ? "Edit thing" : "Add a thing";
+    showFormError("");
+    const kindSelect = $("#wl-form-kind");
+    kindSelect.replaceChildren(...Object.keys(form.FIELDS).map(kind => el("option", { value: kind }, T.KINDS[kind].title)));
+    kindSelect.value = source?.kind && form.FIELDS[source.kind] ? source.kind : "pipeline";
+    kindSelect.disabled = !!thing;
+    const profileSelect = $("#wl-form-profile");
+    profileSelect.replaceChildren(...state.profiles.map(p => el("option", { value: p.name }, `${p.name} (${p.account_id})`)));
+    const profile = source?.context?.profile || state.settings?.default_profile;
+    profileSelect.value = state.profiles.some(p => p.name === profile) ? profile : state.profiles[0]?.name || "";
+    fillRegions(source?.context?.region || state.profiles.find(p => p.name === profileSelect.value)?.region);
+    renderFormFields(kindSelect.value, source?.inputs || null);
+    $("#wl-form-save").disabled = !state.profiles.length;
+    if (!state.profiles.length) showFormError("No supported SSO profiles were found. Check the AWS config path in Settings, then try again.");
+    dialog.showModal();
+    (dialog.querySelector("#wl-form-fields input, #wl-form-fields textarea") || kindSelect).focus();
+  }
+
+  function submitForm(event) {
+    event.preventDefault();
+    const kind = $("#wl-form-kind").value;
+    const context = formContext();
+    const values = Object.fromEntries(form.FIELDS[kind].map(field => [field.key, $(`#wl-field-${field.key}`)?.value ?? ""]));
+    const raw = form.toInputs[kind] ? form.toInputs[kind](values) : values;
+    const inputs = context ? T.inputsFor(kind, raw) : null;
+    const required = form.FIELDS[kind].filter(field => !field.optional && !field.choices).every(field => String(values[field.key] || "").trim());
+    if (!context || !inputs || !required) { showFormError("Fill in the required fields."); return; }
+    let next;
+    if (formThing) {
+      next = T.normalize({ ...formThing, context, inputs });
+      state.things = state.things.map(t => t.id === formThing.id ? next : t);
+      state.rows.delete(next.id);
+    } else {
+      next = T.create(kind, context, inputs, state.things);
+      state.things = [...state.things, next];
+    }
+    $("#wl-form").close();
+    renderList();
+    select(next.id);
+    loadRow(next);
+    if (formThing && inspector.current()?.thing.id === next.id) inspector.show(next);
+    notice(formThing ? `Updated ${T.name(next)}.` : `Added ${T.name(next)}.`);
+    formThing = null;
+    save();
+  }
+
   Object.assign(actions, {
+    add: () => openForm(null),
+    edit: () => { const thing = selectedThing(); if (thing) openForm(thing); },
     down: () => state.focus === "list" ? moveSelection(1) : inspector.move(1),
     up: () => state.focus === "list" ? moveSelection(-1) : inspector.move(-1),
     top: () => state.focus === "list" ? moveSelection("top") : inspector.move(-1000),
@@ -345,6 +475,8 @@
     if (!action || !actions[action]) return;
     const onSurface = target === document.body || target.closest?.(".wl-row, .wl-item, #wl-list, #wl-inspector .wl-view, tr.expandable, tr[data-source-row], .exec-action-block, .log-line");
     if (["open", "focus"].includes(action) && !typing && !onSurface) return;
+    // Let the browser activate a focused button or link itself.
+    if (action === "open" && target.closest?.("button, a")) return;
     event.preventDefault();
     actions[action]();
   });
@@ -359,6 +491,11 @@
     inspector = window.CloudBurritoInspector.create({ host: $("#wl-inspector"), core, things: T, notice });
     window.CloudBurritoWatchlist.inspector = inspector;
     renderKeys();
+    $("#wl-form-kind").addEventListener("change", event => renderFormFields(event.target.value, null));
+    $("#wl-form-profile").addEventListener("change", event => fillRegions(state.profiles.find(p => p.name === event.target.value)?.region));
+    $("#wl-form-body").addEventListener("submit", submitForm);
+    $("#wl-form-cancel").addEventListener("click", () => { formThing = null; $("#wl-form").close(); });
+    $("#wl-form").addEventListener("close", () => { formThing = null; setFocus("list"); });
     try {
       const settings = await call("settings_get");
       state.settings = settings;
@@ -392,6 +529,6 @@
   }
 
   window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList,
-    save, notice, call, inspector: null, beforeFirstRender: null, onSelect: null };
+    save, notice, call, form, openForm, inspector: null, beforeFirstRender: null, onSelect: null };
   document.addEventListener("DOMContentLoaded", boot);
 })();
