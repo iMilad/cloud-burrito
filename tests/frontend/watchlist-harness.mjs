@@ -27,9 +27,26 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
       : { render: "log_stream", events: [
         { ts: 1700000600000, msg: `event from ${i.log_stream}`, level: "info" },
         { ts: 1700000601000, msg: "ERROR synthetic timeout", level: "error" }] };
+    const handoff = (status, source, group) => ({ status, source, widget: "log-tail",
+      inputs: { mode: "streams", log_group: group }, reason: `Synthetic ${source} reason.` });
+    const functions = () => ({ ok: true, capped: false, functions: [
+      { name: "synthetic-fn-custom", log_group: "/synthetic/custom/exact",
+        handoffs: { logs: handoff("available", "lambda_logging_config", "/synthetic/custom/exact") } },
+      { name: "synthetic-fn-default", log_group: "/aws/lambda/synthetic-fn-default",
+        handoffs: { logs: handoff("manual", "lambda_default_convention", "/aws/lambda/synthetic-fn-default") } }] });
+    const groups = i => ({ ok: true, capped: false, groups: ["/aws/lambda/synthetic-fn", "/synthetic/group-a", "/synthetic/group-b"]
+      .filter(name => !i.name_pattern || name.toLowerCase().includes(i.name_pattern.toLowerCase())).map(name => ({ name })) });
+    // Package list pages: page 1 has no token; page n has token synthetic-page-n.
+    const packagePage = i => {
+      const n = i.page_token ? Number(i.page_token.replace("synthetic-page-", "")) : 1;
+      const name = n === 1 ? i.package_prefix : `${i.package_prefix}-page-${n}`;
+      return { render: "table", mode: "list", columns: ["package", "latest_version", "last_published"],
+        next_page_token: n < window.__watchlistHarness.packagePages ? `synthetic-page-${n + 1}` : null,
+        rows: [{ package: name, latest_version: "", last_published: "", versions: [], enrichment_state: "pending" }] };
+    };
     const widgets = {
-      "log-tail": i => logs(i),
-      "cloudwatch-logs": i => logs(i),
+      "log-tail": i => i.mode === "list" ? functions() : logs(i),
+      "cloudwatch-logs": i => i.mode === "groups" ? groups(i) : logs(i),
       "pipeline-runs": i => ({ render: "table", columns: ["execution_id", "status", "last_updated", "trigger"], rows: [
         { execution_id: "exec-0042", status: i.pipeline_name === "synthetic-failing" ? "Failed" : "Succeeded",
           last_updated: "2026-11-02T14:02:00Z", trigger: "Webhook: main@a1f3e9c" },
@@ -50,8 +67,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
           rows: i.packages.map(p => ({ package: p, latest_version: "4.12.0", last_published: "2026-11-02T11:02:00Z",
             versions: [{ version: "4.12.0", published: "2026-11-02T11:02:00Z" }, { version: "4.11.3", published: "2026-10-30T09:00:00Z" }],
             enrichment_state: "complete" })) }
-        : { render: "table", mode: "list", columns: ["package", "latest_version", "last_published"], next_page_token: null,
-          rows: [{ package: i.package_prefix, latest_version: "", last_published: "", versions: [], enrichment_state: "pending" }] },
+        : packagePage(i),
       "codeartifact-package-version-history": i => ({ render: "codeartifact_version_history", versions: i.versions }),
       "cfn-stack-detail": i => ({ render: "stack_detail", stack: i.stack_name, resources: [
         { logical_id: "Table", type: "AWS::DynamoDB::Table", status: "UPDATE_FAILED", physical_id: `${i.stack_name}-table` }],
@@ -128,6 +144,7 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
     }
     window.__watchlistHarness = {
       unknownQuery: false,
+      packagePages: 1,
       failSet: failSave,
       rejectSettings: false,
       // `widgets` is the live answer table; a spec may replace one entry.

@@ -416,11 +416,11 @@
         { key: "package_prefix", label: "Package name or prefix" },
         { key: "domain_owner", label: "Domain owner account (optional)", optional: true }],
       logs: [{ key: "source", label: "Source", choices: [["lambda", "Lambda function"], ["group", "Log group"]] },
-        { key: "name", label: "Function name or log group" }],
+        { key: "name", label: "Function name or log group", list: "logs" }],
       stack: [{ key: "stack_name", label: "Stack name" }],
       "stacks-search": [{ key: "name_prefix", label: "Stack name prefix (optional)", optional: true }],
       lookup: [{ key: "query", label: "Resource name, ARN or partial ID" }],
-      query: [{ key: "log_group", label: "Log group" }, { key: "query", label: "Query", multiline: true },
+      query: [{ key: "log_group", label: "Log group", list: "groups" }, { key: "query", label: "Query", multiline: true },
         { key: "range_seconds", label: "Time range", choices: [["900", "Last 15 minutes"], ["3600", "Last hour"], ["10800", "Last 3 hours"],
           ["43200", "Last 12 hours"], ["86400", "Last 24 hours"], ["259200", "Last 3 days"], ["604800", "Last 7 days"]] }],
       errors: [{ key: "log_group_pattern", label: "Log group names contain" }, { key: "hours", label: "Hours, 1 to 168" }],
@@ -431,9 +431,11 @@
       errors: { log_group_pattern: "/aws/lambda/", hours: "24" },
     },
     toInputs: {
-      logs: v => v.source === "lambda"
-        ? { source: "lambda", function_name: v.name, log_group: v.name ? `/aws/lambda/${v.name}` : "" }
-        : { source: "group", log_group: v.name },
+      logs: v => {
+        if (v.source !== "lambda") return { source: "group", log_group: v.name };
+        const name = v.name.trim();
+        return { source: "lambda", function_name: name, log_group: reviewedGroups.get(name) || (name ? `/aws/lambda/${name}` : "") };
+      },
     },
     fromInputs: {
       logs: i => ({ source: i.source, name: i.source === "lambda" ? i.function_name || i.log_group : i.log_group }),
@@ -445,8 +447,19 @@
     },
   };
   let formThing = null;
+  // Function name -> log group from a reviewed handoff (or the edited thing).
+  // Cleared with the listing: it belongs to one form context.
+  let reviewedGroups = new Map();
 
-  function fieldControl(field, value) {
+  const LISTINGS = {
+    pipelines: { label: "List pipelines", run: listPipelines },
+    functions: { label: "List functions", run: listFunctions },
+    groups: { label: "List log groups", run: listLogGroups },
+  };
+  // The logs field lists functions or log groups, by its source.
+  const listingFor = (field, source) => field.list !== "logs" ? field.list : source === "group" ? "groups" : "functions";
+
+  function fieldControl(field, value, values = {}) {
     const id = `wl-field-${field.key}`;
     let control;
     if (field.choices) control = el("select", { id, name: field.key }, ...field.choices.map(([v, label]) => el("option", { value: v }, label)));
@@ -455,7 +468,9 @@
     if (value !== undefined && value !== null) control.value = String(value);
     const label = el("label", { class: "wl-field", for: id }, field.label, control);
     if (!field.list) return label;
-    const listButton = el("button", { type: "button", class: "btn btn-ghost", onclick: listPipelines }, "List pipelines");
+    const listButton = el("button", { type: "button", id: "wl-form-list-button", class: "btn btn-ghost",
+      onclick: () => LISTINGS[listingFor(field, $("#wl-field-source")?.value)].run(field.key) },
+    LISTINGS[listingFor(field, values.source || "lambda")].label);
     return el("div", { class: "wl-field-row" }, label, listButton, el("datalist", { id: "wl-form-list" }));
   }
 
@@ -465,25 +480,76 @@
     return profile && region && state.allowedRegions.includes(region) ? { mode: "pinned", profile: profile.name, account_id: profile.account_id, region } : null;
   }
 
-  async function listPipelines() {
+  // One listing at a time, owned by the form and pinned to its current
+  // profile, account and region. A reply for an older choice is dropped.
+  async function ownedListing(command, params) {
     const context = formContext();
     const owner = $("#wl-form .wl-form-owner");
-    if (!context) return;
+    if (!context) return null;
     owner._widgetContextOverride = context;
     const request = core.beginOwnedRequest(owner, context);
     try {
-      const result = await core.invokeOwnedRequest(request, "aws_list_pipelines", { context });
-      if (!request.accept(result)) return;
-      const names = (Array.isArray(result.pipelines) ? result.pipelines : []).map(p => p.name).filter(n => typeof n === "string");
-      $("#wl-form-list")?.replaceChildren(...names.map(name => el("option", { value: name })));
-      if (!names.length) showFormError(result.error || "No pipelines were returned for this account.");
-    } catch (error) { if (request.current()) showFormError(String(error?.message || error)); }
+      const result = await core.invokeOwnedRequest(request, command, { ...params, context });
+      return request.accept(result) ? result : null;
+    } catch (error) { if (request.current()) showFormError(String(error?.message || error)); return null; }
   }
 
-  // Drop any pending or shown pipeline listing: it belongs to an older choice.
+  function showListing(names, result, empty) {
+    $("#wl-form-list")?.replaceChildren(...names.map(name => el("option", { value: name })));
+    if (names.length) return;
+    if (result.render === "permission_denied") showFormError(`Blocked by policy: ${result.action || "this request"}. Allow it in the policy, then try again.`);
+    else showFormError(result.error || (core.resultFailure(result) ? "The list could not be loaded. Try again." : empty));
+  }
+
+  async function listPipelines() {
+    const result = await ownedListing("aws_list_pipelines", {});
+    if (!result) return;
+    const names = (Array.isArray(result.pipelines) ? result.pipelines : []).map(p => p.name).filter(n => typeof n === "string");
+    showListing(names, result, "No pipelines were returned for this account.");
+  }
+
+  async function listFunctions() {
+    const result = await ownedListing("widget_fetch", { widget: "log-tail", inputs: { mode: "list", max_functions: 500 } });
+    if (!result) return;
+    const functions = (Array.isArray(result.functions) ? result.functions : []).filter(f => typeof f?.name === "string" && f.name);
+    // Only a reviewed, available handoff names the log group; otherwise the
+    // default /aws/lambda/<name> guess is used and shown as not verified.
+    reviewedGroups = new Map();
+    for (const fn of functions) {
+      const logs = core.reviewedHandoff(fn.handoffs?.logs, "logs");
+      if (logs?.status === "available" && logs.source === "lambda_logging_config") reviewedGroups.set(fn.name, logs.inputs.log_group);
+    }
+    showListing(functions.map(f => f.name), result, "No functions were returned for this account.");
+    updateLogNote();
+  }
+
+  async function listLogGroups(key) {
+    const pattern = ($(`#wl-field-${key}`)?.value || "").trim();
+    const result = await ownedListing("widget_fetch", { widget: "cloudwatch-logs",
+      inputs: { mode: "groups", max_groups: 500, ...(pattern ? { name_pattern: pattern } : {}) } });
+    if (!result) return;
+    const names = (Array.isArray(result.groups) ? result.groups : []).map(g => g?.name).filter(n => typeof n === "string" && n);
+    showListing(names, result, pattern ? "No log groups with this text were returned for this account." : "No log groups were returned for this account.");
+  }
+
+  // Drop any pending or shown listing: it belongs to an older choice.
   function resetListing() {
     core.invalidateRequests($("#wl-form .wl-form-owner"));
     $("#wl-form-list")?.replaceChildren();
+    reviewedGroups = new Map();
+    updateLogNote();
+  }
+
+  // Say where a Lambda function's log group comes from.
+  function updateLogNote() {
+    const note = $("#wl-form-log-note");
+    if (!note) return;
+    const name = ($("#wl-field-name")?.value || "").trim();
+    const reviewed = reviewedGroups.get(name);
+    note.textContent = $("#wl-field-source")?.value !== "lambda" || !name ? ""
+      : reviewed ? `Log group ${reviewed} comes from this function's logging config.`
+      : `Log group /aws/lambda/${name} comes from the default Lambda naming convention. It is not verified.`;
+    note.hidden = !note.textContent;
   }
 
   function updateAccountNote() {
@@ -504,7 +570,9 @@
     const values = inputs ? (form.fromInputs[kind] ? form.fromInputs[kind](inputs) : inputs) : (form.defaults[kind] || {});
     const host = $("#wl-form-fields");
     host.replaceChildren(...(form.notes[kind] ? [el("p", { class: "wl-form-note" }, form.notes[kind])] : []),
-      ...form.FIELDS[kind].map(field => fieldControl(field, values[field.key])));
+      ...form.FIELDS[kind].map(field => fieldControl(field, values[field.key], values)),
+      ...(kind === "logs" ? [el("p", { id: "wl-form-log-note", class: "wl-form-note", hidden: true })] : []));
+    updateLogNote();
   }
 
   function fillRegions(preferred, keepUnsupported = false) {
@@ -539,6 +607,9 @@
     profileSelect.value = Array.from(profileSelect.options).some(o => o.value === profile) ? profile : state.profiles[0]?.name || "";
     fillRegions(source?.context?.region || state.profiles.find(p => p.name === profileSelect.value)?.region, !!thing);
     resetListing();
+    // An edited function keeps the log group it was saved with.
+    const fn = thing?.kind === "logs" && thing.inputs.source === "lambda" ? thing.inputs.function_name : null;
+    if (fn && thing.inputs.log_group !== `/aws/lambda/${fn}`) reviewedGroups.set(fn, thing.inputs.log_group);
     updateAccountNote();
     renderFormFields(kindSelect.value, source?.inputs || null);
     $("#wl-form-save").disabled = !state.profiles.length && !thing;
@@ -714,6 +785,13 @@
       updateAccountNote();
     });
     $("#wl-form-region").addEventListener("change", resetListing);
+    $("#wl-form-fields").addEventListener("input", event => { if (event.target.id === "wl-field-name") updateLogNote(); });
+    $("#wl-form-fields").addEventListener("change", event => {
+      if (event.target.id !== "wl-field-source") return;
+      resetListing();
+      const button = $("#wl-form-list-button");
+      if (button) button.textContent = LISTINGS[listingFor({ list: "logs" }, event.target.value)].label;
+    });
     $("#wl-form-body").addEventListener("submit", submitForm);
     $("#wl-form-cancel").addEventListener("click", () => { formThing = null; $("#wl-form").close(); });
     $("#wl-form").addEventListener("close", () => { formThing = null; resetListing(); setFocus("list"); });

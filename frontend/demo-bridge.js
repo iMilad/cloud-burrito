@@ -43,13 +43,18 @@
         { ts: Date.now() - 104000, msg: "1 failed, 37 passed in 13.82s", level: "info" },
         { ts: Date.now() - 103000, msg: "[Container] Phase complete: BUILD State: FAILED", level: "error" }] };
       case "codeartifact-packages": {
-        const latest = { "acme-core": "4.12.0", "acme-core-cli": "1.3.2", "acme-ledger": "2.4.0", "acme-ledger-client": "2.3.1" };
+        const latest = { "acme-core": "4.12.0", "acme-core-cli": "1.3.2", "acme-core-schemas": "0.8.1", "acme-core-testing": "0.3.0",
+          "acme-ledger": "2.4.0", "acme-ledger-client": "2.3.1" };
         if (i.mode === "enrich") return { render: "table", mode: "enrich", columns: ["package", "latest_version", "last_published"],
           rows: (i.packages || []).map(name => ({ package: name, latest_version: latest[name] || "1.0.0", last_published: ago(200),
             versions: [{ version: latest[name] || "1.0.0", published: ago(200) }, { version: "0.9.0", published: ago(9000) }], enrichment_state: "complete" })) };
-        return { render: "table", mode: "list", columns: ["package", "latest_version", "last_published"], next_page_token: null,
-          rows: Object.keys(latest).filter(name => name.startsWith(i.package_prefix || "")).slice(0, i.max_packages || 50)
-            .map(name => ({ package: name, latest_version: "", last_published: "", versions: [], enrichment_state: "pending" })) };
+        // Pages of three names, so the inspector can show "Next package page".
+        const names = Object.keys(latest).filter(name => name.startsWith(i.package_prefix || ""));
+        const start = Number(String(i.page_token || "demo-page-0").replace("demo-page-", "")) || 0;
+        const end = start + Math.min(3, i.max_packages || 50);
+        return { render: "table", mode: "list", columns: ["package", "latest_version", "last_published"],
+          next_page_token: end < names.length ? `demo-page-${end}` : null,
+          rows: names.slice(start, end).map(name => ({ package: name, latest_version: "", last_published: "", versions: [], enrichment_state: "pending" })) };
       }
       case "codeartifact-package-version-history": return { render: "codeartifact_version_history",
         versions: (i.versions || []).map(v => ({ version: v.version, published: v.published || ago(300) })) };
@@ -61,6 +66,13 @@
           { ts: Date.now() - 60000, msg: "calling provider.charge(orderId=ord-8821)", level: "info" },
           { ts: Date.now() - 59000, msg: "provider.charge took 1840ms (p95 budget 1200ms)", level: "warn" },
           { ts: Date.now() - 58000, msg: "ProviderTimeout after 3000ms invoking https://api.example.com/charge", level: "error" }] };
+        if (i.mode === "list") return { ok: true, capped: false, functions: [
+          { name: "ledger-consumer", log_group: "/acme/ledger/consumer", handoffs: { logs: { status: "available", source: "lambda_logging_config",
+            widget: "log-tail", inputs: { mode: "streams", log_group: "/acme/ledger/consumer" }, reason: "Lambda configuration names this log group." } } },
+          { name: "payments-handler", log_group: "/aws/lambda/payments-handler", handoffs: { logs: { status: "manual", source: "lambda_default_convention",
+            widget: "log-tail", inputs: { mode: "streams", log_group: "/aws/lambda/payments-handler" }, reason: "Default naming convention only; this log group is not verified." } } }] };
+        if (i.mode === "groups") return { ok: true, capped: false, groups: ["/acme/ledger/consumer", "/aws/lambda/ledger-worker", "/aws/lambda/payments-handler", "/ecs/web-frontend"]
+          .filter(name => name.toLowerCase().includes(String(i.name_pattern || "").toLowerCase())).map(name => ({ name, retention_days: 30 })) };
         return { ok: true, groups: [], functions: [] };
       case "cfn-stack-detail": {
         const rollback = i.stack_name === "ledger-db-stg";

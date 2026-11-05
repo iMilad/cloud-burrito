@@ -61,6 +61,28 @@ test("the demo page works without the desktop bridge", async ({ page }) => {
   await expect(page.locator('.wl-row[data-thing-id="demo-pipe-1"] .wl-state-text')).toHaveText("Failed");
 });
 
+test("the demo answers the browse lists and the next package page with sample data", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(() => document.body.dataset.ready === "true");
+  await page.keyboard.press("a");
+  const form = page.locator("#wl-form");
+  await form.getByLabel("Kind").selectOption("logs");
+  await form.getByRole("button", { name: "List functions" }).click();
+  await expect(form.locator("datalist option")).toHaveCount(2);
+  await form.getByLabel("Function name or log group").fill("ledger-consumer");
+  await expect(page.locator("#wl-form-log-note")).toHaveText("Log group /acme/ledger/consumer comes from this function's logging config.");
+  await form.locator("#wl-field-source").selectOption("group");
+  await form.getByLabel("Function name or log group").fill("lambda");
+  await form.getByRole("button", { name: "List log groups" }).click();
+  await expect(form.locator("datalist option")).toHaveCount(2);
+  await form.getByRole("button", { name: "Cancel" }).click();
+  await page.locator('.wl-row[data-thing-id="demo-pkg-1"]').click();
+  await expect(page.locator("tr.expandable")).toHaveCount(3);
+  await page.getByRole("button", { name: "Next package page" }).click();
+  await expect(page.locator("tr.expandable")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Next package page" })).toHaveCount(0);
+});
+
 test("keyboard drills from a failed run to the failing build log line and back", async ({ page }) => {
   await bootWatchlist(page, { things: [failing] });
   await page.keyboard.press("Enter");
@@ -108,4 +130,33 @@ test("package history opens with Enter and y copies the selected version", async
   await expect(page.locator(".codeartifact-version-value")).toHaveText(["4.12.0", "4.11.3"]);
   const history = (await calls(page, "widget_fetch", "codeartifact-package-version-history"))[0];
   expect(history.params.context.profile).toBe("demo-b");
+});
+
+test("Next package page loads page 2 in the package's own account and appends its rows", async ({ page }) => {
+  await bootWatchlist(page, { things: [pkg] });
+  await page.evaluate(() => { window.__watchlistHarness.packagePages = 2; });
+  await page.keyboard.press("Enter");
+  await expect(page.locator("tr.expandable")).toHaveCount(1);
+  const next = page.getByRole("button", { name: "Next package page" });
+  await expect(next).toBeVisible();
+  await next.click();
+  await expect(page.locator("tr.expandable")).toHaveCount(2);
+  await expect(page.locator("tr.expandable").nth(1)).toContainText("acme-core-page-2");
+  await expect(page.locator("tr.expandable").nth(1)).toContainText("4.12.0");
+  await expect(next).toHaveCount(0);
+  const lists = (await calls(page, "widget_fetch", "codeartifact-packages")).filter(c => c.params.inputs.mode === "list");
+  expect(lists.at(-1).params.inputs).toEqual({ mode: "list", domain: "synthetic-domain", repository: "synthetic-repo",
+    package_prefix: "acme-core", max_packages: 50, page_token: "synthetic-page-2" });
+  const enrich = (await calls(page, "widget_fetch", "codeartifact-packages")).filter(c => c.params.inputs.mode === "enrich").at(-1);
+  expect(enrich.params.inputs.packages).toEqual(["acme-core-page-2"]);
+  for (const call of await calls(page, "widget_fetch", "codeartifact-packages")) {
+    expect(call.params.context).toEqual({ mode: "pinned", ...B });
+  }
+});
+
+test("a package list with one page shows no next page button", async ({ page }) => {
+  await bootWatchlist(page, { things: [pkg] });
+  await page.keyboard.press("Enter");
+  await expect(page.locator("tr.expandable")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Next package page" })).toHaveCount(0);
 });

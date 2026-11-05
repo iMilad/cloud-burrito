@@ -14,7 +14,8 @@
     const body = el("div", { class: "wl-view", tabindex: "-1" });
     host.append(el("div", { class: "wl-inspector-head" }, crumb, account), body);
     const top = () => stack[stack.length - 1] || null;
-    const helpers = { core, T, el, notice, recovery, onResult, push: view => push(view), refresh: () => refresh() };
+    const helpers = { core, T, el, notice, recovery, onResult, push: view => push(view), refresh: () => refresh(),
+      highlight: view => highlight(view) };
 
     function genericView(t) {
       return { title: T.name(t), async render(view) {
@@ -201,42 +202,99 @@
   }
 
   function packagesView(thing, h) {
+    const i = thing.inputs;
+    const base = { domain: i.domain, repository: i.repository, package_prefix: i.package_prefix,
+      ...(i.domain_owner ? { domain_owner: i.domain_owner } : {}) };
+    const token = value => typeof value === "string" && value && value.length <= 4096 ? value : null;
     const view = {
       title: thing.inputs.package_prefix,
       rows: [],
       async render(v) {
-        const i = thing.inputs;
-        const base = { domain: i.domain, repository: i.repository, package_prefix: i.package_prefix,
-          ...(i.domain_owner ? { domain_owner: i.domain_owner } : {}) };
         const request = h.core.beginOwnedRequest(v.host, thing.context);
+        view.request = request;
         try {
           const list = await h.core.fetchWidgetData("codeartifact-packages", { ...base, mode: "list", max_packages: 50 },
             v.host, thing.context, request);
           if (!request.accept(list)) return;
-          let rows = Array.isArray(list.rows) ? list.rows.map(r => ({ ...r })) : [];
-          let partial = null;
-          const pending = rows.filter(r => r.enrichment_state !== "complete").map(r => r.package);
-          for (let start = 0; start < pending.length; start += 25) {
-            const owner = h.el("div", { hidden: true });
-            v.host.append(owner);
-            const batch = h.core.beginOwnedRequest(owner, thing.context);
-            const enriched = await h.core.fetchWidgetData("codeartifact-packages",
-              { ...base, mode: "enrich", packages: pending.slice(start, start + 25) }, owner, thing.context, batch);
-            if (!request.current() || !batch.accept(enriched)) return;
-            const byName = new Map((Array.isArray(enriched.rows) ? enriched.rows : []).map(r => [r.package, r]));
-            rows = rows.map(r => byName.has(r.package) ? { ...r, ...byName.get(r.package) } : r);
-            if (h.core.resultFailure(enriched)) partial = "Some package details could not be loaded.";
-            owner.remove();
-          }
-          view.rows = rows;
-          h.core.renderCodeArtifactPackagesTable(v.host, { ...list, rows, ...(partial ? { ok: false, partial: true, error: partial } : {}) },
-            { form: v.host, inputs: base, context: thing.context });
+          const enriched = await enrich(v, Array.isArray(list.rows) ? list.rows.map(r => ({ ...r })) : [], request);
+          if (!enriched) return;
+          Object.assign(view, { list, rows: enriched.rows, partial: enriched.partial, coverage: list.coverage,
+            next: token(list.next_page_token), tokens: new Set() });
+          paintPackages(v);
         } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
       },
       items: host => Array.from(host.querySelectorAll("tr.expandable")),
-      copy: n => view.rows[n]?.latest_version || null,
+      // Map the mounted row back to its package: the table pages long lists.
+      copy: n => view.rows.find(r => r.package === view.items(view.host)[n]?.dataset.package)?.latest_version || null,
       open(n) { view.host.querySelectorAll("tr.expandable")[n]?.click(); },
     };
+
+    // Load package details in batches of 25. Null when the view moved on.
+    async function enrich(v, rows, request) {
+      let partial = false;
+      const pending = rows.filter(r => r.enrichment_state !== "complete").map(r => r.package);
+      for (let start = 0; start < pending.length; start += 25) {
+        const owner = h.el("div", { hidden: true });
+        v.host.append(owner);
+        const batch = h.core.beginOwnedRequest(owner, thing.context);
+        const enriched = await h.core.fetchWidgetData("codeartifact-packages",
+          { ...base, mode: "enrich", packages: pending.slice(start, start + 25) }, owner, thing.context, batch);
+        if (!request.current() || !batch.accept(enriched)) return null;
+        const byName = new Map((Array.isArray(enriched.rows) ? enriched.rows : []).map(r => [r.package, r]));
+        rows = rows.map(r => byName.has(r.package) ? { ...r, ...byName.get(r.package) } : r);
+        if (h.core.resultFailure(enriched)) partial = true;
+        owner.remove();
+      }
+      return { rows, partial };
+    }
+
+    function paintPackages(v) {
+      const coverage = view.coverage ? { ...view.coverage, counts: { ...view.coverage.counts, returned: view.rows.length } } : view.coverage;
+      h.core.renderCodeArtifactPackagesTable(v.host, { ...view.list, rows: view.rows, coverage, next_page_token: view.next,
+        ...(view.partial ? { ok: false, partial: true, error: "Some package details could not be loaded." } : {}) },
+      { form: v.host, inputs: base, context: thing.context });
+      if (view.next) v.host.append(h.el("button", { type: "button", class: "btn btn-ghost small wl-next-page",
+        onclick: event => nextPage(v, event.currentTarget) }, "Next package page"));
+      h.highlight(view);
+    }
+
+    // The next page is asked for only on this click, with the thing's own context.
+    async function nextPage(v, button) {
+      const request = view.request;
+      const cursor = view.next;
+      if (!request?.current() || !cursor || button.disabled) return;
+      const keyboard = document.activeElement === button;
+      button.disabled = true;
+      v.host.querySelector(".wl-page-owner")?.remove();
+      const owner = h.el("div", { class: "wl-page-owner" });
+      button.before(owner);
+      const page = h.core.beginOwnedRequest(owner, thing.context);
+      try {
+        const result = await h.core.fetchWidgetData("codeartifact-packages", { ...base, mode: "list", max_packages: 50, page_token: cursor },
+          owner, thing.context, page);
+        if (!request.current() || !page.accept(result)) return;
+        if (h.core.resultFailure(result) || !h.core.validResultShape(result) || !h.core.validCoverage(result.coverage)) {
+          h.core.dispatchRender(owner, result);
+          button.disabled = false;
+          return;
+        }
+        const known = new Set(view.rows.map(r => r.package));
+        const fresh = result.rows.filter(r => typeof r.package === "string" && r.package && !known.has(r.package)).map(r => ({ ...r }));
+        const enriched = await enrich(v, fresh, request);
+        if (!enriched || !page.current()) return;
+        view.tokens.add(cursor);
+        const next = token(result.next_page_token);
+        Object.assign(view, { rows: [...view.rows, ...enriched.rows], partial: view.partial || enriched.partial,
+          coverage: result.coverage, next: next && !view.tokens.has(next) ? next : null });
+        owner.remove();
+        paintPackages(v);
+        if (keyboard) h.core.focusSafely(v.host.querySelector(".wl-next-page") || view.items(v.host)[view.rows.length - enriched.rows.length]);
+      } catch (error) {
+        if (!page.current()) return;
+        h.core.failResult(owner, page, String(error?.message || error));
+        button.disabled = false;
+      }
+    }
     return view;
   }
 
@@ -254,8 +312,11 @@
           h.core.renderArrayResult(v.host, result, "streams", streams => {
             h.core.clear(v.host);
             view.streams = streams.filter(s => typeof s.name === "string" && s.name);
+            // A group other than the /aws/lambda/<name> guess came from the function's reviewed logging config.
             if (thing.inputs.source === "lambda") v.host.append(h.el("p", { class: "wl-hint" },
-              `Log group ${thing.inputs.log_group} comes from the default Lambda naming convention. It is not verified.`));
+              thing.inputs.log_group === `/aws/lambda/${thing.inputs.function_name}`
+                ? `Log group ${thing.inputs.log_group} comes from the default Lambda naming convention. It is not verified.`
+                : `Log group ${thing.inputs.log_group} comes from this function's logging config.`));
             if (!view.streams.length) { v.host.append(h.el("p", { class: "wl-hint" }, "No log streams were returned for this log group.")); return; }
             v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Log streams" }, ...view.streams.map((s, n) =>
               h.el("li", { class: "wl-item", role: "option", tabindex: "-1", "data-index": String(n) },
