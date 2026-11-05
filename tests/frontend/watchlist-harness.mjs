@@ -116,7 +116,9 @@ export async function bootWatchlist(page, { things = [], storage = "loaded", til
               data: { error: "Synthetic failure" }, _request: failed(params) };
           }
           if (!widgets[params.widget]) throw new Error(`Unexpected synthetic widget: ${params.widget}`);
-          return { ...widgets[params.widget](params.inputs || {}), _request: meta(params) };
+          const answer = widgets[params.widget](params.inputs || {});
+          const { _outcome, ...result } = answer;
+          return { ...result, _request: { ...meta(params), ...(_outcome ? { outcome: _outcome } : {}) } };
         }
         default: throw new Error(`Unexpected synthetic invoke: ${command}`);
       }
@@ -148,3 +150,7 @@ export const calls = (page, command, widget) => page.evaluate(({ command, widget
 export const saved = page => page.evaluate(() => window.__watchlistHarness.saved());
 export const row = (page, id) => page.locator(`.wl-row[data-thing-id="${id}"]`);
 export const rowText = (page, id) => row(page, id).locator(".wl-state-text");
+// Replace the answer of one widget. `data._outcome` sets the request outcome (for example "cancelled").
+export const answer = (page, widget, data) => page.evaluate(([name, value]) => {
+  window.__watchlistHarness.widgets[name] = () => structuredClone(value);
+}, [widget, data]);

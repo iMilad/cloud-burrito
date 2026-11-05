@@ -181,7 +181,10 @@
         return { tone: "muted", text: `${n} match${n === 1 ? "" : "es"}`, at: null };
       }
       case "errors": {
-        if (!rows.length) return { tone: "muted", text: "No errors returned", at: null };
+        // Failed or partial counts never say "no errors": absent rows prove nothing.
+        const incomplete = result?.partial === true || result?.status === "partial" || result?.status === "failed"
+          || !!result?.error || result?.coverage?.completeness === "unknown";
+        if (!rows.length) return incomplete ? { tone: "warn", text: "counts incomplete", at: null } : { tone: "muted", text: "No errors returned", at: null };
         const top = rows.reduce((a, b) => (Number(b.errors) || 0) > (Number(a.errors) || 0) ? b : a);
         return { tone: "fail", text: `${top.stack}: ${Number(top.errors) || 0}`, at: null };
       }

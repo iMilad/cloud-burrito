@@ -29,3 +29,38 @@ test("text colors meet WCAG AA on their surfaces in both themes", async ({ page 
     for (const { color, surface, value } of ratios) expect(value, `${theme} ${color} on ${surface}`).toBeGreaterThanOrEqual(4.5);
   }
 });
+
+const focusables = panel => panel.locator('button:visible:not([disabled]):not([tabindex="-1"]), input:visible:not([disabled]):not([tabindex="-1"]), select:visible:not([disabled]):not([tabindex="-1"]), textarea:visible:not([disabled]):not([tabindex="-1"]), summary:visible:not([tabindex="-1"]), a[href]:visible:not([tabindex="-1"]), [tabindex="0"]:visible');
+
+test("the settings panel keeps Tab inside and Escape returns focus to its opener", async ({ page }) => {
+  await bootWatchlist(page, { things: [thing("p", "pipeline", A, { pipeline_name: "synthetic-ok" })] });
+  const panel = page.locator("#settings-panel");
+  await expect(panel).toHaveAttribute("inert", "");
+  const opener = page.locator("#settings-btn");
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  await expect(panel).toHaveAttribute("aria-hidden", "false");
+  const controls = focusables(panel);
+  await expect(controls.first()).toBeFocused();
+  await controls.last().focus();
+  await page.keyboard.press("Tab");
+  await expect(controls.first()).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(controls.last()).toBeFocused();
+  for (let n = 0; n < 6; n++) {
+    await page.keyboard.press("Tab");
+    expect(await page.evaluate(() => !!document.activeElement.closest("#settings-panel"))).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveAttribute("aria-hidden", "true");
+  await expect(opener).toBeFocused();
+});
+
+test("Escape from a settings panel opened with a key returns focus to the selected row", async ({ page }) => {
+  await bootWatchlist(page, { things: [thing("p", "pipeline", A, { pipeline_name: "synthetic-ok" })] });
+  await page.locator('.wl-row[data-thing-id="p"]').focus();
+  await page.keyboard.press(",");
+  await expect(page.locator("#settings-panel")).toHaveAttribute("aria-hidden", "false");
+  await page.keyboard.press("Escape");
+  await expect(page.locator('.wl-row[data-thing-id="p"]')).toBeFocused();
+});

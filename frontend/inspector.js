@@ -85,8 +85,8 @@
       const view = top();
       if (!view) return;
       if ("armed" in view) view.armed = true;
-      core.invalidateRequests(view.host);
-      clear(view.host);
+      // Keep the accepted result on screen: a refresh that fails shows it as stale.
+      core.invalidateRequests(view.host, true);
       view.done = false;
       paint();
     }
@@ -131,8 +131,8 @@
           const result = await h.core.fetchWidgetData("pipeline-runs", { pipeline_name: thing.inputs.pipeline_name, max_results: 10 },
             v.host, thing.context, request);
           if (!request.accept(result)) return;
-          view.rows = Array.isArray(result.rows) ? result.rows : [];
           h.core.renderWithResultState(v.host, result, () => {
+            view.rows = Array.isArray(result.rows) ? result.rows : [];
             h.core.clear(v.host);
             if (result.render !== "table") { h.core.dispatchRenderContent(v.host, result); return; }
             if (!view.rows.length) {

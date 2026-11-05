@@ -203,6 +203,8 @@
 
   function applyRowResult(thing, result) {
     const previous = state.rows.get(thing.id) || {};
+    // Malformed data or coverage never replaces an accepted value.
+    if (!core.validCoverage(result?.coverage) || !core.validResultShape(result || {})) return applyRowFailure(thing, "Response data was invalid.");
     const outcome = core.resultState(result);
     if (outcome === "denied") return setRow(thing, { label: `blocked by policy: ${result.action || "request"}`, tone: "fail" });
     if (SIGN_IN_TYPES.includes(result?.error_type) || result?.needs_sso_login === true || outcome === "expired") {
