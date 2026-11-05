@@ -5,7 +5,7 @@
   const FACTORIES = {};
   function register(kind, factory) { FACTORIES[kind] = factory; }
 
-  function create({ host, core, things: T, notice, recovery = null }) {
+  function create({ host, core, things: T, notice, recovery = null, onResult = null }) {
     const { el, clear } = core;
     let thing = null;
     let stack = [];
@@ -14,7 +14,7 @@
     const body = el("div", { class: "wl-view", tabindex: "-1" });
     host.append(el("div", { class: "wl-inspector-head" }, crumb, account), body);
     const top = () => stack[stack.length - 1] || null;
-    const helpers = { core, T, el, notice, recovery, push: view => push(view), refresh: () => refresh() };
+    const helpers = { core, T, el, notice, recovery, onResult, push: view => push(view), refresh: () => refresh() };
 
     function genericView(t) {
       return { title: T.name(t), async render(view) {
@@ -368,10 +368,17 @@
         const { widget, inputs } = h.T.rowRequest(thing);
         const extra = view.acknowledge || {};
         view.acknowledge = null;
-        await h.core.fetchWidgetInto(v.host, widget, { ...inputs, ...extra }, thing.context);
+        const request = h.core.beginOwnedRequest(v.host, thing.context);
+        try {
+          const result = await h.core.fetchWidgetData(widget, { ...inputs, ...extra }, v.host, thing.context, request);
+          if (request.accept(result)) {
+            h.core.dispatchRender(v.host, result);
+            if (h.onResult) h.onResult(thing, result);
+          }
+        } catch (error) { if (request.current()) h.core.renderError(v.host, String(error)); }
         if (h.recovery) showRecovery(view, widget, inputs);
       },
-      open() { view.armed = true; h.refresh(); },
+      open() { if (view.armed) return; view.armed = true; h.refresh(); },
       items: host => Array.from(host.querySelectorAll("tbody tr, .bar-row")),
       copy: n => view.host.querySelectorAll("tbody tr, .bar-row")[n]?.textContent.trim() || null,
     };
@@ -391,7 +398,7 @@
       const run = h.el("button", { type: "button", class: "btn btn-ghost small", disabled: true }, "Review and run again");
       const update = () => { run.disabled = !confirm.checked || (select && !select.value); };
       confirm.addEventListener("change", update);
-      select?.addEventListener("change", update);
+      select?.addEventListener("change", () => { confirm.checked = false; update(); });
       run.addEventListener("click", () => {
         if (run.disabled) return;
         view.acknowledge = { acknowledge_unknown: true, ...(select ? { acknowledge_query: select.value } : {}) };

@@ -49,7 +49,7 @@
       }
     },
     afterFetch({ widgetName, inputs, request, result }) {
-      if (!isQuery(widgetName, inputs) || !request.current()) return;
+      if (!isQuery(widgetName, inputs) || !request.current() || !request.accept(result)) return;
       const key = recovery.key(widgetName, inputs, request.context);
       const cleanup = result?.cleanup || result?.data?.cleanup;
       if (result?.recovery_required === true || cleanup?.recovery_required === true || cleanup?.remote_queries_may_still_run === true
@@ -373,9 +373,9 @@
       logs: i => ({ source: i.source, name: i.source === "lambda" ? i.function_name || i.log_group : i.log_group }),
     },
     notes: {
-      query: "Runs only when you press r. Logs Insights queries can cost money.",
-      errors: "Runs only when you press r. Error counts use Logs Insights queries, which can cost money.",
-      cli: "Runs only when you press r. Only reviewed read-only AWS CLI commands are accepted.",
+      query: "Runs only when you press r or Enter. Logs Insights queries can cost money.",
+      errors: "Runs only when you press r or Enter. Error counts use Logs Insights queries, which can cost money.",
+      cli: "Runs only when you press r or Enter. Only reviewed read-only AWS CLI commands are accepted.",
     },
   };
   let formThing = null;
@@ -533,13 +533,16 @@
       const shown = inspector.current()?.thing;
       if (state.focus === "inspector" && shown) {
         inspector.refresh();
-        if (!shown.unsaved) loadRow(shown, { run: true });
+        // On-demand things run once, in the inspector, which updates the row.
+        if (!shown.unsaved && T.KINDS[shown.kind].autoload) loadRow(shown, { run: true });
         return;
       }
       const thing = selectedThing();
       if (!thing) return;
-      loadRow(thing, { run: true });
-      if (shown?.id === thing.id) inspector.refresh();
+      if (shown?.id === thing.id) {
+        inspector.refresh();
+        if (T.KINDS[thing.kind].autoload) loadRow(thing, { run: true });
+      } else loadRow(thing, { run: true });
     },
     "refresh-all": () => refreshAll(),
     copy: () => copyMain(),
@@ -574,7 +577,8 @@
     $("#wl-filter").addEventListener("input", event => applyFilter(event.target.value));
     $("#wl-inspector").addEventListener("focusin", () => { if (state.focus !== "inspector") { state.focus = "inspector"; document.body.dataset.focus = "inspector"; renderKeys(); } });
     $("#wl-list").addEventListener("focusin", () => { if (state.focus !== "list") { state.focus = "list"; document.body.dataset.focus = "list"; renderKeys(); } });
-    inspector = window.CloudBurritoInspector.create({ host: $("#wl-inspector"), core, things: T, notice, recovery });
+    inspector = window.CloudBurritoInspector.create({ host: $("#wl-inspector"), core, things: T, notice, recovery,
+      onResult: (thing, result) => { if (state.things.some(t => t.id === thing.id)) applyRowResult(thing, result); } });
     window.CloudBurritoWatchlist.inspector = inspector;
     renderKeys();
     $("#wl-form-kind").addEventListener("change", event => { renderFormFields(event.target.value, null); resetListing(); });

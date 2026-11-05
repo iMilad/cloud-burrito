@@ -74,3 +74,43 @@ for (const [label, text, widget, check] of [
     expect(await saved(page)).toEqual([]);
   });
 }
+
+for (const [kind, item, widget] of [
+  ["query", query, "logs-insights"],
+  ["cli", thing("c-1", "cli", A, { command: "aws sts get-caller-identity" }), "aws-cli"],
+]) {
+  test(`one r runs a saved ${kind} thing once and updates its row`, async ({ page }) => {
+    await bootWatchlist(page, { things: [item] });
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("r");
+    await expect(page.locator(".wl-view tbody tr")).toHaveCount(1);
+    await expect(rowText(page, item.id)).not.toHaveText("not run yet");
+    await page.waitForTimeout(300);
+    expect(await calls(page, "widget_fetch", widget)).toHaveLength(1);
+  });
+}
+
+test("Enter does not rerun a query after results are shown", async ({ page }) => {
+  await bootWatchlist(page, { things: [query] });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".wl-view tbody tr")).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  expect(await calls(page, "widget_fetch", "logs-insights")).toHaveLength(1);
+});
+
+test("changing the earlier query clears the acknowledgement tick", async ({ page }) => {
+  await bootWatchlist(page, { things: [query] });
+  await page.evaluate(() => { window.__watchlistHarness.unknownQuery = true; });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  const review = page.getByRole("button", { name: "Review and run again" });
+  await page.locator(".query-recovery select").selectOption("q-1");
+  await page.getByLabel("I understand the earlier query may still be running").check();
+  await expect(review).toBeEnabled();
+  await page.locator(".query-recovery select").selectOption("");
+  await page.locator(".query-recovery select").selectOption("q-1");
+  await expect(page.getByLabel("I understand the earlier query may still be running")).not.toBeChecked();
+  await expect(review).toBeDisabled();
+});
