@@ -65,3 +65,23 @@ test('app commands and completion', () => {
   assert.deepEqual(plain(C.complete('pipe pay', env).items.map(i => i.value)), ['payments-api', 'payroll']);
   assert.equal(C.complete('pipe pay', env).from, 5);
 });
+
+test('aws text is passed through exactly, backslashes and both quote types included', () => {
+  const C = load();
+  const backslash = C.parse('aws logs describe-log-groups --log-group-name-prefix a\\b', env);
+  assert.equal(backslash.inputs.command, 'aws logs describe-log-groups --log-group-name-prefix a\\b');
+  assert.equal(backslash.context.profile, 'prod-core');
+  const quotes = C.parse(`aws logs filter-log-events --filter-pattern a"b'c'd`, env);
+  assert.equal(quotes.inputs.command, `aws logs filter-log-events --filter-pattern a"b'c'd`);
+});
+
+test('only a trailing unquoted @profile is taken from aws text', () => {
+  const C = load();
+  const quoted = C.parse('aws sts get-caller-identity "@x"', env);
+  assert.equal(quoted.context.profile, 'prod-core');
+  assert.equal(quoted.inputs.command, 'aws sts get-caller-identity "@x"');
+  const middle = C.parse('aws sts get-caller-identity @x --foo @shared-tools', env);
+  assert.equal(middle.context.profile, 'shared-tools');
+  assert.equal(middle.inputs.command, 'aws sts get-caller-identity @x --foo');
+  assert.match(C.parse('aws @shared-tools', env).error, /full command/);
+});

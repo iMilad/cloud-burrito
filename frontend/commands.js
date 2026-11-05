@@ -44,7 +44,6 @@
     if (started) tokens.push(current);
     return tokens;
   }
-  const requote = token => /[\s"']/.test(token) ? (token.includes('"') ? `'${token}'` : `"${token}"`) : token;
 
   function parse(input, env) {
     const text = String(input || "").replace(/^:/, "").trim();
@@ -54,14 +53,21 @@
     if (APP_COMMANDS.includes(name)) return { ok: true, type: "app", name };
     const kind = THING_COMMANDS[name];
     if (!kind) return { ok: false, error: `Unknown command ${name}. Type :help to see all commands.` };
-    const tokens = tokenize(text.slice(name.length).trim());
-    if (!tokens) return { ok: false, error: "A quote is not closed." };
-    let profileName = null, region = null;
+    let profileName = null, region = null, command = "";
     const kept = [];
-    for (const token of tokens) {
-      if (token.length > 1 && token.startsWith("@")) { profileName = token.slice(1); continue; }
-      if (kind !== "cli" && (env.allowedRegions || []).includes(token)) { region = token; continue; }
-      kept.push(token);
+    if (kind === "cli") {
+      // The AWS text is passed through as typed. Only a trailing unquoted @profile is ours.
+      const trailing = text.match(/\s+@([^\s"'\\]+)$/);
+      profileName = trailing ? trailing[1] : null;
+      command = trailing ? text.slice(0, trailing.index).trim() : text;
+    } else {
+      const tokens = tokenize(text.slice(name.length).trim());
+      if (!tokens) return { ok: false, error: "A quote is not closed." };
+      for (const token of tokens) {
+        if (token.length > 1 && token.startsWith("@")) { profileName = token.slice(1); continue; }
+        if ((env.allowedRegions || []).includes(token)) { region = token; continue; }
+        kept.push(token);
+      }
     }
     profileName = profileName || env.defaultProfile || null;
     if (!profileName) return { ok: false, error: "Add @profile, for example @prod-core." };
@@ -102,7 +108,7 @@
         raw = { log_group: group, query, range_seconds: RANGES[range] || 3600 };
         break;
       }
-      case "cli": raw = { command: kept.length ? `aws ${kept.map(requote).join(" ")}` : "" }; break;
+      case "cli": raw = { command: command.length > name.length ? command : "" }; break;
     }
     const inputs = root.CloudBurritoThings.inputsFor(kind, raw);
     return inputs ? { ok: true, type: "thing", kind, context, inputs } : { ok: false, error: MISSING[kind] };
