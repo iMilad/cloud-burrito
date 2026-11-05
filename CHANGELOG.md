@@ -13,18 +13,8 @@ tag has been published for these changes.
 ### Added
 
 - Mandatory, version-pinned Gitleaks scanning of full Git history in CI.
-- Studio with four selectable appearances: Original, Precision, Paper and
-  Night Shift. Paper is the default; Classic remains available.
-- Per-widget header treatments with a preview, a collapse/expand action that
-  remembers widget height, and local contrast adjustment in Appearance.
-- A slimmer, always-visible Studio introduction with investigation shortcuts
-  and a clear active-demo indicator. Compact widget view is the default and
-  remembers a user's opt-out.
-- A lighter Studio top bar with aligned account/region labels, a compact demo
-  indicator, theme preview in Appearance, and reset under Workspace options.
-  AWS identity status and the actual SSO-token countdown remain visible.
-- Investigation workspaces, bounded table rendering and explicit partial,
-  unavailable and stale result states.
+- Bounded table rendering and explicit partial, unavailable and stale result
+  states.
 - A keyboard-first watchlist of specific things from many accounts, each pinned
   to its own profile, account and region, with an inspector that drills from a
   failed run to its build log line.
@@ -45,8 +35,9 @@ tag has been published for these changes.
 
 ### Removed
 
-- GridStack layout, Classic view, the Studio rail and overview, appearance
-  presets and contrast adjustment.
+- GridStack layout.
+- The top-bar account and region pickers. Each thing now keeps its own
+  profile, account and region.
 
 ### Fixed
 
@@ -56,14 +47,8 @@ tag has been published for these changes.
   supported service cursors and CLI truncation offsets.
 - Create private app storage on macOS/Linux and repair permissions on existing
   app files and preserved audit archives at startup without changing contents.
-- Use the selected Cloud Fold mark in Classic and keep the Studio return control
-  reachable from the topbar, including fullscreen widgets and pending startup.
 - Allow connection details to close and reopen without reconnecting, preserving
   the choice across polls and restart while surfacing a new connection failure.
-- Show the selected cached SSO access token's remaining lifetime in the topbar.
-  Retrying the connection or obtaining new account credentials does not reset
-  that timer; genuine token renewal updates its actual expiry. Keep account
-  credential expiration separately in Identity details.
 - Keep result feedback compact with optional technical details and local display
   preferences for tips and expanded results. Limited, stale and failed results
   retain visible status and recovery information.
