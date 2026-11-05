@@ -1523,28 +1523,12 @@ async fn aws_auth_status_pinned(
     {
         Ok(session) => session,
         Err(error) => {
-            out["error"] = error
-                .get("error")
-                .or_else(|| error.get("reason"))
-                .cloned()
-                .unwrap_or(Value::Null);
-            out["error_type"] = error.get("error_type").cloned().unwrap_or(Value::Null);
-            out["needs_sso_login"] =
-                json!(out["error"].as_str().is_some_and(aws::sso_login_required));
+            apply_verify_error(&mut out, &error);
             out["connection_state"] = json!("failed");
             return Ok(out);
         }
     };
-    let backend = state.runtime.aws.clone();
-    let snapshot = session.snapshot.clone();
-    let sso_token_expiry = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || backend.sso_token_expiry(&snapshot)),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .flatten();
+    let sso_token_expiry = read_sso_token_expiry(state, &session).await;
     if let Err(error) = validate_request_context(state, &resolved, &session) {
         out["error_type"] = error["error_type"].clone();
         out["error"] = error["error"].clone();
@@ -1564,6 +1548,35 @@ async fn aws_auth_status_pinned(
     out["sso_token_expires_at"] = json!(sso_token_expiry
         .and_then(|expiry| aws_smithy_types::DateTime::from(expiry).fmt(format).ok()));
     Ok(out)
+}
+
+/// Copies a verification failure into a status object.
+fn apply_verify_error(out: &mut Value, error: &Value) {
+    out["error"] = error
+        .get("error")
+        .or_else(|| error.get("reason"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    out["error_type"] = error.get("error_type").cloned().unwrap_or(Value::Null);
+    out["needs_sso_login"] = json!(out["error"].as_str().is_some_and(aws::sso_login_required));
+}
+
+/// Local SSO cache read with a 2 s limit. It never invokes an SSO provider;
+/// inability to inspect the cache means unknown expiry.
+async fn read_sso_token_expiry(
+    state: &AppState,
+    session: &std::sync::Arc<aws::context::VerifiedSession>,
+) -> Option<std::time::SystemTime> {
+    let backend = state.runtime.aws.clone();
+    let snapshot = session.snapshot.clone();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || backend.sso_token_expiry(&snapshot)),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten()
 }
 
 async fn aws_auth_status_request(
@@ -1605,14 +1618,7 @@ async fn aws_auth_status_request(
     {
         Ok(session) => session,
         Err(error) => {
-            out["error"] = error
-                .get("error")
-                .or_else(|| error.get("reason"))
-                .cloned()
-                .unwrap_or(Value::Null);
-            out["error_type"] = error.get("error_type").cloned().unwrap_or(Value::Null);
-            out["needs_sso_login"] =
-                json!(out["error"].as_str().is_some_and(aws::sso_login_required));
+            apply_verify_error(&mut out, &error);
             let connection = state.connection.lock();
             out["connection_state"] = json!(if connection.active.is_none() {
                 connection.status
@@ -1631,16 +1637,7 @@ async fn aws_auth_status_request(
     // verified AWS role credentials are reused. A terminal login can replace
     // the cached token independently of those credentials. This read never
     // invokes an SSO provider; inability to inspect it means unknown expiry.
-    let backend = state.runtime.aws.clone();
-    let snapshot = session.snapshot.clone();
-    let sso_token_expiry = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || backend.sso_token_expiry(&snapshot)),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .flatten();
+    let sso_token_expiry = read_sso_token_expiry(state, &session).await;
     // Metadata read completion cannot attach an older SSO cache to a newer
     // selected account, provider snapshot or settings generation.
     if let Err(error) = validate_request_context(state, &resolved, &session) {

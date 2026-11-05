@@ -70,6 +70,7 @@
     const thing = { id: `unsaved-${Date.now().toString(36)}`, kind: result.kind, context: result.context,
       inputs: result.inputs, order: 0, unsaved: true };
     W.inspector.show(thing);
+    W.clearSso();
     W.setFocus("inspector");
     const kind = T.KINDS[thing.kind];
     W.notice(kind.cost ? "Not saved. This command can cost money. Press r to run it, or s to save it."

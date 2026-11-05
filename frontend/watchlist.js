@@ -266,30 +266,46 @@
   }
 
   let ssoSeq = 0, ssoTimer = null, ssoShown = null;
+  let ssoKey = null, ssoPending = false;
   function showSso(thing, info) {
     const node = $("#wl-sso");
     ssoShown = thing && info ? { thing, info } : null;
     if (!thing || !info?.has_context) {
       node.hidden = !info?.needs_sso_login;
       node.textContent = info?.needs_sso_login ? `SSO sign in needed for ${info.profile}` : "";
+      node.title = "";
       return;
     }
     node.hidden = false;
     node.textContent = `SSO for ${thing.context.profile}: ${core.formatRemaining(info.sso_token_expires_at) || "expiry unknown"}`;
     node.title = "Remaining lifetime of the cached SSO token for this profile. Account credentials expire separately.";
   }
+  // One status per selection. Re-selecting the same thing with the same pinned
+  // context (after a reorder or a save) keeps what is shown and asks nothing.
   function scheduleSso(thing) {
+    const key = thing && !thing.unsaved && core.canInvoke()
+      ? [thing.id, thing.context.profile, thing.context.account_id, thing.context.region].join("|") : null;
+    if (key && key === ssoKey && (ssoShown || ssoPending)) return;
     clearTimeout(ssoTimer);
-    if (!thing || thing.unsaved || !core.canInvoke()) return;
+    const seq = ++ssoSeq;
+    showSso(null, null);
+    ssoKey = key;
+    ssoPending = Boolean(key);
+    if (!key) return;
     ssoTimer = setTimeout(async () => {
-      const seq = ++ssoSeq;
       try {
         const info = await call("aws_auth_status", { context: thing.context });
-        if (seq !== ssoSeq) return;
+        if (seq !== ssoSeq || selectedThing()?.id !== thing.id) return;
+        ssoPending = false;
         const meta = info?._request;
-        const matches = meta && ["profile", "account_id", "region"].every(key => meta[key] === thing.context[key]);
+        const matches = meta && ["profile", "account_id", "region"].every(k => meta[k] === thing.context[k]);
         showSso(matches ? thing : null, info);
-      } catch (_) { if (seq === ssoSeq) showSso(null, null); }
+      } catch (_) {
+        if (seq !== ssoSeq) return;
+        ssoPending = false;
+        ssoKey = null;
+        showSso(null, null);
+      }
     }, 300);
   }
   // Local repaint of the countdown only; this timer never calls AWS.
@@ -677,6 +693,6 @@
   }
 
   window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList, renderKeys, appCommands,
-    save, notice, call, form, openForm, inspector: null };
+    save, notice, call, form, openForm, inspector: null, clearSso: () => scheduleSso(null) };
   document.addEventListener("DOMContentLoaded", boot);
 })();
