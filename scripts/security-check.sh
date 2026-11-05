@@ -46,6 +46,12 @@ python3 scripts/check-tauri-commands.py
 
 echo "== frontend syntax =="
 node --check frontend/app.js
+node --check frontend/core.js
+node --check frontend/things.js
+node --check frontend/keys.js
+node --check frontend/demo-bridge.js
+node --check frontend/inspector.js
+node --check frontend/watchlist.js
 node --check frontend/row-filter-worker.js
 node --check frontend/mock-data.js
 
