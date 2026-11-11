@@ -1,5 +1,4 @@
 // Settings, policy editor and audit log panels for the watchlist page.
-// Copied from the old app.js; the old top bar and grid hooks are removed.
 (function () {
   "use strict";
   const core = window.CloudBurritoCore;

@@ -1,6 +1,6 @@
 // Cloud Burrito — shared core: DOM helpers, bridge, request ownership,
 // result states, evidence handoffs and renderers. Plain script, no build step.
-// Pages adapt it through configure(); the code below is moved from app.js.
+// Pages adapt it through configure().
 (function () {
   "use strict";
 
@@ -20,7 +20,6 @@
   };
   function configure(partial) { Object.assign(hooks, partial); }
 
-  // ---- moved ranges follow ----
   const $ = (sel, root = document) => root.querySelector(sel);
   const el = (tag, attrs = {}, ...children) => {
     const node = document.createElement(tag);

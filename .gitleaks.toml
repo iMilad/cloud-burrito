@@ -11,7 +11,7 @@ paths = [
 ]
 
 [[allowlists]]
-description = "The exact public Studio localStorage key is not a credential."
+description = "The removed frontend/studio.js keeps the exact public Studio localStorage key in git history. It is not a credential, and the history scan still needs this."
 targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^frontend/studio\.js$''']
