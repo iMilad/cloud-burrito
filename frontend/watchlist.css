@@ -101,4 +101,5 @@ body.wl::before { content: none; }
 .wl-command-list li[aria-selected="true"] { background: var(--wl-accent-bg); }
 .wl-command-list .wl-muted { font-family: inherit; }
 .wl-command-hint { margin: 0; font-size: 12.5px; color: var(--wl-fail); }
-.wl-command[hidden], .wl-command-list[hidden] { display: none; }
+/* These set their own display, so hidden needs its own rule. */
+.wl-row[hidden], .wl-group[hidden], .wl-command[hidden], .wl-command-list[hidden] { display: none; }

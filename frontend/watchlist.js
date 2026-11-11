@@ -667,10 +667,11 @@
     audit: desktopOnly(panelOpen.audit), theme: desktopOnly(panelOpen.theme),
   };
 
-  // While the inspector shows an unsaved result, that result is the selected
-  // thing. These keys never act on the list row behind it.
+  // While the inspector has focus and shows an unsaved result, that result is
+  // the selected thing: these keys never act on the list row behind it. Back
+  // in the list, they act on the selected row; s still saves the result.
   const onSavedThing = run => () => {
-    if (inspector.current()?.thing.unsaved) { notice("This result is not saved. Press s to save it."); return; }
+    if (state.focus === "inspector" && inspector.current()?.thing.unsaved) { notice("This result is not saved. Press s to save it."); return; }
     run();
   };
 
