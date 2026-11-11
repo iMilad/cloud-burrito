@@ -5,11 +5,13 @@
 //! persisted. Raw inputs, resource payloads, errors and configuration are not.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -17,13 +19,51 @@ use serde_json::{json, Map, Value};
 
 use crate::paths::AppPaths;
 
-static WRITE_LOCK: Mutex<()> = Mutex::new(());
+/// One lock per history directory, keyed by its canonical path. Appends,
+/// flushes, rotation, retention changes, status reads and preservation of one
+/// directory stay serialized; the app has one directory per process. Isolated
+/// directories, such as test homes, no longer wait for each other.
+static HISTORY_LOCKS: Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
 pub const MAX_TAIL_ENTRIES: usize = 1000;
 // Bound retained memory even for old, malformed or externally edited logs.
 pub(crate) const MAX_LINE_BYTES: usize = 16 * 1024;
 
 pub(crate) fn log_path(paths: &AppPaths) -> PathBuf {
     paths.data_file("audit.log")
+}
+
+/// Callers hold the returned lock for the whole history operation.
+fn history_lock(paths: &AppPaths) -> Arc<Mutex<()>> {
+    let key = canonical_directory(paths.data_dir());
+    let mut locks = HISTORY_LOCKS.lock();
+    if let Some(lock) = locks.get(&key) {
+        return lock.clone();
+    }
+    // A lock only the map still holds has no holder or waiter to split.
+    locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+    locks.entry(key).or_default().clone()
+}
+
+/// Resolve the deepest existing ancestor and append the missing tail, so a
+/// directory has the same key before and after it is created.
+fn canonical_directory(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(resolved) = fs::canonicalize(current) {
+            return missing
+                .iter()
+                .rev()
+                .fold(resolved, |resolved, name| resolved.join(name));
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_owned());
+                current = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Final-component protection only: AppPaths parents are trusted. These
@@ -228,7 +268,8 @@ pub(crate) fn append_record(
     if line.is_empty() || line.len() > MAX_LINE_BYTES || line.last() != Some(&b'\n') {
         return Err(());
     }
-    let _guard = WRITE_LOCK.lock();
+    let lock = history_lock(paths);
+    let _guard = lock.lock();
     let path = log_path(paths);
     crate::file_privacy::ensure_directory(path.parent().ok_or(())?).map_err(|_| ())?;
     let sizes = history_sizes(paths)?;
@@ -267,7 +308,8 @@ pub(crate) fn append_record(
 /// Flush the current file under the same lock as append, rotation and preserve.
 /// A write-capable existing handle is needed for FlushFileBuffers on Windows.
 pub(crate) fn sync_history(paths: &AppPaths) -> Result<(), ()> {
-    let _guard = WRITE_LOCK.lock();
+    let lock = history_lock(paths);
+    let _guard = lock.lock();
     let path = log_path(paths);
     let Some(inspected) = existing_metadata(&path)? else {
         return Ok(());
@@ -339,7 +381,8 @@ pub(crate) fn transact_retention<T, E>(
     mode: RetentionMode,
     save: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, RetentionError<E>> {
-    let _guard = WRITE_LOCK.lock();
+    let lock = history_lock(paths);
+    let _guard = lock.lock();
     if mode == RetentionMode::Bounded {
         let sizes = history_sizes(paths).map_err(|_| RetentionError::HistoryUnavailable)?;
         if sizes.iter().any(|(_, size)| *size > RETENTION_FILE_BYTES) {
@@ -363,7 +406,8 @@ pub(crate) fn set_retention(
 }
 
 pub(crate) fn history_status(paths: &AppPaths) -> Result<Value, ()> {
-    let _guard = WRITE_LOCK.lock();
+    let lock = history_lock(paths);
+    let _guard = lock.lock();
     let sizes = history_sizes(paths)?;
     let active = sizes
         .iter()
@@ -384,7 +428,8 @@ pub(crate) fn history_status(paths: &AppPaths) -> Result<Value, ()> {
 /// Explicit preservation moves only the five known history names into a fresh
 /// exclusive directory. It never overwrites or deletes an existing archive.
 pub(crate) fn preserve_history(paths: &AppPaths) -> Result<Value, ()> {
-    let _guard = WRITE_LOCK.lock();
+    let lock = history_lock(paths);
+    let _guard = lock.lock();
     let sizes = history_sizes(paths)?;
     if sizes.is_empty() {
         return Ok(json!({"ok":true,"preserved_files":0,"preserved_bytes":0}));
@@ -724,5 +769,78 @@ mod tests {
         create.create_new(true).append(true);
         assert!(checked_open(&path, None, &create).is_err());
         assert_eq!(fs::read(&moved).unwrap(), b"synthetic-original-history\n");
+    }
+
+    #[test]
+    fn writers_to_one_history_wait_for_its_lock_and_other_histories_do_not() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        let other = TestDir::new();
+        let writer = |paths: AppPaths| {
+            let (done, finished) = mpsc::channel();
+            std::thread::spawn(move || {
+                let line = encoded(&json!({"kind":"request","attempt":1}), 1.0).unwrap();
+                let _ = done.send(append_record(&paths, &line, &AtomicBool::new(false)));
+            });
+            finished
+        };
+        let held = history_lock(&paths);
+        let guard = held.lock();
+        let same = writer(paths.clone());
+        let unrelated = writer(other.paths());
+        assert_eq!(unrelated.recv_timeout(Duration::from_secs(30)), Ok(Ok(())));
+        // Waiting longer can only hide a bug here, never fail a correct lock.
+        assert!(same.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(!log_path(&paths).exists());
+        drop(guard);
+        assert_eq!(same.recv_timeout(Duration::from_secs(30)), Ok(Ok(())));
+        assert_eq!(try_tail(&paths, 10).unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_history_has_one_lock_under_any_spelling_and_lines_never_interleave() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        let alias_home = dir.path().join("synthetic-home-alias");
+        std::os::unix::fs::symlink(dir.path(), &alias_home).unwrap();
+        let alias = AppPaths::from_home(alias_home);
+        let before_creation = history_lock(&paths);
+        assert!(Arc::ptr_eq(&before_creation, &history_lock(&alias)));
+        crate::file_privacy::ensure_directory(paths.data_dir()).unwrap();
+        assert!(Arc::ptr_eq(&before_creation, &history_lock(&paths)));
+        assert!(Arc::ptr_eq(&before_creation, &history_lock(&alias)));
+        let other = TestDir::new();
+        assert!(!Arc::ptr_eq(
+            &before_creation,
+            &history_lock(&other.paths())
+        ));
+        drop(before_creation);
+
+        let writers: Vec<_> = [&paths, &alias, &paths, &alias]
+            .into_iter()
+            .enumerate()
+            .map(|(writer, paths)| {
+                let paths = paths.clone();
+                std::thread::spawn(move || {
+                    for attempt in 0..50 {
+                        let entry = json!({"kind":"request","attempt":writer * 100 + attempt});
+                        append_record(&paths, &encoded(&entry, 1.0).unwrap(), &PRESERVE_MODE)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let history = fs::read_to_string(log_path(&paths)).unwrap();
+        let lines: Vec<Value> = history
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 200);
     }
 }
