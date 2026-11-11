@@ -436,7 +436,7 @@
             h.core.dispatchRender(v.host, result);
             if (h.onResult) h.onResult(thing, result);
           }
-        } catch (error) { if (request.current()) h.core.renderError(v.host, String(error)); }
+        } catch (error) { if (request.current()) h.core.renderError(v.host, String(error?.message || error)); }
         if (h.recovery) showRecovery(view, widget, inputs);
       },
       open() { if (view.armed) return; view.armed = true; h.refresh(); },

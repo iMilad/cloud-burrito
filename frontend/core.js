@@ -680,7 +680,7 @@
         });
         host.append(el("div", { class: "evidence-stream-controls" }, select, view), output);
       });
-    } catch (error) { if (request.current()) failResult(host, request, String(error)); }
+    } catch (error) { if (request.current()) failResult(host, request, String(error?.message || error)); }
   }
 
   function failResult(host, request, message, spec) {
@@ -787,7 +787,7 @@
       const result = await fetchWidgetData(widgetName, inputs, host, contextOverride, request);
       if (request.accept(result)) dispatchRender(host, result);
     } catch (error) {
-      if (request.current()) renderError(host, String(error));
+      if (request.current()) renderError(host, String(error?.message || error));
     }
   }
   function wireRequestInputs(form, owner, errorEl) {
