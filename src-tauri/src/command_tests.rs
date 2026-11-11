@@ -105,7 +105,10 @@ async fn fifty_identical_cold_pins_share_one_verified_context_and_one_worker() {
         .collect();
     let all = futures::future::join_all(requests);
     tokio::pin!(all);
-    tokio::time::timeout(Duration::from_secs(3), async {
+    // Hang guard only, not a speed claim. Each request loads the policy
+    // several times behind the process-wide policy I/O lock, which every
+    // other test also uses: under full-suite load this takes over 3 seconds.
+    tokio::time::timeout(Duration::from_secs(30), async {
         while fixture.process.calls.load(Ordering::SeqCst) == 0 {
             assert!(futures::poll!(&mut all).is_pending());
             tokio::task::yield_now().await;

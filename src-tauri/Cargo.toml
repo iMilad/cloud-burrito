@@ -58,3 +58,5 @@ strip = false
 [dev-dependencies]
 # Already locked transitively; exposes the test-only fail-closed HTTP fence.
 aws-smithy-runtime-api = { version = "=1.12.3", features = ["client"] }
+# Paused tokio clock for lifecycle tests whose budgets must not depend on host load.
+tokio = { version = "1", features = ["test-util"] }
