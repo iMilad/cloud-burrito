@@ -66,8 +66,9 @@ tag has been published for these changes.
   warnings are tracked separately; this is not a clean-advisory claim.
 - Patch locked TLS dependencies (`rustls` 0.23.46, `rustls-webpki` 0.103.16,
   `ctutils` 0.4.8) to resolve six vulnerabilities found by the fresh RustSec
-  audit. RUSTSEC-2026-0387 in `crypto-bigint`, used by `aws-sigv4`, has no
-  compatible fix yet and is still reported.
+  audit. RUSTSEC-2026-0387 in `crypto-bigint`, used by `aws-sigv4` for SigV4a
+  signing, has no compatible fix yet. `src-tauri/.cargo/audit.toml` ignores
+  only that advisory, with the reason and the condition for removing it.
 - Limit the only secret-scanner exception for source to the exact public
   preference key in one removed file that Git history still holds, with positive
   and negative detector checks.

@@ -1,0 +1,12 @@
+# cargo-audit reads this file when it runs from src-tauri: in CI, in the
+# release workflow and in scripts/security-check.sh.
+#
+# RUSTSEC-2026-0387: timing variability in crypto-bigint 0.5.5.
+# - It comes in only through aws-sigv4, which uses it for SigV4a signing.
+# - The fix needs crypto-bigint 0.7.6 or later, and no aws-sigv4 release
+#   that works with our AWS SDK versions has it yet.
+# - Using it needs precise timing of signing on the user's own machine.
+# Accepted on 2026-11-11. Remove this entry when
+# `cargo tree -i crypto-bigint` no longer shows 0.5.x, then run `cargo audit`.
+[advisories]
+ignore = ["RUSTSEC-2026-0387"]
