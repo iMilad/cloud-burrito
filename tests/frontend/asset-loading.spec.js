@@ -18,8 +18,11 @@ test("parallel pages load all local styles and scripts without dropped connectio
     for (const page of pages) {
       expect(await page.locator('link[rel="stylesheet"]').evaluateAll(links =>
         links.filter(link => !link.sheet).map(link => new URL(link.href).pathname))).toEqual([]);
-      expect(await page.evaluate(() => typeof window.GridStack)).toBe("function");
-      expect(await page.evaluate(() => typeof window.CloudBurritoStudio?.init)).toBe("function");
+      expect(await page.evaluate(() => typeof window.GridStack)).toBe("undefined");
+      expect(await page.evaluate(() => typeof window.CloudBurritoWatchlist?.loadRow)).toBe("function");
+      expect(await page.evaluate(() => typeof window.CloudBurritoPanels?.openSettingsPanel)).toBe("function");
+      expect(await page.evaluate(() => typeof window.CloudBurritoCore?.dispatchRender)).toBe("function");
+      expect(await page.evaluate(() => typeof window.CloudBurritoCore?.configure)).toBe("function");
     }
   } finally {
     await Promise.all(contexts.map(context => context.close()));

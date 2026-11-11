@@ -19,6 +19,8 @@
     "allow-settings-set",
     "allow-dashboard-get",
     "allow-dashboard-set",
+    "allow-watchlist-get",
+    "allow-watchlist-set",
     "allow-audit-tail",
     "allow-audit-history",
     "allow-policy-get",

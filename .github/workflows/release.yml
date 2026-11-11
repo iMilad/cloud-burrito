@@ -109,8 +109,6 @@ jobs:
             scripts/release-status.py \
             scripts/check-tauri-commands.py
           bash -n scripts/*.sh
-          node --check frontend/app.js
-          node --check frontend/mock-data.js
 
       - name: Test release helpers
         run: python3 -m unittest discover -s tests/scripts -p 'test_*.py'

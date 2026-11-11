@@ -16,6 +16,17 @@ const MAX_NAME: usize = 2048;
 const MAX_QUERY: usize = 10 * 1024;
 const MAX_COMMAND: usize = 16 * 1024;
 const MAX_POLICY: usize = 64 * 1024;
+const WATCH_KINDS: [&str; 9] = [
+    "pipeline",
+    "package",
+    "logs",
+    "stack",
+    "stacks-search",
+    "lookup",
+    "query",
+    "errors",
+    "cli",
+];
 
 /// Validate only the supplied value. This function never consults environment,
 /// files, credentials, subprocesses, providers or a service transport.
@@ -23,8 +34,18 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
     json_budget(params)?;
     let p = object(params)?;
     match command {
-        "ping" | "settings_get" | "dashboard_get" | "aws_list_profiles" | "aws_auth_status"
+        "ping" | "settings_get" | "dashboard_get" | "watchlist_get" | "aws_list_profiles"
         | "policy_get" | "cli_availability" => keys(p, &[]),
+        "aws_auth_status" => {
+            keys(p, &["context"])?;
+            if let Some(context) = p.get("context") {
+                context_shape(context)?;
+                if context.get("mode").and_then(Value::as_str) != Some("pinned") {
+                    return Err("Identity status needs a pinned account context");
+                }
+            }
+            Ok(())
+        }
         "aws_set_account" => {
             keys(
                 p,
@@ -125,6 +146,32 @@ pub(crate) fn validate(command: &str, params: &Value) -> Check {
                 if let Some(config) = tile.get("config") {
                     dashboard_config(config)?;
                 }
+            }
+            Ok(())
+        }
+        "watchlist_set" => {
+            keys(p, &["things"])?;
+            let things = array(required(p, "things")?, 200)?;
+            let mut ids = HashSet::new();
+            for thing in things {
+                let thing = object(thing)?;
+                keys(thing, &["id", "kind", "context", "inputs", "order"])?;
+                let id = required_text(thing, "id", 256, false)?;
+                if !ids.insert(id) {
+                    return Err("Watchlist thing IDs must be unique");
+                }
+                if !WATCH_KINDS.contains(&required_text(thing, "kind", 32, false)?) {
+                    return Err("Unknown watchlist kind");
+                }
+                let context = object(required(thing, "context")?)?;
+                keys(context, &["mode", "profile", "account_id", "region"])?;
+                if context.get("mode").and_then(Value::as_str) != Some("pinned") {
+                    return Err("Watchlist things must use a pinned account context");
+                }
+                identity(context)?;
+                object(required(thing, "inputs")?)?;
+                required(thing, "order")?;
+                integer(thing, "order", 0, 100_000)?;
             }
             Ok(())
         }
@@ -687,6 +734,21 @@ fn json_budget(value: &Value) -> Check {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn auth_status_accepts_only_an_optional_pinned_context() {
+        let pinned = json!({"context": {"mode": "pinned", "profile": "demo-fixture", "account_id": "acct-a-fixture", "region": "eu-west-1"}});
+        assert!(validate("aws_auth_status", &json!({})).is_ok());
+        assert!(validate("aws_auth_status", &pinned).is_ok());
+        for params in [
+            json!({"context": {"mode": "inherit"}}),
+            json!({"context": {"profile": "demo-fixture", "account_id": "acct-a-fixture", "region": "eu-west-1"}}),
+            json!({"context": {"mode": "pinned", "profile": "demo-fixture"}}),
+            json!({"account_override": pinned["context"].clone()}),
+        ] {
+            assert!(validate("aws_auth_status", &params).is_err(), "{params}");
+        }
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -996,6 +1058,7 @@ mod tests {
             "ping",
             "settings_get",
             "dashboard_get",
+            "watchlist_get",
             "aws_list_profiles",
             "aws_auth_status",
             "cli_availability",

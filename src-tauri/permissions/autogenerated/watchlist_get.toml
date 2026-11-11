@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-watchlist-get"
+description = "Enables the watchlist_get command without any pre-configured scope."
+commands.allow = ["watchlist_get"]
+
+[[permission]]
+identifier = "deny-watchlist-get"
+description = "Denies the watchlist_get command without any pre-configured scope."
+commands.deny = ["watchlist_get"]

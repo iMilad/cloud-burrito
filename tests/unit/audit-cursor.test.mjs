@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-const source = readFileSync(new URL('../../frontend/app.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../frontend/panels.js', import.meta.url), 'utf8');
 const start = source.indexOf('  let auditTimer = null;');
-const end = source.indexOf('  // ===== Searchable top bar pickers', start);
+const end = source.indexOf('  // ===== End of audit panel =====', start);
 assert(start > 0 && end > start);
 const rows = (start, count) => Array.from({ length: count }, (_, i) => ({ kind: 'request', command: `synthetic-${start + i}` }));
 function fixture() {

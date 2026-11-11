@@ -25,6 +25,7 @@ mod settings;
 mod state;
 mod storage;
 mod validation;
+mod watchlist;
 mod widgets;
 mod work_registry;
 
@@ -77,6 +78,8 @@ pub fn run() {
             commands::settings_set,
             commands::dashboard_get,
             commands::dashboard_set,
+            commands::watchlist_get,
+            commands::watchlist_set,
             commands::audit_tail,
             commands::audit_history,
             commands::policy_get,

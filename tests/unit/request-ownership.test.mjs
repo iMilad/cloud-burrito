@@ -5,9 +5,9 @@ import vm from 'node:vm';
 
 // Exercise the production ownership boundary; browser specs exercise the real
 // renderers and controls. No native adapter, personal configuration or AWS.
-const source = readFileSync(new URL('../../frontend/app.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../frontend/core.js', import.meta.url), 'utf8');
 const start = source.indexOf('  let nextOwnedRequestId = 0;');
-const end = source.indexOf('  function clearWidgetResults(', start);
+const end = source.indexOf('  function wireRequestInputs(', start);
 const resultHelpersStart = source.indexOf('  function resultHostForRequest(', start);
 const fetchIntoStart = source.indexOf('  async function fetchWidgetInto(', resultHelpersStart);
 assert(start >= 0 && resultHelpersStart > start && fetchIntoStart > resultHelpersStart && end > fetchIntoStart);
@@ -22,13 +22,11 @@ function fixture() {
   const errors = [];
   const context = vm.createContext({
     currentSelectionId: 1, isTauri: true, settingsStorageReady: true, discoveryReady: true, lastSetAccountResult: { ok: true },
-    topbarState: { profile: 'demo-fixture', accountId: 'acct-a-fixture', region: 'region-fixture' },
-    contextForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
-    contextPayloadForTile: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
     contextOverrideFromElement: () => null,
     beginResultRequest: () => {},
     disposeRenderTree: () => {},
-    tauriInvoke: (command, args) => {
+    canInvoke: () => true,
+    invoke: (command, args) => {
       if (command === 'request_cancel') {
         cancellations.push(args.params.request_id);
         return Promise.resolve({ ok: true, cancelled_locally: true, cleanup_confirmed: false });
@@ -38,6 +36,16 @@ function fixture() {
     dispatchRender: (node, result) => rendered.push({ node, result }),
     renderError: (node, error) => errors.push({ node, error }),
   });
+  context.hooks = {
+    contextFor: node => node.pin ? { mode: 'pinned', ...node.pin } : { mode: 'inherit' },
+    isIndependent: (node, ctx) => !!node.closest?.('.pipeline-pin-card') || ctx.mode === 'pinned',
+    selection: () => context.currentSelectionId,
+    selectionContext: () => ({ profile: 'demo-fixture', account_id: 'acct-a-fixture', region: 'region-fixture' }),
+    requestsAllowed: independent => (!context.isTauri || context.settingsStorageReady)
+      && (independent || (context.discoveryReady && context.lastSetAccountResult?.ok === true)),
+    beforeFetch: () => {},
+    afterFetch: () => {},
+  };
   vm.runInContext(handlers, context);
   const node = (parentNode = null, pin = null) => ({ isConnected: true, parentNode, pin,
     closest: () => pin ? {} : null });

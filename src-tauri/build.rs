@@ -14,6 +14,8 @@ fn main() {
             "settings_set",
             "dashboard_get",
             "dashboard_set",
+            "watchlist_get",
+            "watchlist_set",
             "audit_tail",
             "audit_history",
             "policy_get",
