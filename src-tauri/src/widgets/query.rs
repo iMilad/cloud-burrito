@@ -630,6 +630,13 @@ mod tests {
             limit: 100,
         }
     }
+    // Every async test here runs on the paused tokio clock. The run path does
+    // real file I/O (test audit appends, policy reads behind process-wide
+    // locks) that can take over 100 ms when the full suite runs in parallel.
+    // On a real clock that I/O ate these budgets and the 3 ms cancel point,
+    // so outcomes depended on host load. Paused time only moves when every
+    // task waits on a timer (spawn_blocking reads hold it), so the order of
+    // cancel, start delay, start bound and deadline is fixed.
     fn timing() -> QueryTiming {
         QueryTiming {
             start: Duration::from_millis(50),
@@ -667,7 +674,7 @@ mod tests {
             json!({"success":success}),
         )
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn stop_revoked_while_queued_prevents_any_remote_query_start() {
         let (dir, http, ctx) = fixture(vec![]);
         let scope = ctx.runtime.work.as_ref().unwrap();
@@ -704,7 +711,7 @@ mod tests {
         http.assert_finished();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn completed_query_releases_capacity_without_stopping() {
         let (_dir, http, ctx) = fixture(vec![start(), poll("Complete")]);
         let outcome = run(&ctx, &spec(), timing()).await;
@@ -715,7 +722,7 @@ mod tests {
         assert_eq!(ctx.runtime.scheduler.snapshot().queries, 0);
         assert!(ctx.runtime.queries.entries.lock().is_empty());
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn cancelled_slow_start_keeps_id_then_stops_with_original_authority() {
         let (_dir, http, ctx) = fixture(vec![
             start().delay(Duration::from_millis(15)),
@@ -734,7 +741,7 @@ mod tests {
         http.assert_finished();
         assert_eq!(ctx.runtime.scheduler.snapshot().queries, 0);
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn lost_start_blocks_automatic_replacement_until_explicit_acknowledgement() {
         let (_dir, http, mut ctx) = fixture(vec![
             ExpectedRequest::json(START, json!({}), json!({})),
@@ -751,7 +758,7 @@ mod tests {
         assert_eq!(run(&ctx, &spec(), timing()).await.state, "complete");
         http.assert_finished();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn polling_failure_attempts_stop_and_preserves_unknown_when_not_confirmed() {
         for confirmed in [true, false] {
             let (_dir, http, ctx) = fixture(vec![
@@ -778,7 +785,7 @@ mod tests {
             http.assert_finished();
         }
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn changed_policy_denies_cleanup_without_using_an_old_allow() {
         let (dir, http, ctx) = fixture(vec![start().delay(Duration::from_millis(15))]);
         let cancel = ctx.runtime.work.as_ref().unwrap().cancellation.clone();
@@ -797,7 +804,7 @@ mod tests {
         http.assert_finished();
         assert_eq!(ctx.runtime.queries.entries.lock().len(), 1);
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn polling_limit_and_failed_stop_remain_explicitly_unknown() {
         let (_dir, http, ctx) = fixture(vec![
             start(),
@@ -822,7 +829,7 @@ mod tests {
         assert_eq!(outcome.cleanup, Cleanup::Failed);
         http.assert_finished();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn hung_start_has_a_bound_and_does_not_retry_or_invent_an_id() {
         let (_dir, http, ctx) = fixture(vec![start().delay(Duration::from_millis(30))]);
         let outcome = run(
@@ -862,7 +869,7 @@ mod tests {
             .finish(false);
         assert!(registry.begin("one-too-many".into(), false).is_ok());
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn two_unknown_remote_queries_reserve_capacity_and_block_more_dispatch() {
         let (_dir, http, ctx) = fixture(vec![
             ExpectedRequest::json(START, json!({}), json!({})),
@@ -887,7 +894,7 @@ mod tests {
         assert_eq!(http.calls(), 2);
         http.assert_finished();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn aws_stop_denial_is_not_reported_as_remote_completion() {
         let (_dir,http,ctx)=fixture(vec![start(),poll("Running"),ExpectedRequest::json(STOP,json!({}),json!({"__type":"AccessDeniedException","message":"SYNTHETIC_PRIVATE_STOP_MESSAGE"})).status(400)]);
         let outcome = run(
@@ -907,7 +914,7 @@ mod tests {
         assert_eq!(ctx.runtime.scheduler.snapshot().queries, 1);
         http.assert_finished();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn explicit_selected_token_releases_one_same_principal_unknown_for_changed_query() {
         let (_dir, http, mut ctx) = fixture(vec![
             ExpectedRequest::json(START, json!({}), json!({})),
@@ -928,7 +935,7 @@ mod tests {
         assert_eq!(ctx.runtime.scheduler.snapshot().queries, 0);
         http.assert_finished();
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn selecting_one_unknown_cannot_implicitly_acknowledge_a_second_unknown() {
         let (_dir, http, mut ctx) = fixture(vec![
             ExpectedRequest::json(START, json!({}), json!({})),
@@ -952,7 +959,7 @@ mod tests {
         http.assert_finished();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn recovery_token_cannot_release_another_verified_principals_hold() {
         let (_dir, http, ctx) = fixture(vec![ExpectedRequest::json(START, json!({}), json!({}))]);
         let first = run(&ctx, &spec(), timing()).await;
