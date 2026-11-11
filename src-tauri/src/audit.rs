@@ -800,13 +800,59 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn one_history_has_one_lock_under_any_spelling_and_lines_never_interleave() {
-        let dir = TestDir::new();
-        let paths = dir.paths();
+    fn home_alias(dir: &TestDir) -> AppPaths {
         let alias_home = dir.path().join("synthetic-home-alias");
         std::os::unix::fs::symlink(dir.path(), &alias_home).unwrap();
-        let alias = AppPaths::from_home(alias_home);
+        AppPaths::from_home(alias_home)
+    }
+
+    /// Four writers, two per spelling of one history, 50 records each.
+    #[cfg(unix)]
+    fn race_writers(paths: &AppPaths, alias: &AppPaths, bounded: bool) {
+        let writers: Vec<_> = [paths, alias, paths, alias]
+            .into_iter()
+            .enumerate()
+            .map(|(writer, paths)| {
+                let paths = paths.clone();
+                std::thread::spawn(move || {
+                    let retention = AtomicBool::new(bounded);
+                    for attempt in 0..50 {
+                        let entry = json!({"kind":"request","attempt":writer * 100 + attempt});
+                        append_record(&paths, &encoded(&entry, 1.0).unwrap(), &retention).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_every_record_once(history: &[u8]) {
+        let attempts: Vec<u64> = std::str::from_utf8(history)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<Value>(line).unwrap()["attempt"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect();
+        let unique: std::collections::BTreeSet<u64> = attempts.iter().copied().collect();
+        let expected = (0..4)
+            .flat_map(|writer| (0..50).map(move |attempt| writer * 100 + attempt))
+            .collect();
+        assert_eq!(attempts.len(), 200);
+        assert_eq!(unique, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_history_has_one_lock_under_any_spelling_and_keeps_every_record_once() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        let alias = home_alias(&dir);
         let before_creation = history_lock(&paths);
         assert!(Arc::ptr_eq(&before_creation, &history_lock(&alias)));
         crate::file_privacy::ensure_directory(paths.data_dir()).unwrap();
@@ -819,28 +865,32 @@ mod tests {
         ));
         drop(before_creation);
 
-        let writers: Vec<_> = [&paths, &alias, &paths, &alias]
-            .into_iter()
-            .enumerate()
-            .map(|(writer, paths)| {
-                let paths = paths.clone();
-                std::thread::spawn(move || {
-                    for attempt in 0..50 {
-                        let entry = json!({"kind":"request","attempt":writer * 100 + attempt});
-                        append_record(&paths, &encoded(&entry, 1.0).unwrap(), &PRESERVE_MODE)
-                            .unwrap();
-                    }
-                })
-            })
-            .collect();
-        for writer in writers {
-            writer.join().unwrap();
-        }
-        let history = fs::read_to_string(log_path(&paths)).unwrap();
-        let lines: Vec<Value> = history
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(lines.len(), 200);
+        race_writers(&paths, &alias, false);
+        assert_every_record_once(&fs::read(log_path(&paths)).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_writers_under_any_spelling_rotate_once_and_keep_every_record_once() {
+        let dir = TestDir::new();
+        let paths = dir.paths();
+        let alias = home_alias(&dir);
+        crate::file_privacy::ensure_directory(paths.data_dir()).unwrap();
+        // Room for about 60 of the 200 records, so writers race through the
+        // size check and rotation. A split lock rotates twice or loses a write.
+        let filled = RETENTION_FILE_BYTES - 4096;
+        fs::File::create(log_path(&paths))
+            .unwrap()
+            .set_len(filled)
+            .unwrap();
+
+        race_writers(&paths, &alias, true);
+        assert!(!paths.data_file("audit.2").exists());
+        let mut history = fs::read(paths.data_file("audit.1")).unwrap();
+        assert!(history[..filled as usize].iter().all(|byte| *byte == 0));
+        history.drain(..filled as usize);
+        assert!(!history.is_empty());
+        history.extend(fs::read(log_path(&paths)).unwrap());
+        assert_every_record_once(&history);
     }
 }

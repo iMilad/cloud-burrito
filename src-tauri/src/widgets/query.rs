@@ -631,12 +631,14 @@ mod tests {
         }
     }
     // Every async test here runs on the paused tokio clock. The run path does
-    // real file I/O (test audit appends, policy reads behind process-wide
-    // locks) that can take over 100 ms when the full suite runs in parallel.
+    // real file I/O (test audit appends, policy reads behind a process-wide
+    // lock) that can take over 100 ms when the full suite runs in parallel.
     // On a real clock that I/O ate these budgets and the 3 ms cancel point,
-    // so outcomes depended on host load. Paused time only moves when every
-    // task waits on a timer (spawn_blocking reads hold it), so the order of
-    // cancel, start delay, start bound and deadline is fixed.
+    // so outcomes depended on host load. Paused time only moves when no task
+    // can run (spawn_blocking reads hold it), so the order of cancel, start
+    // delay, start bound and deadline is fixed. It also moves while a task
+    // waits on a plain thread channel, but never during a busy yield loop, so
+    // wait loops here sleep instead of yielding.
     fn timing() -> QueryTiming {
         QueryTiming {
             start: Duration::from_millis(50),
@@ -694,7 +696,7 @@ mod tests {
         });
         tokio::time::timeout(Duration::from_secs(1), async {
             while ctx.runtime.scheduler.snapshot().queued == 0 {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
