@@ -52,6 +52,9 @@ body.wl::before { content: none; }
 .wl-row-state[data-tone="warn"] .wl-state-text { color: var(--wl-warn); }
 .wl-row-state[data-tone="muted"] .wl-state-text { color: var(--wl-muted); }
 .wl-row[data-loading="true"] .wl-state-text { opacity: .7; }
+/* Request owners for a row. Core shows a loading status on its request hosts,
+   but a row shows its state in .wl-row-state, so these never take space. */
+.wl-row-owner, .wl-row-owner-detail { display: none; }
 .wl-state-flag { font-size: 11.5px; color: var(--wl-warn); border: 1px solid currentColor; border-radius: 5px; padding: 0 5px; }
 .wl-age { color: var(--wl-muted); font-size: 12px; }
 .wl-empty { margin: 48px 24px; max-width: 46ch; }
