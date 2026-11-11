@@ -4,10 +4,12 @@ title = "Cloud Burrito gitleaks configuration"
 useDefault = true
 
 [[allowlists]]
-description = "Generated and ignored local build artifacts are not publishable source."
+description = "Generated and ignored local build artifacts are not publishable source. dist/ holds release-build manifests full of file hashes; .claude/worktrees/ holds other local checkouts, each scanned on its own."
 paths = [
   '''^src-tauri/gen/''',
   '''^src-tauri/target/''',
+  '''^dist/''',
+  '''^\.claude/worktrees/''',
 ]
 
 [[allowlists]]
