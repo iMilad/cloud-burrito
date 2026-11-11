@@ -120,12 +120,15 @@
       current: () => thing ? { thing, depth: stack.length } : null };
   }
 
+  // Rows carry their own data, so Enter and y act on what is shown, even when
+  // a failed refresh leaves the older rows on screen as stale.
+  const shownRow = (view, n) => view.items(view.host)[n]?._row || null;
+
   const shortId = id => { const tail = String(id || "").replace(/^exec-/, ""); return tail ? `exec-${tail.slice(-4)}` : ""; };
 
   function runsView(thing, h) {
     const view = {
       title: thing.inputs.pipeline_name,
-      rows: [],
       async render(v) {
         const request = h.core.beginOwnedRequest(v.host, thing.context);
         try {
@@ -133,21 +136,21 @@
             v.host, thing.context, request);
           if (!request.accept(result)) return;
           h.core.renderWithResultState(v.host, result, () => {
-            view.rows = Array.isArray(result.rows) ? result.rows : [];
+            const rows = Array.isArray(result.rows) ? result.rows : [];
             h.core.clear(v.host);
             if (result.render !== "table") { h.core.dispatchRenderContent(v.host, result); return; }
-            if (!view.rows.length) {
+            if (!rows.length) {
               v.host.append(h.el("p", { class: "wl-hint" }, h.core.resultFailure(result)
                 ? result.error || "Runs could not be loaded. Press r to retry." : "No runs were returned for this pipeline."));
               return;
             }
-            v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Runs" }, ...view.rows.map((run, n) =>
+            v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Runs" }, ...rows.map((run, n) => Object.assign(
               h.el("li", { class: "wl-item", role: "option", tabindex: "-1", "data-index": String(n) },
                 h.el("span", { class: `wl-dot wl-tone-${h.T.statusTone(run.status)}`, "aria-hidden": "true" }),
                 h.el("code", { class: "wl-id" }, run.execution_id),
                 h.el("span", { class: "wl-muted" }, run.trigger || ""),
                 h.el("span", { class: `badge ${h.core.statusToBadge(run.status)}` }, h.core.formatStatusLabel(run.status)),
-                h.el("span", { class: "wl-muted" }, h.core.formatDisplayValue("last_updated", run.last_updated).text)))));
+                h.el("span", { class: "wl-muted" }, h.core.formatDisplayValue("last_updated", run.last_updated).text)), { _row: run }))));
             v.host.querySelectorAll(".wl-item").forEach(item => item.addEventListener("click", () => {
               view.index = Number(item.dataset.index);
               view.open(view.index, h);
@@ -156,8 +159,8 @@
         } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
       },
       items: host => Array.from(host.querySelectorAll(".wl-item")),
-      copy: n => view.rows[n]?.execution_id || null,
-      open(n, { push }) { const run = view.rows[n]; if (run) push(actionsView(thing, run, h)); },
+      copy: n => shownRow(view, n)?.execution_id || null,
+      open(n, { push }) { const run = shownRow(view, n); if (run) push(actionsView(thing, run, h)); },
     };
     return view;
   }
@@ -165,16 +168,14 @@
   function actionsView(thing, run, h) {
     const view = {
       title: `run ${shortId(run.execution_id)}`,
-      actions: [],
       async render(v) {
         const request = h.core.beginOwnedRequest(v.host, thing.context);
         try {
           const result = await h.core.fetchWidgetData("pipeline-execution-detail",
             { pipeline_name: thing.inputs.pipeline_name, execution_id: run.execution_id }, v.host, thing.context, request);
           if (!request.accept(result)) return;
-          view.actions = Array.isArray(result.actions) ? result.actions : [];
           h.core.dispatchRender(v.host, result);
-          const failed = view.actions.findIndex(a => /fail/i.test(String(a.status)));
+          const failed = view.items(v.host).findIndex(block => /fail/i.test(String(block._action?.status)));
           view.index = failed >= 0 ? failed : 0;
         } catch (error) { if (request.current()) h.core.renderError(v.host, String(error?.message || error)); }
       },
@@ -182,7 +183,7 @@
       consoleLink: n => view.host.querySelectorAll(".exec-action-block")[n]?.querySelector("a.exec-link") || null,
       copy: () => run.execution_id,
       open(n, { push, notice }) {
-        const action = view.actions[n];
+        const action = view.items(view.host)[n]?._action;
         const target = action ? h.core.reviewedHandoff(action.handoffs?.build, "build") : null;
         if (target?.status === "available" && target.widget === "codebuild-log") push(buildLogView(thing, target, h));
         else notice("This action has no build log to open.");
@@ -224,8 +225,7 @@
         } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
       },
       items: host => Array.from(host.querySelectorAll("tr.expandable")),
-      // Map the mounted row back to its package: the table pages long lists.
-      copy: n => view.rows.find(r => r.package === view.items(view.host)[n]?.dataset.package)?.latest_version || null,
+      copy: n => shownRow(view, n)?.latest_version || null,
       open(n) { view.host.querySelectorAll("tr.expandable")[n]?.click(); },
     };
 
@@ -234,7 +234,7 @@
       let partial = false;
       const pending = rows.filter(r => r.enrichment_state !== "complete").map(r => r.package);
       for (let start = 0; start < pending.length; start += 25) {
-        const owner = h.el("div", { hidden: true });
+        const owner = h.el("div", { class: "wl-batch-owner", hidden: true });
         v.host.append(owner);
         const batch = h.core.beginOwnedRequest(owner, thing.context);
         const enriched = await h.core.fetchWidgetData("codeartifact-packages",
@@ -302,7 +302,6 @@
     const widget = thing.inputs.source === "lambda" ? "log-tail" : "cloudwatch-logs";
     const view = {
       title: thing.inputs.function_name || thing.inputs.log_group,
-      streams: [],
       async render(v) {
         const request = h.core.beginOwnedRequest(v.host, thing.context);
         try {
@@ -311,21 +310,21 @@
           if (!request.accept(result)) return;
           h.core.renderArrayResult(v.host, result, "streams", streams => {
             h.core.clear(v.host);
-            view.streams = streams.filter(s => typeof s.name === "string" && s.name);
+            const named = streams.filter(s => typeof s.name === "string" && s.name);
             // A group other than the /aws/lambda/<name> guess came from the function's reviewed logging config.
             if (thing.inputs.source === "lambda") v.host.append(h.el("p", { class: "wl-hint" },
               thing.inputs.log_group === `/aws/lambda/${thing.inputs.function_name}`
                 ? `Log group ${thing.inputs.log_group} comes from the default Lambda naming convention. It is not verified.`
                 : `Log group ${thing.inputs.log_group} comes from this function's logging config.`));
-            if (!view.streams.length) { v.host.append(h.el("p", { class: "wl-hint" }, "No log streams were returned for this log group.")); return; }
-            v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Log streams" }, ...view.streams.map((s, n) =>
+            if (!named.length) { v.host.append(h.el("p", { class: "wl-hint" }, "No log streams were returned for this log group.")); return; }
+            v.host.append(h.el("ul", { class: "wl-items", role: "listbox", "aria-label": "Log streams" }, ...named.map((s, n) => Object.assign(
               h.el("li", { class: "wl-item", role: "option", tabindex: "-1", "data-index": String(n) },
                 h.el("span", { class: "wl-dot", "aria-hidden": "true" }),
                 h.el("code", { class: "wl-id" }, s.name),
                 h.el("span", { class: "wl-muted" }, "last event"),
                 h.el("span", { class: "wl-muted" }, Number(s.last_event_timestamp)
                   ? h.core.formatDisplayValue("time", new Date(Number(s.last_event_timestamp)).toISOString()).text : ""),
-                h.el("span", {})))));
+                h.el("span", {})), { _row: s }))));
             v.host.querySelectorAll(".wl-item").forEach(item => item.addEventListener("click", () => {
               view.index = Number(item.dataset.index);
               view.open(view.index, h);
@@ -334,8 +333,8 @@
         } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
       },
       items: host => Array.from(host.querySelectorAll(".wl-item")),
-      copy: n => view.streams[n]?.name || null,
-      open(n, { push }) { const stream = view.streams[n]; if (stream) push(eventsView(thing, widget, stream.name, h)); },
+      copy: n => shownRow(view, n)?.name || null,
+      open(n, { push }) { const stream = shownRow(view, n); if (stream) push(eventsView(thing, widget, stream.name, h)); },
     };
     return view;
   }
@@ -365,14 +364,12 @@
   function stacksSearchView(thing, h) {
     const view = {
       title: h.T.name(thing),
-      rows: [],
       async render(v) {
         const { widget, inputs } = h.T.rowRequest(thing);
         const request = h.core.beginOwnedRequest(v.host, thing.context);
         try {
           const result = await h.core.fetchWidgetData(widget, inputs, v.host, thing.context, request);
           if (!request.accept(result)) return;
-          view.rows = Array.isArray(result.rows) ? result.rows : [];
           // Today's table renderer: at most 100 mounted rows per page, and its
           // filter searches every row. Keeps large accounts fast.
           h.core.renderTable(v.host, result, { rowKey: row => row.stack, filterEmptyText: "No stacks match this filter." });
@@ -387,10 +384,9 @@
           }
         } catch (error) { if (request.current()) h.core.failResult(v.host, request, String(error?.message || error)); }
       },
-      // Only the rows of the current page are mounted; the index maps back to
-      // the full result through data-source-row.
+      // Only the rows of the current page are mounted.
       items: host => Array.from(host.querySelectorAll("tbody > tr[data-source-row]")),
-      source: n => view.rows[Number(view.items(view.host)[n]?.dataset.sourceRow)] || null,
+      source: n => shownRow(view, n),
       copy: n => view.source(n)?.stack || null,
       open(n, { push }) { const s = view.source(n); if (s?.stack) push(stackView(thing, h, String(s.stack))); },
     };
@@ -422,11 +418,14 @@
       armed: false,
       acknowledge: null,
       async render(v) {
+        const { widget, inputs } = h.T.rowRequest(thing);
         if (!view.armed) {
-          v.host.append(h.el("p", { class: "wl-hint" }, ON_DEMAND[thing.kind]), h.el("p", { class: "wl-hint" }, "Press r or Enter to run it."));
+          v.host.append(h.el("p", { class: "wl-hint" }, ON_DEMAND[thing.kind]));
+          // A paused query shows why first; r and Enter cannot run it yet.
+          if (h.recovery?.get(h.recovery.key(widget, inputs, thing.context))) showRecovery(view, widget, inputs);
+          else v.host.append(h.el("p", { class: "wl-hint" }, "Press r or Enter to run it."));
           return;
         }
-        const { widget, inputs } = h.T.rowRequest(thing);
         const extra = view.acknowledge || {};
         view.acknowledge = null;
         const request = h.core.beginOwnedRequest(v.host, thing.context);
@@ -436,7 +435,7 @@
             h.core.dispatchRender(v.host, result);
             if (h.onResult) h.onResult(thing, result);
           }
-        } catch (error) { if (request.current()) h.core.renderError(v.host, String(error)); }
+        } catch (error) { if (request.current()) h.core.renderError(v.host, String(error?.message || error)); }
         if (h.recovery) showRecovery(view, widget, inputs);
       },
       open() { if (view.armed) return; view.armed = true; h.refresh(); },

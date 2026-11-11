@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { bootWatchlist, calls, saved } from "./watchlist-harness.mjs";
+import { A, bootWatchlist, calls, saved, thing } from "./watchlist-harness.mjs";
 
 const pinB = { profile: "demo-b", account_id: "acct-b-fixture", region: "eu-west-1" };
 const tiles = [
@@ -25,8 +25,25 @@ test("an existing watchlist is never replaced by a conversion", async ({ page })
 
 test("inherited widgets without a default profile are skipped with a clear note", async ({ page }) => {
   await bootWatchlist(page, { storage: "missing", tiles: [tiles[1]], settings: { default_profile: "" } });
-  await expect(page.locator("#wl-notice")).toContainText("1 widget needs an account");
+  await expect(page.locator("#wl-notice")).toHaveText("1 widget needs an account. Set a default profile in Settings, then add it with a.");
+  // The empty list is written, so the next start does not convert or show this note again.
+  expect(await calls(page, "watchlist_set")).toHaveLength(1);
   expect(await saved(page)).toEqual([]);
+});
+
+test("a default profile missing from the AWS config gets its own note", async ({ page }) => {
+  await bootWatchlist(page, { storage: "missing", tiles: [tiles[1]], settings: { default_profile: "demo-gone" } });
+  await expect(page.locator("#wl-notice")).toHaveText("1 widget needs an account. The default profile demo-gone is not in your AWS config."
+    + " Choose another default profile in Settings, then add it with a.");
+  expect(await saved(page)).toEqual([]);
+});
+
+test("a default profile without a supported region gets its own note", async ({ page }) => {
+  const far = { profile: "demo-far", account_id: "acct-far-fixture", region: "region-unsupported-fixture" };
+  await bootWatchlist(page, { storage: "missing", tiles: [tiles[1], tiles[1]], profiles: [far],
+    settings: { default_profile: "demo-far", default_region: "" } });
+  await expect(page.locator("#wl-notice")).toHaveText("2 widgets need an account. The default profile demo-far has no supported region."
+    + " Set a default region in Settings, then add them with a.");
 });
 
 test("a conversion that is too big keeps the first 200 things and says what was left out", async ({ page }) => {
@@ -92,4 +109,29 @@ test("nothing can be added while the first conversion runs, so it is never lost"
   await booted;
   await expect(page.locator(".wl-row")).toHaveCount(2);
   expect(await calls(page, "watchlist_set")).toHaveLength(1);
+});
+
+test("saved things the app cannot read stay in the file, and the note says so", async ({ page }) => {
+  const one = thing("p-1", "pipeline", A, { pipeline_name: "synthetic-one" }, 0);
+  const two = thing("p-2", "pipeline", A, { pipeline_name: "synthetic-two" }, 1);
+  const unreadable = thing("p-bad", "pipeline", A, { pipeline_name: "" }, 2);
+  await bootWatchlist(page, { things: [one, two, unreadable] });
+  await expect(page.locator("#wl-notice")).toHaveText("1 saved thing could not be read. It stays in your watchlist file, but is not shown.");
+  await expect(page.locator(".wl-row")).toHaveCount(2);
+  await page.keyboard.press("Shift+J");
+  await expect.poll(async () => (await calls(page, "watchlist_set")).length).toBe(1);
+  const stored = await saved(page);
+  expect(stored).toHaveLength(3);
+  expect(stored.find(t => t.id === "p-bad")).toEqual(unreadable);
+});
+
+test("saved things the app cannot read still count toward the 200 limit", async ({ page }) => {
+  const things = Array.from({ length: 199 }, (_, i) => thing(`p-${i}`, "pipeline", A, { pipeline_name: `synthetic-${i}` }, i));
+  await bootWatchlist(page, { things: [...things, thing("p-bad", "pipeline", A, { pipeline_name: "" }, 199)] });
+  await page.keyboard.press("a");
+  const form = page.locator("#wl-form");
+  await form.getByLabel("Pipeline name").fill("synthetic-extra");
+  await form.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("#wl-form-error")).toHaveText("The watchlist is full (200 things). Remove one, then try again.");
+  expect(await calls(page, "watchlist_set")).toEqual([]);
 });

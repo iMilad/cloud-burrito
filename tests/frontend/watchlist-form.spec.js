@@ -208,3 +208,47 @@ test("a denied function listing says it is blocked by policy", async ({ page }) 
   await expect(page.locator("#wl-form-error")).toHaveText("Blocked by policy: lambda:ListFunctions. Allow it in the policy, then try again.");
   await expect(form.locator("datalist option")).toHaveCount(0);
 });
+
+// Listings show that they are loading, and say when they stopped early.
+async function capListing(page, widget, mode) {
+  await page.evaluate(([widget, mode]) => {
+    const harness = window.__watchlistHarness;
+    const normal = harness.widgets[widget];
+    harness.widgets[widget] = i => i.mode === mode ? { ...normal(i), capped: true } : normal(i);
+  }, [widget, mode]);
+}
+
+test("List functions shows that it is loading, and says when the list stopped early", async ({ page }) => {
+  await bootWatchlist(page, { things: [] });
+  await page.keyboard.press("a");
+  const form = page.locator("#wl-form");
+  await form.getByLabel("Kind").selectOption("logs");
+  await capListing(page, "log-tail", "list");
+  await page.evaluate(() => window.__watchlistHarness.hold("log-tail", "list"));
+  const button = form.getByRole("button", { name: "List functions" });
+  const status = page.locator("#wl-form-list-status");
+  await button.click();
+  await expect(status).toHaveText("Loading the list…");
+  await expect(button).toHaveAttribute("aria-busy", "true");
+  await page.evaluate(() => window.__watchlistHarness.release("log-tail", "list"));
+  await expect(form.locator("datalist option")).toHaveCount(2);
+  await expect(status).toHaveText("The list stopped at 2 functions. Type the name if yours is not listed.");
+  await expect(button).toHaveAttribute("aria-busy", "false");
+});
+
+test("List log groups says when the list stopped early, and a new choice clears the note", async ({ page }) => {
+  await bootWatchlist(page, { things: [] });
+  await page.keyboard.press("a");
+  const form = page.locator("#wl-form");
+  await form.getByLabel("Kind").selectOption("query");
+  const status = page.locator("#wl-form-list-status");
+  await form.getByRole("button", { name: "List log groups" }).click();
+  await expect(form.locator("datalist option")).toHaveCount(3);
+  await expect(status).toBeHidden();
+  await capListing(page, "cloudwatch-logs", "groups");
+  await form.getByRole("button", { name: "List log groups" }).click();
+  await expect(status).toHaveText("The list stopped at 3 log groups. Type more of the name, then list again.");
+  await form.getByLabel("Region").selectOption("us-east-1");
+  await expect(status).toBeHidden();
+  await expect(form.locator("datalist option")).toHaveCount(0);
+});

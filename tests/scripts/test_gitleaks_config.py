@@ -1,4 +1,8 @@
-"""Keep the public-preference exception narrower than the secret detector."""
+"""Keep the public-preference exception narrower than the secret detector.
+
+frontend/studio.js is gone from the tree, but git history still holds it, and
+the full-history scan needs this exception.
+"""
 import json
 from pathlib import Path
 import shutil

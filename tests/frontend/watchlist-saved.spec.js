@@ -114,3 +114,28 @@ test("changing the earlier query clears the acknowledgement tick", async ({ page
   await expect(page.getByLabel("I understand the earlier query may still be running")).not.toBeChecked();
   await expect(review).toBeDisabled();
 });
+
+test("a query paused by an earlier query says so on the row, and opening it shows the review", async ({ page }) => {
+  await bootWatchlist(page, { things: [query] });
+  await page.evaluate(() => { window.__watchlistHarness.unknownQuery = true; });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".query-recovery")).toBeVisible();
+  await expect(rowText(page, "q-1")).toHaveText("paused, press Enter to review the earlier query");
+  await page.keyboard.press("r");
+  const view = page.locator(".wl-view-host");
+  await expect(view).toContainText("An earlier query may still be running. Review it before running again.");
+  await expect(view).not.toContainText("Error:");
+  await expect(rowText(page, "q-1")).not.toContainText("press r to retry");
+  // Opened again from the list, it shows the review first, not "Press r or Enter to run it".
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".query-recovery")).toBeVisible();
+  await expect(page.locator(".wl-view")).not.toContainText("Press r or Enter to run it.");
+  expect(await calls(page, "widget_fetch", "logs-insights")).toHaveLength(1);
+  await page.locator(".query-recovery select").selectOption("q-1");
+  await page.getByLabel("I understand the earlier query may still be running").check();
+  await page.getByRole("button", { name: "Review and run again" }).click();
+  await expect(page.locator(".wl-view tbody tr")).toHaveCount(1);
+  await expect(rowText(page, "q-1")).toHaveText("1 row");
+});

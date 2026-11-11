@@ -47,17 +47,11 @@ tag has been published for these changes.
   supported service cursors and CLI truncation offsets.
 - Create private app storage on macOS/Linux and repair permissions on existing
   app files and preserved audit archives at startup without changing contents.
-- Allow connection details to close and reopen without reconnecting, preserving
-  the choice across polls and restart while surfacing a new connection failure.
 - Keep result feedback compact with optional technical details and local display
   preferences for tips and expanded results. Limited, stale and failed results
   retain visible status and recovery information.
-- Preserve an unavailable pinned account when saving unrelated widget settings.
-- Preserve results and unfinished inputs when saving header-only changes.
 - Keep newer policy drafts when asynchronous reads or saves finish, and report
   rejected saves without claiming success.
-- Restore scrolling, grid controls and keyboard focus after a fullscreen widget
-  is removed.
 - Accept the pinned stock NSIS template while rejecting custom installer hooks.
 - Provision locked application dependencies before offline release builds and
   transfer the inspected candidate archives with their original checksums.
@@ -75,8 +69,9 @@ tag has been published for these changes.
   audit. RUSTSEC-2026-0387 in `crypto-bigint`, used by `aws-sigv4` for SigV4a
   signing, has no compatible fix yet. `src-tauri/.cargo/audit.toml` ignores
   only that advisory, with the reason and the condition for removing it.
-- Limit the secret-scanner exception to the exact public Studio preference key
-  in its source file, with positive and negative detector checks.
+- Limit the only secret-scanner exception for source to the exact public
+  preference key in one removed file that Git history still holds, with positive
+  and negative detector checks.
 
 ## [0.2.9] - 2026-07-15
 

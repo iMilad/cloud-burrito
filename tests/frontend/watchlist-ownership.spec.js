@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { A, bootWatchlist, calls, thing } from "./watchlist-harness.mjs";
+import { A, answer, bootWatchlist, calls, row, saved, thing } from "./watchlist-harness.mjs";
 
 const pipe = thing("p", "pipeline", A, { pipeline_name: "synthetic-ok" });
 const view = page => page.locator(".wl-view-host");
@@ -87,4 +87,80 @@ test("a late package detail from an older refresh never hides a newer failed ref
   await page.waitForTimeout(200);
   await expect(state).toHaveText("failed, press r to retry");
   await expect(state).not.toHaveText("4.12.0");
+});
+
+// After a failed refresh the old rows stay on screen as stale. Enter and y
+// act on the rows that are shown, never on data from the failed reply.
+const status = page => page.locator(".wl-view-host > .result-status");
+const clipboard = page => page.evaluate(() => navigator.clipboard.readText());
+
+test("after a failed stack search refresh, Enter and y act on the stale rows that are shown", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:4173" });
+  await bootWatchlist(page, { things: [thing("ss", "stacks-search", A, { name_prefix: "synthetic-" })] });
+  await page.keyboard.press("Enter");
+  const rows = view(page).locator("tbody tr[data-source-row]");
+  await expect(rows).toHaveCount(2);
+  await answer(page, "cfn-stacks", { render: "table", columns: ["stack", "status"],
+    rows: [{ stack: "synthetic-new", status: "CREATE_COMPLETE" }], coverage: { completeness: "everything" } });
+  await page.keyboard.press("r");
+  await expect(status(page)).toHaveAttribute("data-state", "stale");
+  await expect(rows.first()).toContainText("synthetic-one");
+  await page.keyboard.press("y");
+  await expect.poll(() => clipboard(page)).toBe("synthetic-one");
+  await page.keyboard.press("Enter");
+  await expect(crumb(page).locator("strong")).toHaveText("synthetic-one");
+});
+
+test("after a failed run refresh, Enter opens the build log of the action that is shown", async ({ page }) => {
+  await bootWatchlist(page, { things: [thing("pf", "pipeline", A, { pipeline_name: "synthetic-failing" })] });
+  await page.keyboard.press("Enter");
+  await expect(view(page).locator(".wl-item")).toHaveCount(2);
+  await page.keyboard.press("Enter");
+  await expect(view(page).locator(".exec-action-block")).toHaveCount(2);
+  await answer(page, "pipeline-execution-detail", { render: "execution_detail", actions: "not-a-list" });
+  await page.keyboard.press("r");
+  await expect(status(page)).toHaveAttribute("data-state", "stale");
+  await expect(view(page).locator(".exec-action-block")).toHaveCount(2);
+  await page.keyboard.press("Enter");
+  await expect(crumb(page).locator("strong")).toHaveText("Build log");
+});
+
+test("removing a thing while its load is in flight cancels it and drops the late reply", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const one = thing("p-1", "pipeline", A, { pipeline_name: "synthetic-one" }, 0);
+  const two = thing("p-2", "pipeline", A, { pipeline_name: "synthetic-two" }, 1);
+  await bootWatchlist(page, { things: [one, two], holds: [{ name: "pipeline-runs" }] });
+  await expect.poll(async () => (await calls(page, "widget_fetch", "pipeline-runs")).length).toBe(2);
+  await expect(row(page, "p-2").locator(".wl-state-text")).toHaveText("Succeeded");
+  await expect(row(page, "p-1").locator(".wl-state-text")).toHaveText("loading");
+  await page.keyboard.press("d");
+  await page.keyboard.press("d");
+  await expect(page.locator(".wl-row")).toHaveCount(1);
+  const held = (await calls(page, "widget_fetch", "pipeline-runs"))[0];
+  expect((await calls(page, "request_cancel")).map(c => c.params.request_id)).toContain(held.params.request_id);
+  await page.evaluate(() => window.__watchlistHarness.release("pipeline-runs"));
+  await page.waitForTimeout(200);
+  await expect(page.locator(".wl-row")).toHaveCount(1);
+  expect(await page.evaluate(() => window.CloudBurritoWatchlist.state.rows.has("p-1"))).toBe(false);
+  expect((await saved(page)).map(t => t.id)).toEqual(["p-2"]);
+  expect(errors).toEqual([]);
+});
+
+test("saves run one at a time, and the last one writes the list that is shown", async ({ page }) => {
+  const things = ["one", "two", "three"].map((name, n) => thing(`p-${n + 1}`, "pipeline", A, { pipeline_name: `synthetic-${name}` }, n));
+  await bootWatchlist(page, { things });
+  await page.evaluate(() => window.__watchlistHarness.hold("watchlist_set"));
+  await page.keyboard.press("Shift+J");
+  await page.keyboard.press("Shift+J");
+  await page.keyboard.press("Shift+K");
+  await page.waitForTimeout(150);
+  expect(await calls(page, "watchlist_set")).toHaveLength(1);
+  await page.evaluate(() => window.__watchlistHarness.release("watchlist_set"));
+  await expect.poll(async () => (await calls(page, "watchlist_set")).length).toBe(2);
+  await page.waitForTimeout(150);
+  expect(await calls(page, "watchlist_set")).toHaveLength(2);
+  const shown = await page.locator(".wl-row").evaluateAll(nodes => nodes.map(node => node.dataset.thingId));
+  expect(shown).toEqual(["p-2", "p-1", "p-3"]);
+  expect((await saved(page)).sort((a, b) => a.order - b.order).map(t => t.id)).toEqual(shown);
 });

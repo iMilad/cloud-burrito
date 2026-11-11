@@ -160,3 +160,35 @@ test("a package list with one page shows no next page button", async ({ page }) 
   await expect(page.locator("tr.expandable")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Next package page" })).toHaveCount(0);
 });
+
+test("the summary counts distinct accounts, not profiles", async ({ page }) => {
+  const sameAccount = { profile: "demo-c", account_id: A.account_id, region: "us-east-1" };
+  await bootWatchlist(page, { profiles: [A, B, sameAccount], things: [
+    thing("p-a", "pipeline", A, { pipeline_name: "synthetic-a" }, 0),
+    thing("p-c", "pipeline", sameAccount, { pipeline_name: "synthetic-c" }, 1)] });
+  await expect(page.locator("#wl-summary")).toHaveText(/^2 things in 1 account/);
+});
+
+// Request owners only anchor ownership. watchlist-layout.spec.js covers loaded
+// rows; these cover a row load and a package detail batch still in flight.
+test("a row whose load is still in flight shows no request status", async ({ page }) => {
+  await bootWatchlist(page, { things: [thing("p", "pipeline", A, { pipeline_name: "synthetic-ok" }, 0)],
+    holds: [{ name: "pipeline-runs" }] });
+  await expect(rowText(page, "p")).toHaveText("loading");
+  await expect(page.locator("#wl-list .result-status:visible")).toHaveCount(0);
+  expect((await row(page, "p").boundingBox()).height).toBeLessThan(60);
+});
+
+test("a package detail batch in the inspector shows no extra request status", async ({ page }) => {
+  const pkg = thing("k", "package", A, { domain: "synthetic-domain", repository: "synthetic-repo", package_prefix: "acme-core" });
+  await bootWatchlist(page, { things: [pkg] });
+  await expect(rowText(page, "k")).toHaveText("4.12.0");
+  await page.evaluate(() => window.__watchlistHarness.hold("codeartifact-packages", "enrich"));
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await calls(page, "widget_fetch", "codeartifact-packages"))
+    .filter(c => c.params.inputs.mode === "enrich").length).toBe(2);
+  const view = page.locator(".wl-view-host");
+  await expect(view.locator(".result-status:visible")).toHaveCount(1);
+  await page.evaluate(() => window.__watchlistHarness.release("codeartifact-packages", "enrich"));
+  await expect(view.locator("tr.expandable")).toHaveCount(1);
+});

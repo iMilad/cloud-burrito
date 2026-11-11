@@ -1,6 +1,6 @@
 // Cloud Burrito — shared core: DOM helpers, bridge, request ownership,
 // result states, evidence handoffs and renderers. Plain script, no build step.
-// Pages adapt it through configure(); the code below is moved from app.js.
+// Pages adapt it through configure().
 (function () {
   "use strict";
 
@@ -20,7 +20,6 @@
   };
   function configure(partial) { Object.assign(hooks, partial); }
 
-  // ---- moved ranges follow ----
   const $ = (sel, root = document) => root.querySelector(sel);
   const el = (tag, attrs = {}, ...children) => {
     const node = document.createElement(tag);
@@ -680,7 +679,7 @@
         });
         host.append(el("div", { class: "evidence-stream-controls" }, select, view), output);
       });
-    } catch (error) { if (request.current()) failResult(host, request, String(error)); }
+    } catch (error) { if (request.current()) failResult(host, request, String(error?.message || error)); }
   }
 
   function failResult(host, request, message, spec) {
@@ -787,7 +786,7 @@
       const result = await fetchWidgetData(widgetName, inputs, host, contextOverride, request);
       if (request.accept(result)) dispatchRender(host, result);
     } catch (error) {
-      if (request.current()) renderError(host, String(error));
+      if (request.current()) renderError(host, String(error?.message || error));
     }
   }
   function wireRequestInputs(form, owner, errorEl) {
@@ -1092,6 +1091,8 @@
       // Search source lives in the worker; the bounded DOM attribute remains
       // available to the existing small progressive package renderer.
       tr._logicalRowKey = rowKeys[index];
+      // The row's data travels with its node, so keys act on what is shown.
+      tr._row = row;
       tr.dataset.search = textFor(row, index).slice(0, 1024);
       tr._tableRowUpdated = () => {
         matcher?.patch([[index, textFor(row, index)]]);
@@ -1408,6 +1409,7 @@
           [a.category, a.provider].filter(Boolean).join(" · ") +
           (a.last_updated ? " · " + formatDisplayValue("last_updated", a.last_updated).text : "")),
       );
+      block._action = a;
       if (a.summary) block.appendChild(el("div", { class: "exec-summary small" }, a.summary));
       if (a.error) block.appendChild(el("div", { class: "exec-error small" }, a.error));
       const actionsRow = el("div", { class: "exec-action-links" });

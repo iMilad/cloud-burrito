@@ -213,6 +213,49 @@ test('the pending registry is bounded and removing a common ancestor recovers ev
   assert.equal(f.rendered.length, 0);
 });
 
+// beforeFetch may return a promise (for example the AWS CLI availability check).
+const settle = () => new Promise(resolve => setImmediate(resolve));
+const heldCheck = f => {
+  const check = {};
+  f.context.hooks.beforeFetch = () => new Promise((resolve, reject) => Object.assign(check, { resolve, reject }));
+  return check;
+};
+
+test('a pending beforeFetch check holds dispatch until it resolves', async () => {
+  const f = fixture(); const check = heldCheck(f);
+  const work = f.run(f.node());
+  await settle();
+  assert.equal(f.pending.length, 0);
+  check.resolve();
+  await settle();
+  assert.equal(f.pending.length, 1);
+  f.pending[0].resolve(f.reply(f.pending[0]));
+  await work;
+  assert.equal(f.rendered.length, 1);
+  assert.equal(f.errors.length, 0);
+});
+
+test('a rejected beforeFetch check blocks dispatch and shows only its message', async () => {
+  const f = fixture(); const check = heldCheck(f);
+  const work = f.run(f.node());
+  check.reject(new Error('Synthetic check failed. Fix it, then press r.'));
+  await work;
+  assert.equal(f.pending.length, 0);
+  assert.equal(f.rendered.length, 0);
+  assert.deepEqual(f.errors.map(item => item.error), ['Synthetic check failed. Fix it, then press r.']);
+});
+
+test('an owner invalidated during a pending beforeFetch check is no longer current and never dispatches', async () => {
+  const f = fixture(); const owner = f.node(); const check = heldCheck(f);
+  const request = f.context.beginOwnedRequest(owner);
+  const work = f.context.fetchWidgetData('cfn-stacks', {}, owner, null, request);
+  f.context.invalidateRequests(owner);
+  check.resolve();
+  await assert.rejects(work, /no longer current/);
+  assert.equal(f.pending.length, 0);
+  assert.equal(vm.runInContext('pendingOwnedRequests.size', f.context), 0);
+});
+
 test('request IDs include a page nonce and remain bounded ASCII across independent pages', () => {
   const a = fixture(), b = fixture();
   const first = a.context.beginOwnedRequest(a.node()).id;

@@ -192,6 +192,13 @@
     }
   }
 
+  // The SSO sign-in command for a profile, quoted only when a shell needs it:
+  // profile names may contain spaces or shell characters.
+  function loginCommand(profile) {
+    const name = String(profile);
+    return `aws sso login --profile ${/^[A-Za-z0-9._@%+=:,/-]+$/.test(name) ? name : `'${name.replace(/'/g, "'\\''")}'`}`;
+  }
+
   function groupThings(things) {
     return GROUPS.map(group => ({ ...group, things: things.filter(t => KINDS[t.kind].group === group.key)
       .slice().sort((a, b) => a.order - b.order || a.id.localeCompare(b.id)) }))
@@ -267,5 +274,5 @@
   }
 
   root.CloudBurritoThings = { GROUPS, KINDS, inputsFor, normalize, create, name, rowRequest, migrateTiles, summarize, statusTone,
-    groupThings, move, toStored, words };
+    groupThings, move, toStored, words, loginCommand };
 })(typeof window !== "undefined" ? window : globalThis);
