@@ -11,7 +11,7 @@
 
   const state = {
     things: [], profiles: [], profilesKnown: false, allowedRegions: ["eu-west-1", "us-east-1"], settings: null,
-    selectedId: null, filter: "", focus: "list", help: false, rows: new Map(), loadedAt: null, saveSeq: 0, storageReady: false,
+    selectedId: null, filter: "", focus: "list", help: false, rows: new Map(), loadedAt: null, storageReady: false,
   };
   const actions = {};
   let inspector = null;
@@ -269,16 +269,27 @@
     return true;
   }
 
-  function save() { return state.storageReady ? write() : Promise.resolve(false); }
+  // One write at a time. Saves asked for during a write share one more write,
+  // which sends the list as it is then, so an older write never lands last.
+  let saving = null, saveQueued = null;
+  function save() {
+    if (!state.storageReady) return Promise.resolve(false);
+    if (!saving) {
+      saving = write().finally(() => { saving = null; });
+      return saving;
+    }
+    saveQueued ??= saving.then(() => { saveQueued = null; return save(); });
+    return saveQueued;
+  }
 
   async function write() {
-    const seq = ++state.saveSeq;
     try {
       const result = await call("watchlist_set", { things: T.toStored(state.things) });
-      if (seq === state.saveSeq && result?._storage?.status !== "saved") throw new Error("not saved");
+      if (result?._storage?.status !== "saved") throw new Error("not saved");
       return true;
     } catch (_) {
-      if (seq === state.saveSeq) notice("Changes could not be saved. The file on disk was not changed. Try again.");
+      // A queued write sends the newer list next; say nothing until it ends.
+      if (!saveQueued) notice("Changes could not be saved. The file on disk was not changed. Try again.");
       return false;
     }
   }

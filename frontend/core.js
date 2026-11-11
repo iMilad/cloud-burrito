@@ -1092,6 +1092,8 @@
       // Search source lives in the worker; the bounded DOM attribute remains
       // available to the existing small progressive package renderer.
       tr._logicalRowKey = rowKeys[index];
+      // The row's data travels with its node, so keys act on what is shown.
+      tr._row = row;
       tr.dataset.search = textFor(row, index).slice(0, 1024);
       tr._tableRowUpdated = () => {
         matcher?.patch([[index, textFor(row, index)]]);
@@ -1408,6 +1410,7 @@
           [a.category, a.provider].filter(Boolean).join(" · ") +
           (a.last_updated ? " · " + formatDisplayValue("last_updated", a.last_updated).text : "")),
       );
+      block._action = a;
       if (a.summary) block.appendChild(el("div", { class: "exec-summary small" }, a.summary));
       if (a.error) block.appendChild(el("div", { class: "exec-error small" }, a.error));
       const actionsRow = el("div", { class: "exec-action-links" });
