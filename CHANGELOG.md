@@ -64,6 +64,10 @@ tag has been published for these changes.
   writes, sync failures and rename failures.
 - Update `anyhow` to 1.0.103 for RUSTSEC-2026-0190. Remaining upstream dependency
   warnings are tracked separately; this is not a clean-advisory claim.
+- Patch locked TLS dependencies (`rustls` 0.23.46, `rustls-webpki` 0.103.16,
+  `ctutils` 0.4.8) to resolve six vulnerabilities found by the fresh RustSec
+  audit. RUSTSEC-2026-0387 in `crypto-bigint`, used by `aws-sigv4`, has no
+  compatible fix yet and is still reported.
 - Limit the only secret-scanner exception for source to the exact public
   preference key in one removed file that Git history still holds, with positive
   and negative detector checks.

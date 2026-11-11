@@ -169,17 +169,13 @@ test("the summary counts distinct accounts, not profiles", async ({ page }) => {
   await expect(page.locator("#wl-summary")).toHaveText(/^2 things in 1 account/);
 });
 
-// Request owners only anchor ownership. Their loading status never shows.
-test("rows show no request status and keep one line, during and after loading", async ({ page }) => {
+// Request owners only anchor ownership. watchlist-layout.spec.js covers loaded
+// rows; these cover a row load and a package detail batch still in flight.
+test("a row whose load is still in flight shows no request status", async ({ page }) => {
   await bootWatchlist(page, { things: [thing("p", "pipeline", A, { pipeline_name: "synthetic-ok" }, 0)],
     holds: [{ name: "pipeline-runs" }] });
-  const list = page.locator("#wl-list");
-  await expect(row(page, "p").locator(".wl-state-text")).toHaveText("loading");
-  await expect(list.locator(".result-status:visible")).toHaveCount(0);
-  await expect(list.locator(".wl-row-owner")).toBeHidden();
-  await page.evaluate(() => window.__watchlistHarness.release("pipeline-runs"));
-  await expect(rowText(page, "p")).toHaveText("Succeeded");
-  await expect(list.locator(".result-status:visible")).toHaveCount(0);
+  await expect(rowText(page, "p")).toHaveText("loading");
+  await expect(page.locator("#wl-list .result-status:visible")).toHaveCount(0);
   expect((await row(page, "p").boundingBox()).height).toBeLessThan(60);
 });
 
