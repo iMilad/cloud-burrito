@@ -48,6 +48,13 @@ aws-sdk-cloudwatchlogs = { version = "1", default-features = false, features = [
 aws-sdk-lambda = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-resourcegroupstagging = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
+# Build scripts and proc macros only run during the build, so they need no
+# stripping. With Xcode 27.2, stripping a dylib built for macOS 12 or newer
+# (chained fixups) leaves a mis-aligned LINKEDIT string pool, dyld then
+# refuses to load the proc macro, and rustc reports "can't find crate".
+[profile.release.build-override]
+strip = false
+
 [dev-dependencies]
 # Already locked transitively; exposes the test-only fail-closed HTTP fence.
 aws-smithy-runtime-api = { version = "=1.12.3", features = ["client"] }
