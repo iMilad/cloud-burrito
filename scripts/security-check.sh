@@ -137,7 +137,8 @@ if command -v trufflehog >/dev/null 2>&1; then
   tmp_json="$(mktemp "${TMPDIR:-/tmp}/cloud-burrito-trufflehog.XXXXXX")"
   tmp_exclude="$(mktemp "${TMPDIR:-/tmp}/cloud-burrito-trufflehog-exclude.XXXXXX")"
   trap 'rm -f "$tmp_json" "$tmp_exclude"' EXIT
-  printf '^src-tauri/target/\n^src-tauri/gen/\n' >"$tmp_exclude"
+  # Same local build and tool output the other scanners skip.
+  printf '^src-tauri/target/\n^src-tauri/gen/\n^dist/\n^\\.claude/worktrees/\n' >"$tmp_exclude"
   set +e
   trufflehog filesystem . \
     --no-update \
