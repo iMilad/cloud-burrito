@@ -75,6 +75,12 @@ tag has been published for these changes.
   audit. RUSTSEC-2026-0387 in `crypto-bigint`, used by `aws-sigv4` for SigV4a
   signing, has no compatible fix yet. `src-tauri/.cargo/audit.toml` ignores
   only that advisory, with the reason and the condition for removing it.
+- Update `tauri` to 2.12.5 (`tauri-build` 2.7.4, `tauri-plugin-log` 2.10.2),
+  `serde_with` to 3.24.0 and drop `rand` 0.7.3 from the lock. The Tauri origin
+  confusion advisory (GHSA-7gmj-67g7-phm9) only matters on Windows and Android,
+  and only when a remote page runs in the webview. The app loads only local
+  pages under a `script-src 'self'` CSP, so it was not exposed. `glib` 0.18.5
+  stays, because the Linux GTK stack in Tauri still requires it.
 - Limit the secret-scanner exception to the exact public Studio preference key
   in its source file, with positive and negative detector checks.
 
