@@ -478,9 +478,9 @@ NSIS_STOCK_INCLUDES = [
 # Tauri CLI 2.11.4 embeds tauri-bundler 2.9.4. These generated files are
 # written with a UTF-8 BOM; hashes identify the upstream bytes without it.
 NSIS_GENERATED_INCLUDES = {
-    'utils.nsh': 'b27b407f886cca738e44e774f15e6b556b43ce52557a7c8891ee4eca7dd8013d',
-    'FileAssociation.nsh': '85ce72519d5461b5777f95123176b5536de163abd9a4742f9235453c4ddf56d8',
-    'English.nsh': '1dad40b023707a61f828db1e184d9c1b029cb530c2dbbc4790db265872ef7b5e',
+    'utils.nsh': 'b27b407f886cca738e44e774f15e6b556b43ce52557a7c8891ee4eca7dd8013d',  # pragma: allowlist secret - public upstream checksum
+    'FileAssociation.nsh': '85ce72519d5461b5777f95123176b5536de163abd9a4742f9235453c4ddf56d8',  # pragma: allowlist secret - public upstream checksum
+    'English.nsh': '1dad40b023707a61f828db1e184d9c1b029cb530c2dbbc4790db265872ef7b5e',  # pragma: allowlist secret - public upstream checksum
 }
 
 

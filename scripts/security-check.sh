@@ -115,10 +115,16 @@ if command -v detect-secrets >/dev/null 2>&1; then
   (
     tmp_detect="$(mktemp "${TMPDIR:-/tmp}/cloud-burrito-detect-secrets.XXXXXX")"
     trap 'rm -f "$tmp_detect"' EXIT
+    # Skipped: local build and tool output (dist/ holds release-build
+    # manifests full of artifact hashes; .claude/worktrees/ holds other
+    # checkouts, which are scanned on their own), and the NSIS template
+    # fixture. That fixture is a byte-exact copy of upstream Tauri;
+    # tests/scripts/test_artifact_inspection.py pins its SHA-256, so it
+    # cannot carry an inline pragma and any edit to it fails that test.
     detect-secrets scan \
       --all-files \
       --no-verify \
-      --exclude-files '(^|/)(\.git|node_modules|src-tauri/(target|gen)|playwright-report|test-results)(/|$)' \
+      --exclude-files '(^|/)(\.git|node_modules|src-tauri/(target|gen)|playwright-report|test-results)(/|$)|^(dist|\.claude/worktrees)/|^tests/scripts/fixtures/tauri-nsis-2\.9\.4/installer\.nsi$' \
       >"$tmp_detect"
     python3 scripts/check-detect-secrets.py "$tmp_detect"
   )

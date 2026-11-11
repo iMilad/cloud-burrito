@@ -157,7 +157,7 @@ class ArtifactInspectionTests(unittest.TestCase):
         fixtures = ROOT / 'tests/scripts/fixtures/tauri-nsis-2.9.4'
         template = (fixtures / 'installer.nsi').read_bytes()
         self.assertEqual(hashlib.sha256(template).hexdigest(),
-                         '20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079')
+                         '20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079')  # pragma: allowlist secret - fixture checksum
         text = template.decode()
         includes = re.findall(r'(?m)^[ \t]*!include[^\r\n]*', text)
         includes = [line for line in includes if '{{installer_hooks}}' not in line]
