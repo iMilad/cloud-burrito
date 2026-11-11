@@ -234,7 +234,7 @@
       let partial = false;
       const pending = rows.filter(r => r.enrichment_state !== "complete").map(r => r.package);
       for (let start = 0; start < pending.length; start += 25) {
-        const owner = h.el("div", { hidden: true });
+        const owner = h.el("div", { class: "wl-batch-owner", hidden: true });
         v.host.append(owner);
         const batch = h.core.beginOwnedRequest(owner, thing.context);
         const enriched = await h.core.fetchWidgetData("codeartifact-packages",

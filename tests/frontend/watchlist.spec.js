@@ -168,3 +168,31 @@ test("the summary counts distinct accounts, not profiles", async ({ page }) => {
     thing("p-c", "pipeline", sameAccount, { pipeline_name: "synthetic-c" }, 1)] });
   await expect(page.locator("#wl-summary")).toHaveText(/^2 things in 1 account/);
 });
+
+// Request owners only anchor ownership. Their loading status never shows.
+test("rows show no request status and keep one line, during and after loading", async ({ page }) => {
+  await bootWatchlist(page, { things: [thing("p", "pipeline", A, { pipeline_name: "synthetic-ok" }, 0)],
+    holds: [{ name: "pipeline-runs" }] });
+  const list = page.locator("#wl-list");
+  await expect(row(page, "p").locator(".wl-state-text")).toHaveText("loading");
+  await expect(list.locator(".result-status:visible")).toHaveCount(0);
+  await expect(list.locator(".wl-row-owner")).toBeHidden();
+  await page.evaluate(() => window.__watchlistHarness.release("pipeline-runs"));
+  await expect(rowText(page, "p")).toHaveText("Succeeded");
+  await expect(list.locator(".result-status:visible")).toHaveCount(0);
+  expect((await row(page, "p").boundingBox()).height).toBeLessThan(60);
+});
+
+test("a package detail batch in the inspector shows no extra request status", async ({ page }) => {
+  const pkg = thing("k", "package", A, { domain: "synthetic-domain", repository: "synthetic-repo", package_prefix: "acme-core" });
+  await bootWatchlist(page, { things: [pkg] });
+  await expect(rowText(page, "k")).toHaveText("4.12.0");
+  await page.evaluate(() => window.__watchlistHarness.hold("codeartifact-packages", "enrich"));
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await calls(page, "widget_fetch", "codeartifact-packages"))
+    .filter(c => c.params.inputs.mode === "enrich").length).toBe(2);
+  const view = page.locator(".wl-view-host");
+  await expect(view.locator(".result-status:visible")).toHaveCount(1);
+  await page.evaluate(() => window.__watchlistHarness.release("codeartifact-packages", "enrich"));
+  await expect(view.locator("tr.expandable")).toHaveCount(1);
+});
