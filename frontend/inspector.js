@@ -418,11 +418,14 @@
       armed: false,
       acknowledge: null,
       async render(v) {
+        const { widget, inputs } = h.T.rowRequest(thing);
         if (!view.armed) {
-          v.host.append(h.el("p", { class: "wl-hint" }, ON_DEMAND[thing.kind]), h.el("p", { class: "wl-hint" }, "Press r or Enter to run it."));
+          v.host.append(h.el("p", { class: "wl-hint" }, ON_DEMAND[thing.kind]));
+          // A paused query shows why first; r and Enter cannot run it yet.
+          if (h.recovery?.get(h.recovery.key(widget, inputs, thing.context))) showRecovery(view, widget, inputs);
+          else v.host.append(h.el("p", { class: "wl-hint" }, "Press r or Enter to run it."));
           return;
         }
-        const { widget, inputs } = h.T.rowRequest(thing);
         const extra = view.acknowledge || {};
         view.acknowledge = null;
         const request = h.core.beginOwnedRequest(v.host, thing.context);

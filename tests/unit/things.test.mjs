@@ -114,3 +114,12 @@ test('old tiles become pinned things, inherited tiles use the default profile, e
   assert.equal(noDefault.things.filter(t => t.context.profile === 'demo-a').length, 0);
   assert.equal(T.migrateTiles([tiles[1]], { ...env, defaultProfile: '' }).skippedNoAccount, 1);
 });
+
+test('the login command quotes a profile name only when the shell needs it', () => {
+  const T = load();
+  assert.equal(T.loginCommand('demo-a'), 'aws sso login --profile demo-a');
+  assert.equal(T.loginCommand('demo.team_a@acme'), 'aws sso login --profile demo.team_a@acme');
+  assert.equal(T.loginCommand('demo a'), "aws sso login --profile 'demo a'");
+  assert.equal(T.loginCommand("demo-a; echo it's"), "aws sso login --profile 'demo-a; echo it'\\''s'");
+  assert.equal(T.loginCommand('$(demo)'), "aws sso login --profile '$(demo)'");
+});

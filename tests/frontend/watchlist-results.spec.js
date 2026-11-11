@@ -225,3 +225,24 @@ test("a failed CLI result never gets a success badge", async ({ page }) => {
   await expect(rowText(page, "c")).toHaveText("failed, press r to retry");
   await expect(row(page, "c").locator(".wl-row-state")).toHaveAttribute("data-tone", "fail");
 });
+
+test("a package whose details partly fail shows partial on the row and in the inspector", async ({ page }) => {
+  const pkg = thing("k", "package", A, { domain: "synthetic-domain", repository: "synthetic-repo", package_prefix: "acme-core" });
+  await bootWatchlist(page, { things: [pkg] });
+  await expect(rowText(page, "k")).toHaveText("4.12.0");
+  await page.evaluate(() => {
+    const widgets = window.__watchlistHarness.widgets;
+    const normal = widgets["codeartifact-packages"];
+    widgets["codeartifact-packages"] = i => i.mode === "enrich"
+      ? { render: "table", mode: "enrich", columns: ["package", "latest_version", "last_published"], rows: [], ok: false,
+        error: "Synthetic detail failure" }
+      : normal(i);
+  });
+  await page.keyboard.press("r");
+  await expect(row(page, "k").locator(".wl-state-flag")).toHaveText("partial");
+  await expect(rowText(page, "k")).toHaveText("1 package");
+  await page.keyboard.press("Enter");
+  await expect(status(page)).toHaveAttribute("data-state", "partial");
+  await expect(page.locator(".wl-view-host")).toContainText("Some package details could not be loaded.");
+  await expect(page.locator(".wl-view-host tr.expandable")).toHaveCount(1);
+});

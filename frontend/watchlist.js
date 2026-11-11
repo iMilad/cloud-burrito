@@ -12,7 +12,10 @@
   const state = {
     things: [], profiles: [], profilesKnown: false, allowedRegions: ["eu-west-1", "us-east-1"], settings: null,
     selectedId: null, filter: "", focus: "list", help: false, rows: new Map(), loadedAt: null, storageReady: false,
+    // Saved things this version cannot read: never shown, always written back unchanged.
+    unreadable: [],
   };
+  const isFull = () => state.things.length + state.unreadable.length >= 200;
   const actions = {};
   let inspector = null;
   let noticeTimer = null;
@@ -160,7 +163,7 @@
   }
 
   function renderSummary() {
-    const accounts = new Set(state.things.map(t => `${t.context.profile}|${t.context.account_id}`)).size;
+    const accounts = new Set(state.things.map(t => t.context.account_id)).size;
     const count = state.things.length;
     const loaded = state.loadedAt ? `, loaded ${new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(state.loadedAt)}` : "";
     $("#wl-summary").textContent = count ? `${count} thing${count === 1 ? "" : "s"} in ${accounts} account${accounts === 1 ? "" : "s"}${loaded}` : "";
@@ -201,14 +204,22 @@
     return { ...list, rows: rows.map(r => byName.get(r.package) || r), ...(core.resultFailure(enriched) ? { partial: true } : {}) };
   }
 
+  // A query that an earlier, maybe still running query pauses: r cannot run it.
+  function paused(thing) {
+    const { widget, inputs } = T.rowRequest(thing);
+    return isQuery(widget, inputs) && recoveries.has(recovery.key(widget, inputs, thing.context));
+  }
+  const PAUSED = { label: "paused, press Enter to review the earlier query", tone: "warn" };
+
   function applyRowResult(thing, result) {
     const previous = state.rows.get(thing.id) || {};
+    if (paused(thing)) return setRow(thing, PAUSED);
     // Malformed data or coverage never replaces an accepted value.
     if (!core.validCoverage(result?.coverage) || !core.validResultShape(result || {})) return applyRowFailure(thing, "Response data was invalid.");
     const outcome = core.resultState(result);
     if (outcome === "denied") return setRow(thing, { label: `blocked by policy: ${result.action || "request"}`, tone: "fail" });
     if (SIGN_IN_TYPES.includes(result?.error_type) || result?.needs_sso_login === true || outcome === "expired") {
-      return setRow(thing, { label: "sign in needed", tone: "warn", copy: `aws sso login --profile ${thing.context.profile}` });
+      return setRow(thing, { label: "sign in needed, press y to copy the login command", tone: "warn", copy: T.loginCommand(thing.context.profile) });
     }
     if (outcome === "failed" || outcome === "cancelled") {
       const message = outcome === "cancelled" ? "cancelled" : "failed, press r to retry";
@@ -220,6 +231,7 @@
   }
 
   function applyRowFailure(thing, message) {
+    if (paused(thing)) return setRow(thing, PAUSED);
     const previous = state.rows.get(thing.id) || {};
     if (previous.summary && !previous.label) return setRow(thing, { ...previous, stale: true, error: message });
     setRow(thing, { label: "failed, press r to retry", tone: "fail" });
@@ -231,7 +243,7 @@
     // A package detail request from an older load never paints over this one.
     core.invalidateRequests(row.querySelector(".wl-row-owner-detail"));
     const problem = accountProblem(thing);
-    if (problem) return setRow(thing, { label: `needs account: ${problem}`, tone: "warn" });
+    if (problem) return setRow(thing, { label: `needs account: ${problem}, press e to choose a profile`, tone: "warn" });
     const previous = state.rows.get(thing.id) || {};
     if (!T.KINDS[thing.kind].autoload && !run) {
       return setRow(thing, previous.summary ? previous : { label: "not run yet", tone: "muted" });
@@ -284,7 +296,7 @@
 
   async function write() {
     try {
-      const result = await call("watchlist_set", { things: T.toStored(state.things) });
+      const result = await call("watchlist_set", { things: [...T.toStored(state.things), ...state.unreadable] });
       if (result?._storage?.status !== "saved") throw new Error("not saved");
       return true;
     } catch (_) {
@@ -491,6 +503,14 @@
     return profile && region && state.allowedRegions.includes(region) ? { mode: "pinned", profile: profile.name, account_id: profile.account_id, region } : null;
   }
 
+  // Say that a listing is loading, or that it stopped early.
+  function listingStatus(text, busy = false) {
+    const node = $("#wl-form-list-status");
+    node.textContent = text;
+    node.hidden = !text;
+    $("#wl-form-list-button")?.setAttribute("aria-busy", String(busy));
+  }
+
   // One listing at a time, owned by the form and pinned to its current
   // profile, account and region. A reply for an older choice is dropped.
   async function ownedListing(command, params) {
@@ -499,10 +519,16 @@
     if (!context) return null;
     owner._widgetContextOverride = context;
     const request = core.beginOwnedRequest(owner, context);
+    listingStatus("Loading the list…", true);
     try {
       const result = await core.invokeOwnedRequest(request, command, { ...params, context });
-      return request.accept(result) ? result : null;
-    } catch (error) { if (request.current()) showFormError(String(error?.message || error)); return null; }
+      if (!request.accept(result)) return null;
+      listingStatus("");
+      return result;
+    } catch (error) {
+      if (request.current()) { listingStatus(""); showFormError(String(error?.message || error)); }
+      return null;
+    }
   }
 
   function showListing(names, result, empty) {
@@ -531,6 +557,9 @@
       if (logs?.status === "available" && logs.source === "lambda_logging_config") reviewedGroups.set(fn.name, logs.inputs.log_group);
     }
     showListing(functions.map(f => f.name), result, "No functions were returned for this account.");
+    if (result.capped === true) {
+      listingStatus(`The list stopped at ${functions.length} function${functions.length === 1 ? "" : "s"}. Type the name if yours is not listed.`);
+    }
     updateLogNote();
   }
 
@@ -541,12 +570,16 @@
     if (!result) return;
     const names = (Array.isArray(result.groups) ? result.groups : []).map(g => g?.name).filter(n => typeof n === "string" && n);
     showListing(names, result, pattern ? "No log groups with this text were returned for this account." : "No log groups were returned for this account.");
+    if (result.capped === true) {
+      listingStatus(`The list stopped at ${names.length} log group${names.length === 1 ? "" : "s"}. Type more of the name, then list again.`);
+    }
   }
 
   // Drop any pending or shown listing: it belongs to an older choice.
   function resetListing() {
     core.invalidateRequests($("#wl-form .wl-form-owner"));
     $("#wl-form-list")?.replaceChildren();
+    listingStatus("");
     reviewedGroups = new Map();
     updateLogNote();
   }
@@ -635,7 +668,7 @@
     const kind = $("#wl-form-kind").value;
     if ($("#wl-form-profile").selectedOptions[0]?.dataset.missing) { showFormError("Choose a profile from your AWS config."); return; }
     if (!state.allowedRegions.includes($("#wl-form-region").value)) { showFormError("Choose a supported region."); return; }
-    if (!formThing && state.things.length >= 200) { showFormError("The watchlist is full (200 things). Remove one, then try again."); return; }
+    if (!formThing && isFull()) { showFormError("The watchlist is full (200 things). Remove one, then try again."); return; }
     const context = formContext();
     const values = Object.fromEntries(form.FIELDS[kind].map(field => [field.key, $(`#wl-field-${field.key}`)?.value ?? ""]));
     const raw = form.toInputs[kind] ? form.toInputs[kind](values) : values;
@@ -755,18 +788,26 @@
     if (!tiles.length || dashboard.ok === false) return;
     const result = T.migrateTiles(tiles, { defaultProfile: state.settings?.default_profile || "", profiles: state.profiles,
       allowedRegions: state.allowedRegions, defaultRegion: state.settings?.default_region || "" });
-    const skipped = result.skippedNoAccount
-      ? `${result.skippedNoAccount} widget${result.skippedNoAccount === 1 ? " needs" : "s need"} an account. Set a default profile in Settings, then add ${result.skippedNoAccount === 1 ? "it" : "them"} with a.`
-      : "";
-    if (!result.things.length) { if (skipped) notice(skipped); return; }
+    const n = result.skippedNoAccount;
+    const profile = state.settings?.default_profile || "";
+    // Say why inherited widgets have no account, so the fix matches the cause.
+    const fix = !profile ? "Set a default profile in Settings"
+      : !state.profilesKnown ? "Your AWS profiles could not be read. Check the AWS config path in Settings"
+      : !state.profiles.some(p => p.name === profile)
+        ? `The default profile ${profile} is not in your AWS config. Choose another default profile in Settings`
+        : `The default profile ${profile} has no supported region. Set a default region in Settings`;
+    const skipped = n ? `${n} widget${n === 1 ? " needs" : "s need"} an account. ${fix}, then add ${n === 1 ? "it" : "them"} with a.` : "";
     const kept = result.things.slice(0, 200);
     const left = result.things.length - kept.length;
     state.things = kept;
-    // Storage is not ready yet: this first write of the converted list is the only one allowed.
+    // Storage is not ready yet: this first write of the converted list is the
+    // only one allowed. It is written even when nothing converted, so the
+    // conversion and its note happen once, not on every start.
     if (!await write()) return;
-    notice([`Converted ${result.converted} widget${result.converted === 1 ? "" : "s"} into ${kept.length} thing${kept.length === 1 ? "" : "s"}.`,
-      "Your old dashboard file was not changed.",
-      left ? `${left} more did not fit, because the watchlist holds at most 200 things.` : "", skipped].filter(Boolean).join(" "));
+    const message = [kept.length ? `Converted ${result.converted} widget${result.converted === 1 ? "" : "s"} into ${kept.length} thing${kept.length === 1 ? "" : "s"}.`
+      + " Your old dashboard file was not changed." : "",
+      left ? `${left} more did not fit, because the watchlist holds at most 200 things.` : "", skipped].filter(Boolean).join(" ");
+    if (message) notice(message);
   }
 
   async function loadProfiles() {
@@ -837,8 +878,14 @@
       return;
     }
     const raw = Array.isArray(loaded.things) ? loaded.things : [];
-    state.things = raw.map(T.normalize).filter(Boolean);
-    if (state.things.length !== raw.length) notice(`${raw.length - state.things.length} saved things could not be read and were skipped.`);
+    state.things = [];
+    for (const item of raw) {
+      const thing = T.normalize(item);
+      if (thing) state.things.push(thing); else state.unreadable.push(structuredClone(item));
+    }
+    const unread = state.unreadable.length;
+    if (unread) notice(unread === 1 ? "1 saved thing could not be read. It stays in your watchlist file, but is not shown."
+      : `${unread} saved things could not be read. They stay in your watchlist file, but are not shown.`);
     await migrateIfNeeded(loaded);
     // Only now: a thing added while the conversion ran would be replaced by it.
     state.storageReady = true;
@@ -849,6 +896,6 @@
   }
 
   window.CloudBurritoWatchlist = { state, actions, rowEl, selectedThing, select, setFocus, loadRow, refreshAll, renderList, renderKeys, appCommands,
-    save, storageBlocked, notice, call, form, openForm, inspector: null, clearSso: () => scheduleSso(null) };
+    save, storageBlocked, isFull, notice, call, form, openForm, inspector: null, clearSso: () => scheduleSso(null) };
   document.addEventListener("DOMContentLoaded", boot);
 })();

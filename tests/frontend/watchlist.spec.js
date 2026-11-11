@@ -160,3 +160,11 @@ test("a package list with one page shows no next page button", async ({ page }) 
   await expect(page.locator("tr.expandable")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Next package page" })).toHaveCount(0);
 });
+
+test("the summary counts distinct accounts, not profiles", async ({ page }) => {
+  const sameAccount = { profile: "demo-c", account_id: A.account_id, region: "us-east-1" };
+  await bootWatchlist(page, { profiles: [A, B, sameAccount], things: [
+    thing("p-a", "pipeline", A, { pipeline_name: "synthetic-a" }, 0),
+    thing("p-c", "pipeline", sameAccount, { pipeline_name: "synthetic-c" }, 1)] });
+  await expect(page.locator("#wl-summary")).toHaveText(/^2 things in 1 account/);
+});
